@@ -320,3 +320,24 @@ fn excluded(path: &Path) -> bool {
     }
     false
 }
+
+pub(super) fn quote(value: &str) -> String {
+    let chars: Vec<_> = value.chars().collect();
+    let needs = value.contains([' ', '\t', '"', '\''])
+        || value.starts_with(['#', '='])
+        || value.contains("\\\\");
+    if !needs {
+        return value.into();
+    }
+    let mut result = String::from("\"");
+    for (i, c) in chars.iter().enumerate() {
+        if *c == '"'
+            || (*c == '\\' && (i + 1 == chars.len() || matches!(chars[i + 1], '"' | '\'' | '\\')))
+        {
+            result.push('\\');
+        }
+        result.push(*c);
+    }
+    result.push('"');
+    result
+}
