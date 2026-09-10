@@ -30,12 +30,20 @@ impl Fixture {
 }
 
 #[test]
-fn help_and_version_do_not_migrate() {
+fn help_version_and_completion_scripts_do_not_migrate() {
     let f = Fixture::new();
     let legacy = f.dir.path().join(".config/sshm");
     fs::create_dir_all(&legacy).unwrap();
     fs::write(legacy.join("sentinel"), "untouched").unwrap();
-    for args in [&["--help"][..], &["--version"], &["info", "--help"]] {
+    for args in [
+        &["--help"][..],
+        &["--version"],
+        &["info", "--help"],
+        &["completion", "bash"],
+        &["completion", "zsh"],
+        &["completion", "fish"],
+        &["completion", "powershell"],
+    ] {
         let out = f.run(args);
         assert!(
             out.status.success(),
@@ -45,6 +53,15 @@ fn help_and_version_do_not_migrate() {
         );
         assert!(!f.config_root().exists());
     }
+    let script = f.run(&["completion", "bash"]);
+    let path = f.dir.path().join("completion.bash");
+    fs::write(&path, script.stdout).unwrap();
+    assert!(Command::new("bash")
+        .arg("-n")
+        .arg(path)
+        .status()
+        .unwrap()
+        .success());
     assert_eq!(
         fs::read_to_string(legacy.join("sentinel")).unwrap(),
         "untouched"
@@ -71,6 +88,29 @@ fn info_search_and_missing_host_are_machine_readable() {
     let out = f.run(&["search", "--format", "simple"]);
     assert_eq!(String::from_utf8(out.stdout).unwrap(), "prod\nalias\n");
     assert!(!f.config_root().exists());
+}
+
+#[test]
+fn completion_resolves_custom_config_and_incomplete_subcommands() {
+    let f = Fixture::new();
+    for args in [&["__complete", "pro"][..], &["__complete", "info", "pro"]] {
+        let out = f.run(args);
+        assert!(
+            out.status.success(),
+            "{:?}: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), "prod\n:4\n");
+    }
+    let out = f.run(&["__complete", "info", "sec"]);
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "secret\n:4\n");
+    let custom = f.dir.path().join("custom config");
+    fs::write(&custom, "Host custom\n HostName example.org\n").unwrap();
+    let out = f.run(&["__complete", "-c", custom.to_str().unwrap(), "cus"]);
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "custom\n:4\n");
+    let out = f.run(&["__complete", "prod", ""]);
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), ":4\n");
 }
 
 #[cfg(unix)]

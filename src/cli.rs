@@ -28,6 +28,8 @@ pub enum Command {
         tags: bool,
         names: bool,
     },
+    Completion(String),
+    Complete(Vec<String>),
 }
 
 pub fn parse(args: &[String]) -> Result<Invocation> {
@@ -41,6 +43,10 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
     while i < args.len() {
         let arg = &args[i];
         let mode = positional.first().map(String::as_str);
+        if matches!(mode, Some("__complete" | "__completeNoDesc")) {
+            positional.extend_from_slice(&args[i..]);
+            break;
+        }
         if arg == "--" {
             positional.extend_from_slice(&args[i + 1..]);
             break;
@@ -92,7 +98,7 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
             _ if arg.starts_with("-c") && arg.len() > 2 => result.config = Some(arg[2..].into()),
             _ if arg.starts_with('-') => anyhow::bail!("unknown option: {arg}"),
             _ => {
-                let is_subcommand = matches!(mode, Some("search" | "info" | "help"));
+                let is_subcommand = matches!(mode, Some("search" | "info" | "completion" | "help"));
                 if !positional.is_empty() && !is_subcommand {
                     positional.extend_from_slice(&args[i..]);
                     break;
@@ -128,6 +134,15 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
                 names,
             }
         }
+        "completion" => {
+            let shell = exactly_one()?;
+            anyhow::ensure!(
+                ["bash", "zsh", "fish", "powershell"].contains(&shell.as_str()),
+                "unsupported shell: {shell}"
+            );
+            Command::Completion(shell)
+        }
+        "__complete" | "__completeNoDesc" => Command::Complete(tail.to_vec()),
         _ => Command::Connect {
             host: first.clone(),
             remote: tail.to_vec(),
@@ -290,6 +305,10 @@ pub fn run(args: &[String]) -> Result<i32> {
             println!("ssho version {}", env!("CARGO_PKG_VERSION"));
             return Ok(0);
         }
+        Command::Completion(shell) => {
+            print!("{}", completion_script(shell)?);
+            return Ok(0);
+        }
         _ => {}
     }
     let paths = AppPaths::discover()?;
@@ -333,6 +352,13 @@ pub fn run(args: &[String]) -> Result<i32> {
         Command::Connect { host, remote } => {
             crate::runtime::connect(&paths, path, &host, invocation.tty, &remote, None)
         }
+        Command::Complete(words) => {
+            for value in complete_words(&words, path)? {
+                println!("{value}")
+            }
+            println!(":4");
+            Ok(0)
+        }
         _ => {
             // No interface yet: print the hosts like `search` without a query.
             let hosts = filter_search(&config::load_hosts(path)?, "", false, false);
@@ -346,13 +372,130 @@ pub fn run(args: &[String]) -> Result<i32> {
     }
 }
 
+fn complete_words(words: &[String], default_config: &std::path::Path) -> Result<Vec<String>> {
+    let prefix = words
+        .last()
+        .map(String::as_str)
+        .unwrap_or("")
+        .to_lowercase();
+    let prior = if words.is_empty() {
+        &[][..]
+    } else {
+        &words[..words.len() - 1]
+    };
+    if prior.last().is_some_and(|v| v == "-c" || v == "--config") {
+        return Ok(vec![]);
+    }
+    // Completion consumes partial command lines, so required positionals may still be absent.
+    let mut config = default_config.to_path_buf();
+    let mut positional = Vec::new();
+    let mut i = 0;
+    while i < prior.len() {
+        let word = &prior[i];
+        if word == "-c" || word == "--config" {
+            i += 1;
+            if let Some(value) = prior.get(i) {
+                config = PathBuf::from(value)
+            }
+        } else if let Some(value) = word.strip_prefix("--config=") {
+            config = PathBuf::from(value)
+        } else if word.starts_with("-c") && word.len() > 2 {
+            config = PathBuf::from(&word[2..])
+        } else if !word.starts_with('-') {
+            positional.push(word.as_str())
+        }
+        i += 1;
+    }
+    let target_command = positional
+        .first()
+        .copied()
+        .filter(|w| ["info", "search", "completion"].contains(w));
+    let hosts_allowed =
+        positional.is_empty() || (positional.len() == 1 && matches!(target_command, Some("info")));
+    let mut completions = Vec::new();
+    if prefix.starts_with('-') {
+        completions.extend(
+            ["--config", "--tty", "--help", "--version"]
+                .iter()
+                .filter(|s| s.starts_with(&prefix))
+                .map(|s| s.to_string()),
+        );
+    } else if target_command == Some("completion") {
+        completions.extend(
+            ["bash", "zsh", "fish", "powershell"]
+                .iter()
+                .filter(|s| s.starts_with(&prefix))
+                .map(|s| s.to_string()),
+        );
+    } else if hosts_allowed {
+        for host in crate::config::load_hosts(&config)? {
+            if (target_command == Some("info") || !host.hidden())
+                && host.name.to_lowercase().starts_with(&prefix)
+                && !completions.contains(&host.name)
+            {
+                completions.push(host.name)
+            }
+        }
+    }
+    Ok(completions)
+}
+
 pub fn help(command: Option<&str>) -> String {
     let usage = match command {
         Some("info") => "ssho info <host> [--pretty]",
         Some("search") => "ssho search [query] [--tags] [--names] [-f table|json|simple]",
+        Some("completion") => "ssho completion bash|zsh|fish|powershell",
         _ => "ssho [host] [command...]",
     };
-    format!("SSH Organizer - A modern SSH connection manager\n\nssho is a modern SSH manager for your terminal, implemented in Rust.\n\nUsage:\n  {usage}\n\nCommands:\n  search [query]       Search by name, hostname or tags\n  info <host>          Print machine-readable JSON (--pretty to indent)\n  help [command]       Show help\n\nOptions:\n  -c, --config <file>   SSH configuration file (default: ~/.ssh/config)\n  -t, --tty             Force a pseudo-TTY for the remote command\n  -h, --help            Show help\n  -v, --version         Show version\n\nSearch options:\n  -f, --format <format>  table, json or simple (default: table)\n      --tags            Search tags only\n      --names           Search names only\n\nExamples:\n  ssho\n  ssho prod-server uptime\n  ssho -t prod-server sudo systemctl restart nginx\n  ssho search --tags work --format json\n\nApplication data: ~/.config/ssho/ (respects XDG_CONFIG_HOME).\n")
+    format!("SSH Organizer - A modern SSH connection manager\n\nssho is a modern SSH manager for your terminal, implemented in Rust.\n\nUsage:\n  {usage}\n\nCommands:\n  search [query]       Search by name, hostname or tags\n  info <host>          Print machine-readable JSON (--pretty to indent)\n  completion <shell>   Generate Bash, Zsh, Fish or PowerShell completion\n  help [command]       Show help\n\nOptions:\n  -c, --config <file>   SSH configuration file (default: ~/.ssh/config)\n  -t, --tty             Force a pseudo-TTY for the remote command\n  -h, --help            Show help\n  -v, --version         Show version\n\nSearch options:\n  -f, --format <format>  table, json or simple (default: table)\n      --tags            Search tags only\n      --names           Search names only\n\nExamples:\n  ssho\n  ssho prod-server uptime\n  ssho -t prod-server sudo systemctl restart nginx\n  ssho search --tags work --format json\n\nApplication data: ~/.config/ssho/ (respects XDG_CONFIG_HOME).\n")
+}
+
+pub fn completion_script(shell: &str) -> Result<&'static str> {
+    Ok(match shell {
+        "bash" => {
+            r#"_ssho() {
+    local line
+    COMPREPLY=()
+    while IFS= read -r line; do
+        [[ "$line" == :* ]] || COMPREPLY+=("$line")
+    done < <(ssho __complete "${COMP_WORDS[@]:1:COMP_CWORD}" 2>/dev/null)
+}
+complete -o nospace -F _ssho ssho
+"#
+        }
+        "zsh" => {
+            r#"#compdef ssho
+_ssho() {
+    local -a candidates
+    local line
+    while IFS= read -r line; do
+        [[ "$line" == :* ]] || candidates+=("$line")
+    done < <(ssho __complete "${words[@]:1}" 2>/dev/null)
+    _describe 'SSH hosts' candidates
+}
+compdef _ssho ssho
+"#
+        }
+        "fish" => {
+            r#"function __ssho_complete
+    ssho __complete (commandline -opc)[2..-1] (commandline -ct) 2>/dev/null | string match -rv '^:'
+end
+complete -c ssho -f -a '(__ssho_complete)'
+"#
+        }
+        "powershell" => {
+            r#"Register-ArgumentCompleter -Native -CommandName ssho -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    $words = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString().Trim('"', "'") })
+    if (-not $wordToComplete) { $words += '' }
+    & ssho __complete @words 2>$null | Where-Object { $_ -notmatch '^:' } | ForEach-Object {
+        [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+    }
+}
+"#
+        }
+        _ => anyhow::bail!("unsupported shell: {shell}"),
+    })
 }
 
 #[cfg(test)]
