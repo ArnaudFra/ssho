@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub struct Invocation {
     pub config: Option<PathBuf>,
     pub tty: bool,
+    pub search: bool,
     pub command: Command,
 }
 
@@ -82,6 +83,7 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
                 result.config = Some(value.into());
             }
             "-t" | "--tty" => result.tty = boolean()?,
+            "-s" | "--search" => result.search = boolean()?,
             "--pretty" if mode == Some("info") => pretty = boolean()?,
             "--tags" if mode == Some("search") => tags = boolean()?,
             "--names" if mode == Some("search") => names = boolean()?,
@@ -294,7 +296,7 @@ pub fn render_search(hosts: &[crate::types::Host], format: &str) -> String {
 }
 
 pub fn run(args: &[String]) -> Result<i32> {
-    use crate::{config, storage::AppPaths};
+    use crate::{config, storage::AppPaths, ui};
     let invocation = parse(args)?;
     match &invocation.command {
         Command::Help(command) => {
@@ -360,14 +362,12 @@ pub fn run(args: &[String]) -> Result<i32> {
             Ok(0)
         }
         _ => {
-            // No interface yet: print the hosts like `search` without a query.
-            let hosts = filter_search(&config::load_hosts(path)?, "", false, false);
-            if hosts.is_empty() {
+            paths.initialize()?;
+            if config::load_hosts(path)?.is_empty() {
                 println!("No SSH hosts found in your ~/.ssh/config file.");
                 return Ok(1);
             }
-            print!("{}", render_search(&hosts, "table"));
-            Ok(0)
+            ui::run(&paths, path, invocation.search)
         }
     }
 }
@@ -415,7 +415,7 @@ fn complete_words(words: &[String], default_config: &std::path::Path) -> Result<
     let mut completions = Vec::new();
     if prefix.starts_with('-') {
         completions.extend(
-            ["--config", "--tty", "--help", "--version"]
+            ["--config", "--tty", "--search", "--help", "--version"]
                 .iter()
                 .filter(|s| s.starts_with(&prefix))
                 .map(|s| s.to_string()),
@@ -447,7 +447,7 @@ pub fn help(command: Option<&str>) -> String {
         Some("completion") => "ssho completion bash|zsh|fish|powershell",
         _ => "ssho [host] [command...]",
     };
-    format!("SSH Organizer - A modern SSH connection manager\n\nssho is a modern SSH manager for your terminal, implemented in Rust.\n\nUsage:\n  {usage}\n\nCommands:\n  search [query]       Search by name, hostname or tags\n  info <host>          Print machine-readable JSON (--pretty to indent)\n  completion <shell>   Generate Bash, Zsh, Fish or PowerShell completion\n  help [command]       Show help\n\nOptions:\n  -c, --config <file>   SSH configuration file (default: ~/.ssh/config)\n  -t, --tty             Force a pseudo-TTY for the remote command\n  -h, --help            Show help\n  -v, --version         Show version\n\nSearch options:\n  -f, --format <format>  table, json or simple (default: table)\n      --tags            Search tags only\n      --names           Search names only\n\nExamples:\n  ssho\n  ssho prod-server uptime\n  ssho -t prod-server sudo systemctl restart nginx\n  ssho search --tags work --format json\n\nApplication data: ~/.config/ssho/ (respects XDG_CONFIG_HOME).\n")
+    format!("SSH Organizer - A modern SSH connection manager\n\nssho is a modern SSH manager for your terminal, implemented in Rust.\n\nUsage:\n  {usage}\n\nCommands:\n  search [query]       Search by name, hostname or tags\n  info <host>          Print machine-readable JSON (--pretty to indent)\n  completion <shell>   Generate Bash, Zsh, Fish or PowerShell completion\n  help [command]       Show help\n\nOptions:\n  -c, --config <file>   SSH configuration file (default: ~/.ssh/config)\n  -t, --tty             Force a pseudo-TTY for the remote command\n  -s, --search          Focus search at startup\n  -h, --help            Show help\n  -v, --version         Show version\n\nSearch options:\n  -f, --format <format>  table, json or simple (default: table)\n      --tags            Search tags only\n      --names           Search names only\n\nExamples:\n  ssho\n  ssho prod-server uptime\n  ssho -t prod-server sudo systemctl restart nginx\n  ssho search --tags work --format json\n\nApplication data: ~/.config/ssho/ (respects XDG_CONFIG_HOME).\n")
 }
 
 pub fn completion_script(shell: &str) -> Result<&'static str> {
