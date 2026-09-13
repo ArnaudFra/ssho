@@ -16,19 +16,32 @@ use crossterm::{
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use forms::Input;
+use forms::{FormEvent, HostForm, Input};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{
     collections::BTreeMap,
     io::{self, Stdout},
-    path::Path,
+    path::{Path, PathBuf},
     time::Duration,
 };
+#[derive(Clone, Debug)]
+pub enum InitialView {
+    List,
+    Add(String),
+    Edit(String),
+}
+#[derive(Clone, Debug)]
+enum View {
+    List,
+    Host(Box<HostForm>),
+}
 #[derive(Clone, Debug, PartialEq)]
 enum Action {
     None,
     Quit,
     Connect(String, Option<Forward>),
+    Add(String),
+    Save(Option<Host>, Box<Host>, PathBuf),
 }
 struct Model {
     all: Vec<Host>,
@@ -39,6 +52,7 @@ struct Model {
     search_focus: bool,
     show_hidden: bool,
     recent: bool,
+    view: View,
     preferences: AppConfig,
     history: BTreeMap<String, ConnectionInfo>,
     error: String,
@@ -65,6 +79,7 @@ impl Model {
             search_focus,
             show_hidden: false,
             recent: false,
+            view: View::List,
             preferences,
             history,
             error: String::new(),
@@ -113,6 +128,9 @@ impl Model {
             .saturating_add_signed(delta)
             .min(self.visible.len().saturating_sub(1));
     }
+    fn back(&mut self) {
+        self.view = View::List;
+    }
     fn quit_key(&self, k: KeyEvent) -> bool {
         self.preferences
             .key_bindings
@@ -123,6 +141,27 @@ impl Model {
             return Action::None;
         }
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        match &mut self.view {
+            View::Host(f) => {
+                return match f.key(k) {
+                    FormEvent::Cancel => {
+                        self.back();
+                        Action::None
+                    }
+                    FormEvent::Submit => match f.host() {
+                        Ok(host) => {
+                            Action::Save(f.original.clone(), Box::new(host), f.target.clone())
+                        }
+                        Err(e) => {
+                            f.error = e.to_string();
+                            Action::None
+                        }
+                    },
+                    _ => Action::None,
+                }
+            }
+            View::List => {}
+        }
         if k.code == KeyCode::Esc && self.search_focus && !self.query.value.is_empty() {
             self.query.set("");
             self.filter(true);
@@ -160,6 +199,12 @@ impl Model {
             KeyCode::PageUp => self.navigate(-(self.page as isize)),
             KeyCode::Home => self.selected = 0,
             KeyCode::End => self.selected = self.visible.len().saturating_sub(1),
+            KeyCode::Char('a') => return Action::Add(String::new()),
+            KeyCode::Char('e') => {
+                if let Some(h) = self.selected_host() {
+                    self.view = View::Host(Box::new(HostForm::edit(h)));
+                }
+            }
             KeyCode::Char('H') => {
                 self.show_hidden = !self.show_hidden;
                 self.filter(false);
@@ -228,16 +273,31 @@ impl Drop for TerminalGuard {
     }
 }
 /// Runs the interactive browser or a standalone CLI form. SSH takes over the restored terminal.
-pub fn run(paths: &AppPaths, config: &Path, force_search: bool) -> Result<i32> {
+pub fn run(
+    paths: &AppPaths,
+    config: &Path,
+    force_search: bool,
+    initial: InitialView,
+) -> Result<i32> {
     let preferences = AppConfig::load(&paths.root)?;
     let history = History::load(&paths.root)?;
     let hosts = config::load_hosts(config)?;
+    let standalone = !matches!(initial, InitialView::List);
     let mut m = Model::new(
         hosts,
         preferences,
         history.connections.clone(),
         force_search,
     );
+    match initial {
+        InitialView::List => {}
+        InitialView::Add(seed) => {
+            m.view = View::Host(Box::new(HostForm::add(seed, config.to_path_buf())))
+        }
+        InitialView::Edit(name) => {
+            m.view = View::Host(Box::new(HostForm::edit(config::find_host(config, &name)?)))
+        }
+    }
     let mut guard = TerminalGuard::enter()?;
     let mut terminal: Terminal<CrosstermBackend<Stdout>> =
         Terminal::new(CrosstermBackend::new(io::stdout()))?;
@@ -257,13 +317,43 @@ pub fn run(paths: &AppPaths, config: &Path, force_search: bool) -> Result<i32> {
             }
             _ => Action::None,
         };
-        match action {
-            Action::None => {}
+        if standalone && matches!(m.view, View::List) && matches!(action, Action::None) {
+            return Ok(0);
+        }
+        let operation: Result<bool> = match action {
+            Action::None => Ok(false),
             Action::Quit => return Ok(0),
             Action::Connect(name, forward) => {
                 guard.restore();
                 return runtime::connect(paths, config, &name, false, &[], forward.as_ref());
             }
+            Action::Add(seed) => {
+                m.view = View::Host(Box::new(HostForm::add(seed, config.to_path_buf())));
+                Ok(false)
+            }
+            Action::Save(original, host, target) => match original {
+                Some(original) => config::update_host(&original, &host, &paths.root),
+                None => config::add_host(&host, &target, &paths.root),
+            }
+            .map(|_| true),
+        };
+        match operation {
+            Ok(true) => {
+                if standalone {
+                    return Ok(0);
+                }
+                m.all = config::load_hosts(config)?;
+                m.filter(false);
+                m.back();
+                m.error.clear();
+            }
+            Ok(false) => {}
+            Err(e) => match &mut m.view {
+                View::Host(f) => f.error = e.to_string(),
+                _ => {
+                    m.error = e.to_string();
+                }
+            },
         }
     }
 }

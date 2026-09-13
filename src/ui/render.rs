@@ -3,7 +3,7 @@ use super::*;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
@@ -34,7 +34,10 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    list(f, m, area);
+    match &m.view {
+        View::List => list(f, m, area),
+        View::Host(_) => host_form(f, m, area),
+    }
 }
 fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     let area = inset(area);
@@ -179,7 +182,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     let help = if m.search_focus {
         "↑/↓: select • Enter: connect • Tab: table shortcuts • Esc: clear/quit"
     } else {
-        "↑/↓: navigate • Enter: connect • Tab: search • q: quit"
+        "↑/↓: navigate • Enter: connect • Tab: search • a: add • e: edit • q: quit"
     };
     f.render_widget(
         Paragraph::new(help)
@@ -187,4 +190,173 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             .wrap(Wrap { trim: false }),
         chunks[4],
     );
+}
+fn field_lines(
+    lines: &mut Vec<Line<'static>>,
+    label: String,
+    input: &Input,
+    focused: bool,
+    width: usize,
+) -> usize {
+    let y = lines.len();
+    lines.push(Line::styled(
+        label,
+        if focused { accent() } else { Style::default() },
+    ));
+    lines.push(Line::styled(
+        format!(
+            "{}{}",
+            if focused { "> " } else { "  " },
+            input.display(focused, width.saturating_sub(2))
+        ),
+        if input.value.is_empty() && !focused {
+            Style::default().fg(GRAY)
+        } else {
+            Style::default()
+        },
+    ));
+    lines.push(Line::from(""));
+    y
+}
+fn scroll_focus(scroll: &mut usize, focus: usize, height: u16, total: usize) {
+    let h = height as usize;
+    if focus < *scroll {
+        *scroll = focus;
+    }
+    if focus + 2 >= scroll.saturating_add(h) {
+        *scroll = (focus + 3).saturating_sub(h);
+    }
+    *scroll = (*scroll).min(total.saturating_sub(h));
+}
+fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
+    let View::Host(form) = &mut m.view else {
+        return;
+    };
+    let area = inset(area);
+    let footer_height = if area.height >= 12 { 4 } else { 2 };
+    let parts = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(footer_height),
+    ])
+    .split(area);
+    f.render_widget(
+        Paragraph::new(if form.original.is_some() {
+            "Edit SSH Host"
+        } else {
+            "Add SSH Host Configuration"
+        })
+        .style(accent()),
+        parts[0],
+    );
+    let mut lines = vec![];
+    let mut focus_y = 0;
+    let width = parts[1].width as usize;
+    if form.original.is_some() {
+        lines.push(Line::styled(
+            format!("Config file: {}", form.target.display()),
+            Style::default().fg(GRAY),
+        ));
+        lines.push(Line::from(""));
+        lines.push(Line::styled("Host Names", accent()));
+        lines.push(Line::from(""));
+        for (i, name) in form.names.iter().enumerate() {
+            let selected = form.name_focus && form.focus == i;
+            let y = field_lines(
+                &mut lines,
+                format!("Host Name {} *", i + 1),
+                name,
+                selected,
+                width,
+            );
+            if selected {
+                focus_y = y;
+            }
+        }
+        lines.push(Line::styled("Common Properties", accent()));
+        lines.push(Line::from(""));
+    }
+    lines.push(Line::from(vec![
+        Span::styled(
+            if form.tab == 0 {
+                "[ General ]"
+            } else {
+                "  General  "
+            },
+            if form.tab == 0 {
+                accent()
+            } else {
+                Style::default().fg(GRAY)
+            },
+        ),
+        Span::raw("  "),
+        Span::styled(
+            if form.tab == 1 {
+                "[ Advanced ]"
+            } else {
+                "  Advanced  "
+            },
+            if form.tab == 1 {
+                accent()
+            } else {
+                Style::default().fg(GRAY)
+            },
+        ),
+    ]));
+    lines.push(Line::from(""));
+    for i in form.fields() {
+        let selected = !form.name_focus && form.focus == i;
+        let label = if form.original.is_none() && i == 5 {
+            "ProxyJump"
+        } else if form.original.is_none() && i == 6 {
+            "ProxyCommand"
+        } else {
+            forms::LABELS[i]
+        };
+        let y = field_lines(&mut lines, label.into(), &form.inputs[i], selected, width);
+        if selected {
+            focus_y = y;
+        }
+        if i == 4 {
+            if let Some(h) = &form.original {
+                for identity in &h.extra_identities {
+                    lines.push(Line::styled(
+                        format!("  also: {identity} (read-only, kept on save)"),
+                        Style::default().fg(GRAY),
+                    ));
+                }
+            }
+        }
+        if i == 8 && selected {
+            lines.push(Line::styled(
+                "  tip: use \"hidden\" to hide this host from the list",
+                Style::default().fg(GRAY),
+            ));
+        }
+    }
+    scroll_focus(&mut form.scroll, focus_y, parts[1].height, lines.len());
+    f.render_widget(
+        Paragraph::new(lines).scroll((form.scroll as u16, 0)),
+        parts[1],
+    );
+    let mut footer = vec![];
+    if !form.error.is_empty() {
+        footer.push(Line::styled(
+            format!("Error: {}", form.error),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    footer.push(Line::styled(
+        if form.original.is_some() {
+            "Tab/↑↓/Enter: navigate • Ctrl+J/K: switch tabs • Ctrl+A/D: add/delete host"
+        } else {
+            "Tab/Shift+Tab: navigate • Ctrl+J/K: switch tabs"
+        },
+        Style::default().fg(GRAY),
+    ));
+    footer.push(Line::styled(
+        "Enter on last field: submit • Ctrl+S: save • Ctrl+C/Esc: cancel • * Required fields",
+        Style::default().fg(GRAY),
+    ));
+    f.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), parts[2]);
 }

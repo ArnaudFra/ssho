@@ -93,7 +93,11 @@ fn info_search_and_missing_host_are_machine_readable() {
 #[test]
 fn completion_resolves_custom_config_and_incomplete_subcommands() {
     let f = Fixture::new();
-    for args in [&["__complete", "pro"][..], &["__complete", "info", "pro"]] {
+    for args in [
+        &["__complete", "pro"][..],
+        &["__complete", "edit", "pro"],
+        &["__complete", "info", "pro"],
+    ] {
         let out = f.run(args);
         assert!(
             out.status.success(),
