@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 const CYAN: Color = Color::Rgb(0, 173, 216);
@@ -29,6 +29,16 @@ fn inset(area: Rect) -> Rect {
         area
     }
 }
+fn panel(area: Rect, width: u16, height: u16) -> Rect {
+    let w = width.min(area.width);
+    let h = height.min(area.height);
+    Rect::new(
+        area.x + (area.width - w) / 2,
+        area.y + (area.height - h) / 2,
+        w,
+        h,
+    )
+}
 pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     let area = f.area();
     if area.width == 0 || area.height == 0 {
@@ -37,9 +47,41 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     match &m.view {
         View::List => list(f, m, area),
         View::Host(_) => host_form(f, m, area),
+        View::Info(_) => info(f, m, area),
+        View::Help => help(f, m, area),
+        View::Files { .. } => files(f, m, area),
     }
 }
 fn list(f: &mut Frame, m: &mut Model, area: Rect) {
+    if let Some(h) = &m.delete {
+        let area = panel(area, 72, 11);
+        f.render_widget(Clear, area);
+        let text = vec![
+            Line::styled(
+                "DELETE SSH HOST",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Line::from(""),
+            Line::from(format!(
+                "Are you sure you want to delete host '{}' ?",
+                h.name
+            )),
+            Line::from(""),
+            Line::styled(
+                "This action cannot be undone.",
+                Style::default().fg(Color::LightRed),
+            ),
+            Line::from(""),
+            Line::styled("Enter: confirm • Esc: cancel", Style::default().fg(GRAY)),
+        ];
+        f.render_widget(
+            Paragraph::new(text)
+                .block(block("", false).border_style(Style::default().fg(Color::Red)))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    }
     let area = inset(area);
     let title_height = if area.height >= 20 { 5 } else { 1 };
     let notice_height = u16::from(!m.error.is_empty()) + u16::from(m.show_hidden);
@@ -182,7 +224,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     let help = if m.search_focus {
         "↑/↓: select • Enter: connect • Tab: table shortcuts • Esc: clear/quit"
     } else {
-        "↑/↓: navigate • Enter: connect • Tab: search • a: add • e: edit • q: quit"
+        "↑/↓: navigate • Enter: connect • Tab: search • i: info • h: help • q: quit"
     };
     f.render_widget(
         Paragraph::new(help)
@@ -359,4 +401,189 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
         Style::default().fg(GRAY),
     ));
     f.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), parts[2]);
+}
+fn files(f: &mut Frame, m: &mut Model, area: Rect) {
+    let View::Files {
+        files,
+        selected,
+        host,
+        ..
+    } = &m.view
+    else {
+        return;
+    };
+    let area = inset(area);
+    let parts = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(1),
+        Constraint::Length(2),
+    ])
+    .split(area);
+    let title = host
+        .as_ref()
+        .map(|h| format!("Select destination config file for host '{}':", h.name))
+        .unwrap_or_else(|| "Select config file to add host to:".into());
+    f.render_widget(Paragraph::new(title).style(accent()), parts[0]);
+    let count = parts[1].height.max(1) as usize;
+    let offset = selected.saturating_sub(count - 1);
+    let lines = files
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .map(|(i, path)| {
+            Line::styled(
+                format!(
+                    "{} {}",
+                    if i == *selected { "▶" } else { " " },
+                    path.display()
+                ),
+                if i == *selected {
+                    Style::default().bg(CYAN).fg(Color::Indexed(229))
+                } else {
+                    Style::default()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(
+        Paragraph::new(if files.is_empty() {
+            vec![Line::from("No SSH config files found.")]
+        } else {
+            lines
+        }),
+        parts[1],
+    );
+    f.render_widget(
+        Paragraph::new("↑/↓: navigate • Enter: select • Esc: cancel")
+            .style(Style::default().fg(GRAY)),
+        parts[2],
+    );
+}
+fn info(f: &mut Frame, m: &mut Model, area: Rect) {
+    let View::Info(h) = &m.view else {
+        return;
+    };
+    let area = panel(area, 92, 28);
+    let title = format!("SSH Host Information: {}", h.name);
+    let border = block(&title, true);
+    let inner = border.inner(area);
+    f.render_widget(border, area);
+    let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(4)]).split(inner);
+    let optional = |s: &str| {
+        if s.is_empty() {
+            "Not set".to_string()
+        } else {
+            s.to_string()
+        }
+    };
+    let mut identities = vec![optional(&h.identity)];
+    identities.extend(h.extra_identities.clone());
+    let sections = [
+        ("Host Name", h.name.clone()),
+        ("Config File", h.source_file.display().to_string()),
+        ("Hostname/IP", h.hostname.clone()),
+        ("User", optional(&h.user)),
+        ("Port", optional(&h.port)),
+        ("Identity File", identities.join("\n")),
+        ("ProxyJump", optional(&h.proxy_jump)),
+        ("ProxyCommand", optional(&h.proxy_command)),
+        ("SSH Options", optional(&h.options)),
+        ("Tags", optional(&h.tags.join(", "))),
+    ];
+    let mut lines = vec![Line::from("")];
+    for (label, value) in sections {
+        for (i, line) in value.lines().enumerate() {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(
+                        "{:>15} ",
+                        if i == 0 {
+                            format!("{label}:")
+                        } else {
+                            String::new()
+                        }
+                    ),
+                    accent(),
+                ),
+                Span::raw(line.to_string()),
+            ]));
+        }
+    }
+    m.scroll = m
+        .scroll
+        .min(lines.len().saturating_sub(parts[0].height as usize));
+    f.render_widget(
+        Paragraph::new(lines)
+            .scroll((m.scroll as u16, 0))
+            .wrap(Wrap { trim: false }),
+        parts[0],
+    );
+    f.render_widget(
+        Paragraph::new(
+            "Actions:\n  e/Enter - Switch to edit mode\n  q/Esc   - Return to host list",
+        )
+        .style(Style::default().fg(GRAY)),
+        parts[1],
+    );
+}
+fn help(f: &mut Frame, m: &mut Model, area: Rect) {
+    let area = panel(area, 96, 25);
+    let border = block("SSHO - Commands", true);
+    let inner = border.inner(area);
+    f.render_widget(border, area);
+    let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
+    let left = [
+        "Navigation & Connection",
+        "",
+        "Enter  connect (also from search)",
+        "↑↓     select (Ctrl+P/N in search)",
+        "i      show host information",
+        "/      search hosts",
+        "Tab    switch search / table",
+        "",
+        "Host Management",
+        "",
+        "a      add new host",
+        "e      edit selected host",
+        "m      move host to another config",
+        "d      delete selected host",
+    ];
+    let right = [
+        "Advanced Features",
+        "",
+        "H      toggle hidden hosts visibility",
+        "s      cycle sort modes",
+        "n      sort by name",
+        "r      sort by recent connection",
+        "",
+        "System",
+        "",
+        "h      show this help",
+        "q      quit application",
+        "Esc    clear search / exit view",
+        "",
+        "",
+    ];
+    let text = if inner.width >= 77 {
+        left.iter()
+            .zip(right.iter())
+            .map(|(a, b)| format!("{a:<39}  {b}"))
+            .collect::<Vec<_>>()
+    } else {
+        left.iter()
+            .chain(right.iter())
+            .map(|s| s.to_string())
+            .collect()
+    };
+    m.scroll = m
+        .scroll
+        .min(text.len().saturating_sub(parts[0].height as usize));
+    f.render_widget(
+        Paragraph::new(text.join("\n")).scroll((m.scroll as u16, 0)),
+        parts[0],
+    );
+    f.render_widget(
+        Paragraph::new("Press ESC, h, q or Enter to close").style(Style::default().fg(GRAY)),
+        parts[1],
+    );
 }

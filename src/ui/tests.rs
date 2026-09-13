@@ -76,6 +76,24 @@ fn search_never_runs_shortcuts() {
     assert_eq!(m.query.value, "aefdmqHsnriph/");
 }
 #[test]
+fn tab_hidden_delete_and_preferences() {
+    let mut m = model();
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Char('H')));
+    assert_eq!(m.visible.len(), 3);
+    m.key(key(KeyCode::Char('d')));
+    assert!(m.delete.is_some());
+    m.key(key(KeyCode::Char('j')));
+    assert_eq!(m.selected, 0);
+    m.key(key(KeyCode::Esc));
+    assert!(m.delete.is_none());
+    m.preferences.key_bindings.disable_esc_quit = true;
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+    assert_eq!(m.key(ctrl('c')), Action::Quit);
+    m.preferences.key_bindings.quit_keys = vec!["x".into()];
+    assert_eq!(m.key(key(KeyCode::Char('x'))), Action::Quit);
+}
+#[test]
 fn focus_flags_and_empty_connect() {
     let mut m = model();
     m.preferences.focus_search_on_start = false;
@@ -180,6 +198,40 @@ fn emacs_cursor_keys_and_limits() {
     let mut m = model();
     typing(&mut m, &"x".repeat(60));
     assert_eq!(m.query.value.len(), 50);
+}
+#[test]
+fn sorting_history_and_table_shortcuts() {
+    let mut m = model();
+    m.history.insert(
+        "beta".into(),
+        ConnectionInfo {
+            host_name: "beta".into(),
+            last_connect: Utc::now(),
+            connect_count: 2,
+            port_forwarding: None,
+        },
+    );
+    m.key(key(KeyCode::Tab));
+    assert!(!m.recent);
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    m.key(key(KeyCode::Char('r')));
+    assert!(m.recent);
+    assert_eq!(m.selected_host().unwrap().name, "beta");
+    m.key(key(KeyCode::Char('s')));
+    assert!(!m.recent);
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    m.key(key(KeyCode::Char('d')));
+    assert_eq!(
+        m.key(key(KeyCode::Enter)),
+        Action::Delete(m.selected_host().unwrap())
+    );
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Char('i')));
+    assert!(matches!(m.view, View::Info(_)));
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(m.view, View::Host(_)));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::List));
 }
 #[test]
 fn form_tab_order_and_submit_shortcuts() {

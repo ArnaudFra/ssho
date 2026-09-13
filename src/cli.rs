@@ -21,6 +21,7 @@ pub enum Command {
     },
     Add(String),
     Edit(String),
+    Move(String),
     Info {
         host: String,
         pretty: bool,
@@ -104,7 +105,7 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
             _ => {
                 let is_subcommand = matches!(
                     mode,
-                    Some("add" | "edit" | "search" | "info" | "completion" | "help")
+                    Some("add" | "edit" | "move" | "search" | "info" | "completion" | "help")
                 );
                 if !positional.is_empty() && !is_subcommand {
                     positional.extend_from_slice(&args[i..]);
@@ -133,6 +134,7 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
             Command::Add(tail.first().cloned().unwrap_or_default())
         }
         "edit" => Command::Edit(exactly_one()?),
+        "move" => Command::Move(exactly_one()?),
         "info" => Command::Info {
             host: exactly_one()?,
             pretty,
@@ -380,6 +382,7 @@ pub fn run(args: &[String]) -> Result<i32> {
             let initial = match command {
                 Command::Add(seed) => InitialView::Add(seed),
                 Command::Edit(name) => InitialView::Edit(name),
+                Command::Move(name) => InitialView::Move(name),
                 _ => InitialView::List,
             };
             if matches!(initial, InitialView::List) && config::load_hosts(path)?.is_empty() {
@@ -451,9 +454,9 @@ fn complete_words(words: &[String], default_config: &std::path::Path) -> Result<
     let target_command = positional
         .first()
         .copied()
-        .filter(|w| ["add", "edit", "info", "search", "completion"].contains(w));
+        .filter(|w| ["add", "edit", "move", "info", "search", "completion"].contains(w));
     let hosts_allowed = positional.is_empty()
-        || (positional.len() == 1 && matches!(target_command, Some("edit" | "info")));
+        || (positional.len() == 1 && matches!(target_command, Some("edit" | "move" | "info")));
     let mut completions = Vec::new();
     if prefix.starts_with('-') {
         completions.extend(
@@ -486,12 +489,13 @@ pub fn help(command: Option<&str>) -> String {
     let usage = match command {
         Some("add") => "ssho add [hostname]",
         Some("edit") => "ssho edit <host>",
+        Some("move") => "ssho move <host>",
         Some("info") => "ssho info <host> [--pretty]",
         Some("search") => "ssho search [query] [--tags] [--names] [-f table|json|simple]",
         Some("completion") => "ssho completion bash|zsh|fish|powershell",
         _ => "ssho [host] [command...]",
     };
-    format!("SSH Organizer - A modern SSH connection manager\n\nssho is a modern SSH manager for your terminal, implemented in Rust.\n\nUsage:\n  {usage}\n\nCommands:\n  add [hostname]       Add a host using an interactive form\n  edit <host>          Edit a host and its aliases\n  search [query]       Search by name, hostname or tags\n  info <host>          Print machine-readable JSON (--pretty to indent)\n  completion <shell>   Generate Bash, Zsh, Fish or PowerShell completion\n  help [command]       Show help\n\nOptions:\n  -c, --config <file>   SSH configuration file (default: ~/.ssh/config)\n  -t, --tty             Force a pseudo-TTY for the remote command\n  -s, --search          Focus search at startup\n  -h, --help            Show help\n  -v, --version         Show version\n\nSearch options:\n  -f, --format <format>  table, json or simple (default: table)\n      --tags            Search tags only\n      --names           Search names only\n\nExamples:\n  ssho\n  ssho prod-server uptime\n  ssho -t prod-server sudo systemctl restart nginx\n  ssho search --tags work --format json\n\nApplication data: ~/.config/ssho/ (respects XDG_CONFIG_HOME).\n")
+    format!("SSH Organizer - A modern SSH connection manager\n\nssho is a modern SSH manager for your terminal, implemented in Rust.\n\nUsage:\n  {usage}\n\nCommands:\n  add [hostname]       Add a host using an interactive form\n  edit <host>          Edit a host and its aliases\n  move <host>          Move a host to another included configuration\n  search [query]       Search by name, hostname or tags\n  info <host>          Print machine-readable JSON (--pretty to indent)\n  completion <shell>   Generate Bash, Zsh, Fish or PowerShell completion\n  help [command]       Show help\n\nOptions:\n  -c, --config <file>   SSH configuration file (default: ~/.ssh/config)\n  -t, --tty             Force a pseudo-TTY for the remote command\n  -s, --search          Focus search at startup\n  -h, --help            Show help\n  -v, --version         Show version\n\nSearch options:\n  -f, --format <format>  table, json or simple (default: table)\n      --tags            Search tags only\n      --names           Search names only\n\nExamples:\n  ssho\n  ssho prod-server uptime\n  ssho -t prod-server sudo systemctl restart nginx\n  ssho search --tags work --format json\n\nApplication data: ~/.config/ssho/ (respects XDG_CONFIG_HOME).\n")
 }
 
 pub fn completion_script(shell: &str) -> Result<&'static str> {

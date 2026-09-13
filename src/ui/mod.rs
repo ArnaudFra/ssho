@@ -29,11 +29,20 @@ pub enum InitialView {
     List,
     Add(String),
     Edit(String),
+    Move(String),
 }
 #[derive(Clone, Debug)]
 enum View {
     List,
     Host(Box<HostForm>),
+    Info(Host),
+    Help,
+    Files {
+        files: Vec<PathBuf>,
+        selected: usize,
+        host: Option<Host>,
+        seed: String,
+    },
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Action {
@@ -41,7 +50,10 @@ enum Action {
     Quit,
     Connect(String, Option<Forward>),
     Add(String),
+    Move(Host),
     Save(Option<Host>, Box<Host>, PathBuf),
+    Delete(Host),
+    MoveTo(Host, PathBuf),
 }
 struct Model {
     all: Vec<Host>,
@@ -52,11 +64,13 @@ struct Model {
     search_focus: bool,
     show_hidden: bool,
     recent: bool,
+    delete: Option<Host>,
     view: View,
     preferences: AppConfig,
     history: BTreeMap<String, ConnectionInfo>,
     error: String,
     page: usize,
+    scroll: usize,
 }
 impl Model {
     fn new(
@@ -79,11 +93,13 @@ impl Model {
             search_focus,
             show_hidden: false,
             recent: false,
+            delete: None,
             view: View::List,
             preferences,
             history,
             error: String::new(),
             page: 10,
+            scroll: 0,
         };
         m.filter(false);
         m
@@ -130,6 +146,7 @@ impl Model {
     }
     fn back(&mut self) {
         self.view = View::List;
+        self.scroll = 0;
     }
     fn quit_key(&self, k: KeyEvent) -> bool {
         self.preferences
@@ -160,7 +177,68 @@ impl Model {
                     _ => Action::None,
                 }
             }
+            View::Info(h) => {
+                if matches!(k.code, KeyCode::Char('e') | KeyCode::Enter) {
+                    self.view = View::Host(Box::new(HostForm::edit(h.clone())));
+                    return Action::None;
+                }
+                if matches!(k.code, KeyCode::Esc | KeyCode::Char('q'))
+                    || (ctrl && k.code == KeyCode::Char('c'))
+                {
+                    self.back();
+                } else {
+                    self.scroll_key(k);
+                }
+                return Action::None;
+            }
+            View::Help => {
+                if matches!(
+                    k.code,
+                    KeyCode::Esc | KeyCode::Char('q' | 'h') | KeyCode::Enter
+                ) || (ctrl && k.code == KeyCode::Char('c'))
+                {
+                    self.back();
+                } else {
+                    self.scroll_key(k);
+                }
+                return Action::None;
+            }
+            View::Files {
+                files,
+                selected,
+                host,
+                seed,
+            } => {
+                match k.code {
+                    KeyCode::Esc => self.back(),
+                    KeyCode::Char('c') if ctrl => self.back(),
+                    KeyCode::Char('q') if host.is_some() => self.back(),
+                    KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        *selected = (*selected + 1).min(files.len().saturating_sub(1))
+                    }
+                    KeyCode::Enter => {
+                        if let Some(target) = files.get(*selected) {
+                            if let Some(host) = host {
+                                return Action::MoveTo(host.clone(), target.clone());
+                            }
+                            self.view =
+                                View::Host(Box::new(HostForm::add(seed.clone(), target.clone())));
+                        }
+                    }
+                    _ => {}
+                }
+                return Action::None;
+            }
             View::List => {}
+        }
+        if let Some(host) = self.delete.clone() {
+            if matches!(k.code, KeyCode::Esc) || (ctrl && k.code == KeyCode::Char('c')) {
+                self.delete = None;
+            } else if k.code == KeyCode::Enter {
+                return Action::Delete(host);
+            }
+            return Action::None;
         }
         if k.code == KeyCode::Esc && self.search_focus && !self.query.value.is_empty() {
             self.query.set("");
@@ -205,6 +283,18 @@ impl Model {
                     self.view = View::Host(Box::new(HostForm::edit(h)));
                 }
             }
+            KeyCode::Char('i') => {
+                if let Some(h) = self.selected_host() {
+                    self.view = View::Info(h);
+                    self.scroll = 0;
+                }
+            }
+            KeyCode::Char('m') => {
+                if let Some(h) = self.selected_host() {
+                    return Action::Move(h);
+                }
+            }
+            KeyCode::Char('d') => self.delete = self.selected_host(),
             KeyCode::Char('H') => {
                 self.show_hidden = !self.show_hidden;
                 self.filter(false);
@@ -221,9 +311,23 @@ impl Model {
                 self.recent = true;
                 self.filter(false);
             }
+            KeyCode::Char('h') => {
+                self.view = View::Help;
+                self.scroll = 0;
+            }
             _ => {}
         }
         Action::None
+    }
+    fn scroll_key(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Down | KeyCode::Char('j') => self.scroll = self.scroll.saturating_add(1),
+            KeyCode::Up | KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
+            KeyCode::PageDown => self.scroll = self.scroll.saturating_add(self.page),
+            KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(self.page),
+            KeyCode::Home => self.scroll = 0,
+            _ => {}
+        }
     }
 }
 fn key_name(k: KeyEvent) -> String {
@@ -272,6 +376,29 @@ impl Drop for TerminalGuard {
         self.restore();
     }
 }
+fn select_files(m: &mut Model, config: &Path, host: Option<Host>, seed: String) -> Result<()> {
+    let mut files = config::config_files(config)?;
+    if let Some(h) = &host {
+        files.retain(|f| f != &h.source_file);
+        if files.is_empty() {
+            anyhow::bail!("no includes found in SSH config file - move operation requires multiple config files");
+        }
+    }
+    if host.is_none() && files.len() <= 1 {
+        m.view = View::Host(Box::new(HostForm::add(
+            seed,
+            files.pop().unwrap_or_else(|| config.to_path_buf()),
+        )));
+    } else {
+        m.view = View::Files {
+            files,
+            selected: 0,
+            host,
+            seed,
+        };
+    }
+    Ok(())
+}
 /// Runs the interactive browser or a standalone CLI form. SSH takes over the restored terminal.
 pub fn run(
     paths: &AppPaths,
@@ -291,12 +418,16 @@ pub fn run(
     );
     match initial {
         InitialView::List => {}
-        InitialView::Add(seed) => {
-            m.view = View::Host(Box::new(HostForm::add(seed, config.to_path_buf())))
-        }
+        InitialView::Add(seed) => select_files(&mut m, config, None, seed)?,
         InitialView::Edit(name) => {
             m.view = View::Host(Box::new(HostForm::edit(config::find_host(config, &name)?)))
         }
+        InitialView::Move(name) => select_files(
+            &mut m,
+            config,
+            Some(config::find_host(config, &name)?),
+            String::new(),
+        )?,
     }
     let mut guard = TerminalGuard::enter()?;
     let mut terminal: Terminal<CrosstermBackend<Stdout>> =
@@ -327,15 +458,19 @@ pub fn run(
                 guard.restore();
                 return runtime::connect(paths, config, &name, false, &[], forward.as_ref());
             }
-            Action::Add(seed) => {
-                m.view = View::Host(Box::new(HostForm::add(seed, config.to_path_buf())));
-                Ok(false)
+            Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
+            Action::Move(host) => {
+                select_files(&mut m, config, Some(host), String::new()).map(|_| false)
             }
             Action::Save(original, host, target) => match original {
                 Some(original) => config::update_host(&original, &host, &paths.root),
                 None => config::add_host(&host, &target, &paths.root),
             }
             .map(|_| true),
+            Action::Delete(host) => config::delete_host(&host, &paths.root).map(|_| true),
+            Action::MoveTo(host, target) => {
+                config::move_host(&host, &target, &paths.root).map(|_| true)
+            }
         };
         match operation {
             Ok(true) => {
@@ -344,6 +479,7 @@ pub fn run(
                 }
                 m.all = config::load_hosts(config)?;
                 m.filter(false);
+                m.delete = None;
                 m.back();
                 m.error.clear();
             }
@@ -352,6 +488,7 @@ pub fn run(
                 View::Host(f) => f.error = e.to_string(),
                 _ => {
                     m.error = e.to_string();
+                    m.delete = None;
                 }
             },
         }

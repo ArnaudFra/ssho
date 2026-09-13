@@ -96,6 +96,7 @@ fn completion_resolves_custom_config_and_incomplete_subcommands() {
     for args in [
         &["__complete", "pro"][..],
         &["__complete", "edit", "pro"],
+        &["__complete", "move", "pro"],
         &["__complete", "info", "pro"],
     ] {
         let out = f.run(args);
