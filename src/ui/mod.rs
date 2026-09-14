@@ -4,9 +4,11 @@ mod render;
 #[cfg(test)]
 mod tests;
 use crate::{
-    config, runtime,
+    config,
+    runtime::{self, PingResult, PingStatus},
     storage::{AppConfig, AppPaths, History},
     types::{ConnectionInfo, Forward, Host},
+    version::{self, UpdateInfo},
 };
 use anyhow::Result;
 use chrono::Utc;
@@ -16,12 +18,13 @@ use crossterm::{
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use forms::{FormEvent, HostForm, Input};
+use forms::{FormEvent, ForwardForm, HostForm, Input};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{
     collections::BTreeMap,
     io::{self, Stdout},
     path::{Path, PathBuf},
+    sync::mpsc::Receiver,
     time::Duration,
 };
 #[derive(Clone, Debug)]
@@ -37,6 +40,7 @@ enum View {
     Host(Box<HostForm>),
     Info(Host),
     Help,
+    Forward(ForwardForm),
     Files {
         files: Vec<PathBuf>,
         selected: usize,
@@ -54,6 +58,7 @@ enum Action {
     Save(Option<Host>, Box<Host>, PathBuf),
     Delete(Host),
     MoveTo(Host, PathBuf),
+    Ping,
 }
 struct Model {
     all: Vec<Host>,
@@ -68,7 +73,9 @@ struct Model {
     view: View,
     preferences: AppConfig,
     history: BTreeMap<String, ConnectionInfo>,
+    statuses: BTreeMap<String, PingResult>,
     error: String,
+    update: Option<UpdateInfo>,
     page: usize,
     scroll: usize,
 }
@@ -97,7 +104,9 @@ impl Model {
             view: View::List,
             preferences,
             history,
+            statuses: BTreeMap::new(),
             error: String::new(),
+            update: None,
             page: 10,
             scroll: 0,
         };
@@ -169,6 +178,22 @@ impl Model {
                         Ok(host) => {
                             Action::Save(f.original.clone(), Box::new(host), f.target.clone())
                         }
+                        Err(e) => {
+                            f.error = e.to_string();
+                            Action::None
+                        }
+                    },
+                    _ => Action::None,
+                }
+            }
+            View::Forward(f) => {
+                return match f.key(k) {
+                    FormEvent::Cancel => {
+                        self.back();
+                        Action::None
+                    }
+                    FormEvent::Submit => match f.forward() {
+                        Ok(forward) => Action::Connect(f.host.clone(), Some(forward)),
                         Err(e) => {
                             f.error = e.to_string();
                             Action::None
@@ -295,6 +320,16 @@ impl Model {
                 }
             }
             KeyCode::Char('d') => self.delete = self.selected_host(),
+            KeyCode::Char('f') => {
+                if let Some(h) = self.selected_host() {
+                    let saved = self
+                        .history
+                        .get(&h.name)
+                        .and_then(|c| c.port_forwarding.clone());
+                    self.view = View::Forward(ForwardForm::new(h.name, saved));
+                }
+            }
+            KeyCode::Char('p') => return Action::Ping,
             KeyCode::Char('H') => {
                 self.show_hidden = !self.show_hidden;
                 self.filter(false);
@@ -376,6 +411,26 @@ impl Drop for TerminalGuard {
         self.restore();
     }
 }
+fn start_pings(m: &mut Model, config: &Path) -> Receiver<PingResult> {
+    let hosts: Vec<_> = m
+        .all
+        .iter()
+        .filter(|h| m.show_hidden || !h.hidden())
+        .cloned()
+        .collect();
+    for h in &hosts {
+        m.statuses.insert(
+            h.name.clone(),
+            PingResult {
+                name: h.name.clone(),
+                status: PingStatus::Connecting,
+                duration: Duration::ZERO,
+                error: None,
+            },
+        );
+    }
+    runtime::check_hosts(hosts, config.to_path_buf())
+}
 fn select_files(m: &mut Model, config: &Path, host: Option<Host>, seed: String) -> Result<()> {
     let mut files = config::config_files(config)?;
     if let Some(h) = &host {
@@ -404,6 +459,7 @@ pub fn run(
     paths: &AppPaths,
     config: &Path,
     force_search: bool,
+    no_update_check: bool,
     initial: InitialView,
 ) -> Result<i32> {
     let preferences = AppConfig::load(&paths.root)?;
@@ -429,11 +485,31 @@ pub fn run(
             String::new(),
         )?,
     }
+    let mut ping = if !standalone && m.preferences.ping_on_start {
+        Some(start_pings(&mut m, config))
+    } else {
+        None
+    };
+    let updates = if !standalone && m.preferences.check_for_updates && !no_update_check {
+        Some(version::check_updates())
+    } else {
+        None
+    };
     let mut guard = TerminalGuard::enter()?;
     let mut terminal: Terminal<CrosstermBackend<Stdout>> =
         Terminal::new(CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;
     loop {
+        if let Some(rx) = &ping {
+            while let Ok(result) = rx.try_recv() {
+                m.statuses.insert(result.name.clone(), result);
+            }
+        }
+        if let Some(rx) = &updates {
+            while let Ok(update) = rx.try_recv() {
+                m.update = Some(update);
+            }
+        }
         terminal.draw(|f| render::draw(f, &mut m))?;
         if !event::poll(Duration::from_millis(80))? {
             continue;
@@ -457,6 +533,10 @@ pub fn run(
             Action::Connect(name, forward) => {
                 guard.restore();
                 return runtime::connect(paths, config, &name, false, &[], forward.as_ref());
+            }
+            Action::Ping => {
+                ping = Some(start_pings(&mut m, config));
+                Ok(false)
             }
             Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
             Action::Move(host) => {
@@ -486,6 +566,7 @@ pub fn run(
             Ok(false) => {}
             Err(e) => match &mut m.view {
                 View::Host(f) => f.error = e.to_string(),
+                View::Forward(f) => f.error = e.to_string(),
                 _ => {
                     m.error = e.to_string();
                     m.delete = None;

@@ -1,5 +1,8 @@
 //! Form state and editing; adapted from SSHM (MIT, Guillaume Archambault).
-use crate::{config, types::Host};
+use crate::{
+    config,
+    types::{Forward, Host},
+};
 use anyhow::{bail, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::PathBuf;
@@ -392,6 +395,109 @@ impl HostForm {
             config::validate_host(&check)?;
         }
         Ok(host)
+    }
+}
+#[derive(Clone, Debug)]
+pub(super) struct ForwardForm {
+    pub host: String,
+    pub inputs: Vec<Input>,
+    pub kind: usize,
+    pub focus: usize,
+    pub error: String,
+    pub scroll: usize,
+}
+impl ForwardForm {
+    pub fn new(host: String, previous: Option<Forward>) -> Self {
+        let old = previous.unwrap_or_else(|| Forward {
+            kind: "local".into(),
+            remote_host: "localhost".into(),
+            ..Forward::default()
+        });
+        let kind = match old.kind.as_str() {
+            "remote" => 1,
+            "dynamic" => 2,
+            _ => 0,
+        };
+        let mut inputs = vec![
+            Input::default(),
+            Input::new(&old.local_port),
+            Input::new(&old.remote_host),
+            Input::new(&old.remote_port),
+            Input::new(&old.bind_address),
+        ];
+        for (i, hint) in [
+            (1, "8080"),
+            (2, "localhost"),
+            (3, "80"),
+            (4, "127.0.0.1 (optional)"),
+        ] {
+            inputs[i].placeholder = hint.into();
+            inputs[i].limit = [0, 5, 100, 5, 50][i];
+        }
+        Self {
+            host,
+            inputs,
+            kind,
+            focus: 0,
+            error: String::new(),
+            scroll: 0,
+        }
+    }
+    pub fn fields(&self) -> Vec<usize> {
+        if self.kind == 2 {
+            vec![0, 1, 4]
+        } else {
+            vec![0, 1, 2, 3, 4]
+        }
+    }
+    pub fn key(&mut self, k: KeyEvent) -> FormEvent {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        if k.code == KeyCode::Esc || (ctrl && k.code == KeyCode::Char('c')) {
+            return FormEvent::Cancel;
+        }
+        if ctrl && k.code == KeyCode::Char('s') {
+            return FormEvent::Submit;
+        }
+        let fields = self.fields();
+        let pos = fields.iter().position(|&i| i == self.focus).unwrap_or(0);
+        match k.code {
+            KeyCode::Left | KeyCode::Right if self.focus == 0 => {
+                self.kind = (self.kind + if k.code == KeyCode::Left { 2 } else { 1 }) % 3;
+            }
+            KeyCode::Tab | KeyCode::Down | KeyCode::Enter => {
+                if pos + 1 < fields.len() {
+                    self.focus = fields[pos + 1];
+                } else if k.code == KeyCode::Enter {
+                    return FormEvent::Submit;
+                }
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                if pos > 0 {
+                    self.focus = fields[pos - 1];
+                }
+            }
+            _ => {
+                if self.focus != 0 {
+                    self.inputs[self.focus].key(k);
+                }
+            }
+        }
+        FormEvent::None
+    }
+    pub fn forward(&self) -> Result<Forward> {
+        let f = Forward {
+            kind: ["local", "remote", "dynamic"][self.kind].into(),
+            local_port: self.inputs[1].value.trim().into(),
+            remote_host: if self.inputs[2].value.trim().is_empty() {
+                "localhost".into()
+            } else {
+                self.inputs[2].value.trim().into()
+            },
+            remote_port: self.inputs[3].value.trim().into(),
+            bind_address: self.inputs[4].value.trim().into(),
+        };
+        f.validate()?;
+        Ok(f)
     }
 }
 pub(super) const LABELS: [&str; 11] = [

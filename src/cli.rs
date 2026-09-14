@@ -6,6 +6,7 @@ pub struct Invocation {
     pub config: Option<PathBuf>,
     pub tty: bool,
     pub search: bool,
+    pub no_update_check: bool,
     pub command: Command,
 }
 
@@ -87,6 +88,7 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
             }
             "-t" | "--tty" => result.tty = boolean()?,
             "-s" | "--search" => result.search = boolean()?,
+            "--no-update-check" => result.no_update_check = boolean()?,
             "--pretty" if mode == Some("info") => pretty = boolean()?,
             "--tags" if mode == Some("search") => tags = boolean()?,
             "--names" if mode == Some("search") => names = boolean()?,
@@ -400,6 +402,7 @@ pub fn run(args: &[String]) -> Result<i32> {
                     &paths,
                     path,
                     invocation.search,
+                    invocation.no_update_check,
                     InitialView::Add(String::new()),
                 )?;
                 if code != 0 {
@@ -409,9 +412,21 @@ pub fn run(args: &[String]) -> Result<i32> {
                     println!("No hosts available, exiting.");
                     return Ok(1);
                 }
-                ui::run(&paths, path, invocation.search, InitialView::List)
+                ui::run(
+                    &paths,
+                    path,
+                    invocation.search,
+                    invocation.no_update_check,
+                    InitialView::List,
+                )
             } else {
-                ui::run(&paths, path, invocation.search, initial)
+                ui::run(
+                    &paths,
+                    path,
+                    invocation.search,
+                    invocation.no_update_check,
+                    initial,
+                )
             }
         }
     }
@@ -460,10 +475,17 @@ fn complete_words(words: &[String], default_config: &std::path::Path) -> Result<
     let mut completions = Vec::new();
     if prefix.starts_with('-') {
         completions.extend(
-            ["--config", "--tty", "--search", "--help", "--version"]
-                .iter()
-                .filter(|s| s.starts_with(&prefix))
-                .map(|s| s.to_string()),
+            [
+                "--config",
+                "--tty",
+                "--search",
+                "--no-update-check",
+                "--help",
+                "--version",
+            ]
+            .iter()
+            .filter(|s| s.starts_with(&prefix))
+            .map(|s| s.to_string()),
         );
     } else if target_command == Some("completion") {
         completions.extend(
@@ -495,7 +517,7 @@ pub fn help(command: Option<&str>) -> String {
         Some("completion") => "ssho completion bash|zsh|fish|powershell",
         _ => "ssho [host] [command...]",
     };
-    format!("SSH Organizer - A modern SSH connection manager\n\nssho is a modern SSH manager for your terminal, implemented in Rust.\n\nUsage:\n  {usage}\n\nCommands:\n  add [hostname]       Add a host using an interactive form\n  edit <host>          Edit a host and its aliases\n  move <host>          Move a host to another included configuration\n  search [query]       Search by name, hostname or tags\n  info <host>          Print machine-readable JSON (--pretty to indent)\n  completion <shell>   Generate Bash, Zsh, Fish or PowerShell completion\n  help [command]       Show help\n\nOptions:\n  -c, --config <file>   SSH configuration file (default: ~/.ssh/config)\n  -t, --tty             Force a pseudo-TTY for the remote command\n  -s, --search          Focus search at startup\n  -h, --help            Show help\n  -v, --version         Show version\n\nSearch options:\n  -f, --format <format>  table, json or simple (default: table)\n      --tags            Search tags only\n      --names           Search names only\n\nExamples:\n  ssho\n  ssho prod-server uptime\n  ssho -t prod-server sudo systemctl restart nginx\n  ssho search --tags work --format json\n\nApplication data: ~/.config/ssho/ (respects XDG_CONFIG_HOME).\n")
+    format!("SSH Organizer - A modern SSH connection manager\n\nssho is a modern SSH manager for your terminal, implemented in Rust.\n\nUsage:\n  {usage}\n\nCommands:\n  add [hostname]       Add a host using an interactive form\n  edit <host>          Edit a host and its aliases\n  move <host>          Move a host to another included configuration\n  search [query]       Search by name, hostname or tags\n  info <host>          Print machine-readable JSON (--pretty to indent)\n  completion <shell>   Generate Bash, Zsh, Fish or PowerShell completion\n  help [command]       Show help\n\nOptions:\n  -c, --config <file>   SSH configuration file (default: ~/.ssh/config)\n  -t, --tty             Force a pseudo-TTY for the remote command\n  -s, --search          Focus search at startup\n      --no-update-check  Disable automatic update checking\n  -h, --help            Show help\n  -v, --version         Show version\n\nSearch options:\n  -f, --format <format>  table, json or simple (default: table)\n      --tags            Search tags only\n      --names           Search names only\n\nExamples:\n  ssho\n  ssho prod-server uptime\n  ssho -t prod-server sudo systemctl restart nginx\n  ssho search --tags work --format json\n\nApplication data: ~/.config/ssho/ (respects XDG_CONFIG_HOME).\n")
 }
 
 pub fn completion_script(shell: &str) -> Result<&'static str> {

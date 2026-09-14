@@ -172,6 +172,26 @@ fn form_render_fields_and_readonly_keys() {
     }
 }
 #[test]
+fn tunnel_dynamic_navigation_and_history() {
+    let old = Forward {
+        kind: "dynamic".into(),
+        local_port: "1080".into(),
+        bind_address: "127.0.0.1".into(),
+        ..Forward::default()
+    };
+    let mut f = forms::ForwardForm::new("one".into(), Some(old));
+    assert_eq!(f.kind, 2);
+    f.key(key(KeyCode::Tab));
+    assert_eq!(f.focus, 1);
+    f.key(key(KeyCode::Tab));
+    assert_eq!(f.focus, 4);
+    assert!(f.forward().is_ok());
+    f.key(key(KeyCode::Up));
+    assert_eq!(f.focus, 1);
+    f.inputs[1].set("70000");
+    assert!(f.forward().is_err());
+}
+#[test]
 fn text_cursor_unicode_and_word_deletion() {
     let mut t = forms::Input::new("éab cd");
     t.key(key(KeyCode::Home));
@@ -258,6 +278,83 @@ fn form_tab_order_and_submit_shortcuts() {
     m.key(ctrl('s'));
     let View::Host(ref f) = m.view else { panic!() };
     assert!(!f.error.is_empty());
+}
+#[test]
+fn selectors_and_tunnels_return_precise_actions() {
+    let mut m = model();
+    let h = m.all[0].clone();
+    m.view = View::Files {
+        files: vec!["a".into(), "b".into()],
+        selected: 0,
+        host: Some(h.clone()),
+        seed: String::new(),
+    };
+    m.key(key(KeyCode::Char('j')));
+    assert_eq!(
+        m.key(key(KeyCode::Enter)),
+        Action::MoveTo(h, PathBuf::from("b"))
+    );
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::List));
+    m.view = View::Files {
+        files: vec!["a".into()],
+        selected: 0,
+        host: None,
+        seed: "new".into(),
+    };
+    m.key(key(KeyCode::Enter));
+    let View::Host(ref form) = m.view else {
+        panic!()
+    };
+    assert_eq!(form.target, PathBuf::from("a"));
+    assert_eq!(form.inputs[0].value, "new");
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Char('f')));
+    let View::Forward(ref mut form) = m.view else {
+        panic!()
+    };
+    form.inputs[1].set("8080");
+    form.inputs[3].set("80");
+    let action = m.key(ctrl('s'));
+    assert!(matches!(action, Action::Connect(_, Some(_))));
+}
+#[test]
+fn secondary_views_render_and_scroll_without_panics() {
+    let mut m = model();
+    let mut h = m.all[0].clone();
+    h.extra_identities = vec!["key1".into(), "key2".into()];
+    m.view = View::Info(h.clone());
+    let info = screen(&mut m, 100, 30);
+    assert!(info.contains("key2"));
+    assert!(info.contains("Actions:"));
+    m.view = View::Help;
+    let help = screen(&mut m, 100, 30);
+    for section in [
+        "Navigation & Connection",
+        "Advanced Features",
+        "Host Management",
+        "System",
+    ] {
+        assert!(help.contains(section));
+    }
+    for view in [
+        View::Help,
+        View::Info(h.clone()),
+        View::Host(Box::new(forms::HostForm::edit(h))),
+        View::Forward(forms::ForwardForm::new("one".into(), None)),
+        View::Files {
+            files: vec!["a".into()],
+            selected: 0,
+            host: None,
+            seed: String::new(),
+        },
+    ] {
+        m.view = view;
+        for (w, h) in [(100, 24), (40, 12), (10, 5), (1, 1)] {
+            screen(&mut m, w, h);
+        }
+    }
 }
 #[test]
 fn list_scroll_tracks_selection_and_resize() {

@@ -47,6 +47,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     match &m.view {
         View::List => list(f, m, area),
         View::Host(_) => host_form(f, m, area),
+        View::Forward(_) => forward_form(f, m, area),
         View::Info(_) => info(f, m, area),
         View::Help => help(f, m, area),
         View::Files { .. } => files(f, m, area),
@@ -84,7 +85,9 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     }
     let area = inset(area);
     let title_height = if area.height >= 20 { 5 } else { 1 };
-    let notice_height = u16::from(!m.error.is_empty()) + u16::from(m.show_hidden);
+    let notice_height = u16::from(!m.error.is_empty())
+        + u16::from(m.update.as_ref().is_some_and(|u| u.available))
+        + u16::from(m.show_hidden);
     let search_height = if area.height < 9 { 1 } else { 3 };
     let help_height = if area.height > 13 { 2 } else { 1 };
     let available_table_height = area
@@ -114,6 +117,14 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     };
     f.render_widget(Paragraph::new(title).style(accent()), chunks[0]);
     let mut notices = vec![];
+    if let Some(update) = &m.update {
+        if update.available {
+            notices.push(Line::styled(
+                format!("Update available: {} → {}", update.current, update.latest),
+                Style::default().fg(Color::Green),
+            ));
+        }
+    }
     if !m.error.is_empty() {
         notices.push(Line::styled(
             format!("Error: {}", m.error),
@@ -155,6 +166,16 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     .bottom_margin(1);
     let rows = m.visible.iter().map(|&index| {
         let h = &m.all[index];
+        let (status, color) = match m.statuses.get(&h.name).map(|r| &r.status) {
+            Some(PingStatus::Online) => ("●", Color::Green),
+            Some(PingStatus::Offline) => ("●", Color::Red),
+            Some(PingStatus::Connecting) => ("●", Color::Yellow),
+            _ => ("●", GRAY),
+        };
+        let name = Cell::from(Line::from(vec![
+            Span::styled(format!("{status} "), Style::default().fg(color)),
+            Span::raw(h.name.clone()),
+        ]));
         let tags = h
             .tags
             .iter()
@@ -167,7 +188,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             .map(|c| time_ago(c.last_connect))
             .unwrap_or_default();
         Row::new(vec![
-            Cell::from(h.name.clone()),
+            name,
             Cell::from(h.hostname.clone()),
             Cell::from(tags),
             Cell::from(time),
@@ -402,6 +423,101 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
     ));
     f.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), parts[2]);
 }
+fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
+    let View::Forward(form) = &mut m.view else {
+        return;
+    };
+    let area = panel(area, 88, 30);
+    let border = block("Port Forwarding Setup", true);
+    let inner = border.inner(area);
+    f.render_widget(border, area);
+    let parts = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(if inner.height > 12 { 4 } else { 2 }),
+    ])
+    .split(inner);
+    f.render_widget(
+        Paragraph::new(format!("Host: {}", form.host)).style(accent()),
+        parts[0],
+    );
+    let mut lines = vec![];
+    let mut focus_y = 0;
+    let kind = ["Local (-L)", "Remote (-R)", "Dynamic (-D)"][form.kind];
+    let input = Input::new(kind);
+    field_lines(
+        &mut lines,
+        "Forward Type:".into(),
+        &input,
+        form.focus == 0,
+        inner.width as usize,
+    );
+    lines.push(Line::styled(
+        "Use ←/→ to change type",
+        Style::default().fg(GRAY),
+    ));
+    lines.push(Line::from(""));
+    lines.push(Line::styled(
+        match form.kind {
+            0 => "Local forwarding: ssh -L [bind_address:]local_port:remote_host:remote_port",
+            1 => "Remote forwarding: ssh -R [bind_address:]remote_port:local_host:local_port",
+            _ => "Dynamic forwarding (SOCKS proxy): ssh -D [bind_address:]port",
+        },
+        Style::default().fg(GRAY),
+    ));
+    lines.push(Line::from(""));
+    let labels = match form.kind {
+        0 => [
+            "",
+            "Local Port:",
+            "Remote Host:",
+            "Remote Port:",
+            "Bind Address (optional):",
+        ],
+        1 => [
+            "",
+            "Remote Port:",
+            "Local Host:",
+            "Local Port:",
+            "Bind Address (optional):",
+        ],
+        _ => ["", "SOCKS Port:", "", "", "Bind Address (optional):"],
+    };
+    for i in form.fields().into_iter().skip(1) {
+        let selected = form.focus == i;
+        let y = field_lines(
+            &mut lines,
+            labels[i].into(),
+            &form.inputs[i],
+            selected,
+            inner.width as usize,
+        );
+        if selected {
+            focus_y = y;
+        }
+    }
+    scroll_focus(&mut form.scroll, focus_y, parts[1].height, lines.len());
+    f.render_widget(
+        Paragraph::new(lines).scroll((form.scroll as u16, 0)),
+        parts[1],
+    );
+    let mut footer = vec![];
+    if !form.error.is_empty() {
+        footer.push(Line::styled(
+            format!("Error: {}", form.error),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    footer.push(Line::styled(
+        "Tab/↓: next field • Shift+Tab/↑: previous field",
+        Style::default().fg(GRAY),
+    ));
+    footer.push(Line::styled(
+        "Enter: connect • Ctrl+S: connect • Esc: cancel",
+        Style::default().fg(GRAY),
+    ));
+    f.render_widget(Paragraph::new(footer), parts[2]);
+}
 fn files(f: &mut Frame, m: &mut Model, area: Rect) {
     let View::Files {
         files,
@@ -551,7 +667,9 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     let right = [
         "Advanced Features",
         "",
+        "p      ping all hosts",
         "H      toggle hidden hosts visibility",
+        "f      setup port forwarding",
         "s      cycle sort modes",
         "n      sort by name",
         "r      sort by recent connection",
@@ -561,8 +679,6 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "h      show this help",
         "q      quit application",
         "Esc    clear search / exit view",
-        "",
-        "",
     ];
     let text = if inner.width >= 77 {
         left.iter()
