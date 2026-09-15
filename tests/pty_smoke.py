@@ -167,4 +167,15 @@ with tempfile.TemporaryDirectory(prefix="ssho-pty-") as directory:
     session.close()
     print("PASS first host creation returns to browser")
 
+    cancelled = home/"empty-cancel-config"
+    cancelled.write_text("")
+    session = Session(env,["-c",str(cancelled)])
+    session.expect("Would you like to add")
+    session.send(b"y\n")
+    session.expect("Add SSH Host Configuration")
+    session.send(b"\x1b")
+    session.close(1)
+    assert cancelled.read_text() == ""
+    print("PASS cancelled first host creation preserves empty config and exits 1")
+
 print("All PTY checks passed")

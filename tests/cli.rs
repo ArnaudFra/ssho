@@ -29,6 +29,32 @@ impl Fixture {
     }
 }
 
+fn optional_shell_output(command: &mut Command) -> Option<Output> {
+    match command.output() {
+        Ok(output) => Some(output),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "Skipping optional shell check: {} was not found on PATH",
+                command.get_program().to_string_lossy()
+            );
+            None
+        }
+        Err(error) => panic!(
+            "failed to execute {}: {error}",
+            command.get_program().to_string_lossy()
+        ),
+    }
+}
+
+#[test]
+fn optional_shell_check_skips_missing_executable_with_isolated_path() {
+    let empty_path = tempfile::tempdir().unwrap();
+    assert!(optional_shell_output(
+        Command::new("sshm-test-unavailable-shell").env("PATH", empty_path.path())
+    )
+    .is_none());
+}
+
 #[test]
 fn help_version_and_completion_scripts_do_not_migrate() {
     let f = Fixture::new();
@@ -51,17 +77,19 @@ fn help_version_and_completion_scripts_do_not_migrate() {
             args,
             String::from_utf8_lossy(&out.stderr)
         );
+        assert!(!out.stdout.is_empty(), "{args:?} produced no output");
         assert!(!f.config_root().exists());
     }
     let script = f.run(&["completion", "bash"]);
     let path = f.dir.path().join("completion.bash");
     fs::write(&path, script.stdout).unwrap();
-    assert!(Command::new("bash")
-        .arg("-n")
-        .arg(path)
-        .status()
-        .unwrap()
-        .success());
+    if let Some(out) = optional_shell_output(Command::new("bash").arg("-n").arg(path)) {
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
     assert_eq!(
         fs::read_to_string(legacy.join("sentinel")).unwrap(),
         "untouched"
@@ -204,4 +232,189 @@ fn direct_ssh_preserves_args_exit_status_and_migrates_once() {
         fs::read_to_string(f.config_root().join("backups/config.backup")).unwrap(),
         "original backup"
     );
+}
+
+#[test]
+fn completion_suggests_contextual_commands_flags_and_values() {
+    let f = Fixture::new();
+    for (words, expected) in [
+        (vec!["ed"], "edit\n:4\n"),
+        (vec!["he"], "help\n:4\n"),
+        (vec!["co"], "completion\n:4\n"),
+        (vec!["help", "ed"], "edit\n:4\n"),
+        (vec!["search", "--na"], "--names\n:4\n"),
+        (vec!["search", "--ta"], "--tags\n:4\n"),
+        (vec!["search", "--fo"], "--format\n:4\n"),
+        (vec!["info", "--pr"], "--pretty\n:4\n"),
+        (vec!["search", "--format", "j"], "json\n:4\n"),
+        (vec!["search", "-f", "s"], "simple\n:4\n"),
+        (vec!["search", "--format=j"], "--format=json\n:4\n"),
+        (vec!["search", "--format", "json", "--na"], "--names\n:4\n"),
+        (vec!["completion", "f"], "fish\n:4\n"),
+        (vec!["completion", "fish", ""], ":4\n"),
+        (vec!["edit", "prod", ""], ":4\n"),
+        (vec!["move", "prod", ""], ":4\n"),
+        (vec!["info", "prod", ""], ":4\n"),
+        (vec!["prod", ""], ":4\n"),
+        (vec!["edit", "sec"], ":4\n"),
+        (vec!["move", "sec"], ":4\n"),
+        (vec!["sec"], ":4\n"),
+        (vec!["info", "sec"], "secret\n:4\n"),
+        (vec!["info", "--na"], ":4\n"),
+    ] {
+        let mut args = vec!["__complete"];
+        args.extend(words);
+        let out = f.run(&args);
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), expected, "{args:?}");
+    }
+    for flag in [
+        "-c",
+        "--config",
+        "-t",
+        "--tty",
+        "-s",
+        "--search",
+        "--no-update-check",
+        "-h",
+        "--help",
+        "-v",
+        "--version",
+    ] {
+        let out = f.run(&["__complete", flag]);
+        assert!(
+            String::from_utf8(out.stdout)
+                .unwrap()
+                .lines()
+                .any(|line| line == flag),
+            "{flag}"
+        );
+    }
+}
+
+#[test]
+fn completion_handles_config_paths_spaces_directories_and_short_flags() {
+    let f = Fixture::new();
+    let paths = f.dir.path().join("config paths");
+    fs::create_dir(&paths).unwrap();
+    fs::create_dir(paths.join("test directory")).unwrap();
+    fs::write(
+        paths.join("test config"),
+        "Host custom\n HostName example.org\n",
+    )
+    .unwrap();
+    let prefix = paths.join("test");
+    let expected = format!(
+        "{}\n{}/\n:4\n",
+        paths.join("test config").display(),
+        paths.join("test directory").display()
+    );
+    for flag in ["-c", "--config"] {
+        let out = f.run(&["__complete", flag, prefix.to_str().unwrap()]);
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), expected, "{flag}");
+    }
+    for flag in ["--config=", "-c", "-c="] {
+        let partial = format!("{flag}{}", prefix.display());
+        let out = f.run(&["__complete", &partial]);
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap(),
+            format!(
+                "{flag}{}\n{flag}{}/\n:4\n",
+                paths.join("test config").display(),
+                paths.join("test directory").display()
+            )
+        );
+        let config_arg = format!("{flag}{}", paths.join("test config").display());
+        let out = f.run(&["__complete", &config_arg, "cus"]);
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), "custom\n:4\n");
+    }
+    let out = f.run(&["__complete", "-c", "~/config paths/test"]);
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "~/config paths/test config\n~/config paths/test directory/\n:4\n"
+    );
+    let out = f.run(&["__complete", "--config=/missing", "ed"]);
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "edit\n:4\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn generated_bash_and_fish_adapters_complete_commands_and_quoted_paths() {
+    let f = Fixture::new();
+    let folder = f.dir.path().join("config paths");
+    fs::create_dir(&folder).unwrap();
+    fs::create_dir(folder.join("test directory")).unwrap();
+    fs::write(
+        folder.join("test config"),
+        "Host custom\n HostName example.org\n",
+    )
+    .unwrap();
+    for shell in ["bash", "fish"] {
+        let script = f.dir.path().join(format!("completion.{shell}"));
+        fs::write(&script, f.run(&["completion", shell]).stdout).unwrap();
+        let body = if shell == "bash" {
+            r#"
+ssho() { "$SSHM_BIN" "$@"; }
+source "$SSHM_COMPLETION"
+COMP_WORDS=(ssho ed); COMP_CWORD=1; _ssho; printf '%s\n' "${COMPREPLY[@]}"
+COMP_WORDS=(ssho search --na); COMP_CWORD=2; _ssho; printf '%s\n' "${COMPREPLY[@]}"
+COMP_WORDS=(ssho -c "$SSHM_PREFIX"); COMP_CWORD=2; _ssho; printf '%s\n' "${COMPREPLY[@]}"
+COMP_WORDS=(ssho -c "$SSHM_CONFIG" cus); COMP_CWORD=3; _ssho; printf '%s\n' "${COMPREPLY[@]}"
+COMP_WORDS=(ssho -c "'$SSHM_PREFIX"); COMP_CWORD=2; _ssho; printf '%s\n' "${COMPREPLY[@]}"
+printf -v escaped '%q' "$SSHM_PREFIX"
+COMP_WORDS=(ssho -c "$escaped"); COMP_CWORD=2; _ssho; printf '%s\n' "${COMPREPLY[@]}"
+COMP_WORDS=(ssho --config = "$SSHM_PREFIX"); COMP_CWORD=3; _ssho
+[[ ${COMPREPLY[0]} == "$SSHM_CONFIG" && ${COMPREPLY[1]} == "$SSHM_PREFIX directory/" ]] || exit 5
+COMP_WORDS=(ssho --config = "$SSHM_CONFIG" cus); COMP_CWORD=4; _ssho
+[[ ${COMPREPLY[*]} == custom ]] || exit 6
+COMP_WORDS=(ssho search --format = j); COMP_CWORD=4; _ssho
+[[ ${COMPREPLY[*]} == json ]] || exit 7
+"#
+        } else {
+            r#"
+function ssho; command $SSHM_BIN $argv; end
+source "$SSHM_COMPLETION"
+complete -C 'ssho ed'
+complete -C 'ssho search --na'
+complete -C "ssho -c "(string escape -- "$SSHM_PREFIX")
+complete -C "ssho -c "(string escape -- "$SSHM_CONFIG")" cus"
+complete -C "ssho -c '$SSHM_PREFIX"
+complete -C "ssho -c "(string escape --style=script --no-quoted -- "$SSHM_PREFIX")
+"#
+        };
+        let Some(out) = optional_shell_output(
+            Command::new(shell)
+                .args(if shell == "fish" {
+                    vec!["--no-config", "-c", body]
+                } else {
+                    vec!["--noprofile", "--norc", "-c", body]
+                })
+                .env("HOME", f.dir.path())
+                .env("SSHM_BIN", env!("CARGO_BIN_EXE_ssho"))
+                .env("SSHM_COMPLETION", &script)
+                .env("SSHM_PREFIX", folder.join("test"))
+                .env("SSHM_CONFIG", folder.join("test config")),
+        ) else {
+            continue;
+        };
+        assert!(
+            out.status.success(),
+            "{shell}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap(),
+            format!(
+                "edit\n--names\n{file}\n{dir}/\ncustom\n{file}\n{dir}/\n{file}\n{dir}/\n",
+                file = folder.join("test config").display(),
+                dir = folder.join("test directory").display()
+            ),
+            "{shell}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }

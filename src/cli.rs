@@ -432,79 +432,176 @@ pub fn run(args: &[String]) -> Result<i32> {
     }
 }
 
+const SUBCOMMANDS: &[&str] = &[
+    "add",
+    "edit",
+    "move",
+    "info",
+    "search",
+    "completion",
+    "help",
+];
+const SHELLS: &[&str] = &["bash", "zsh", "fish", "powershell"];
+const FORMATS: &[&str] = &["table", "json", "simple"];
+
 fn complete_words(words: &[String], default_config: &std::path::Path) -> Result<Vec<String>> {
-    let prefix = words
-        .last()
-        .map(String::as_str)
-        .unwrap_or("")
-        .to_lowercase();
-    let prior = if words.is_empty() {
-        &[][..]
-    } else {
-        &words[..words.len() - 1]
-    };
-    if prior.last().is_some_and(|v| v == "-c" || v == "--config") {
-        return Ok(vec![]);
-    }
-    // Completion consumes partial command lines, so required positionals may still be absent.
+    let prefix = words.last().map(String::as_str).unwrap_or("");
+    let prior = words
+        .get(..words.len().saturating_sub(1))
+        .unwrap_or_default();
     let mut config = default_config.to_path_buf();
     let mut positional = Vec::new();
-    let mut i = 0;
-    while i < prior.len() {
-        let word = &prior[i];
-        if word == "-c" || word == "--config" {
-            i += 1;
-            if let Some(value) = prior.get(i) {
-                config = PathBuf::from(value)
+    let mut value_for = None;
+    let mut options = true;
+    for word in prior {
+        if let Some(flag) = value_for.take() {
+            if flag == "config" {
+                config = completion_path(word);
             }
-        } else if let Some(value) = word.strip_prefix("--config=") {
-            config = PathBuf::from(value)
-        } else if word.starts_with("-c") && word.len() > 2 {
-            config = PathBuf::from(&word[2..])
-        } else if !word.starts_with('-') {
-            positional.push(word.as_str())
+            continue;
         }
-        i += 1;
+        if options && word == "--" {
+            options = false;
+        } else if options && matches!(word.as_str(), "-c" | "--config") {
+            value_for = Some("config");
+        } else if options && config_value(word).is_some() {
+            config = completion_path(config_value(word).unwrap().1);
+        } else if options
+            && positional.first() == Some(&"search")
+            && matches!(word.as_str(), "-f" | "--format")
+        {
+            value_for = Some("format");
+        } else if !options || !word.starts_with('-') {
+            positional.push(word.as_str());
+        }
     }
-    let target_command = positional
+    if value_for == Some("config") {
+        return Ok(complete_files(prefix, ""));
+    }
+    if value_for == Some("format") {
+        return Ok(complete_values(FORMATS, prefix, ""));
+    }
+    let command = positional
         .first()
         .copied()
-        .filter(|w| ["add", "edit", "move", "info", "search", "completion"].contains(w));
-    let hosts_allowed = positional.is_empty()
-        || (positional.len() == 1 && matches!(target_command, Some("edit" | "move" | "info")));
-    let mut completions = Vec::new();
-    if prefix.starts_with('-') {
-        completions.extend(
-            [
+        .filter(|v| SUBCOMMANDS.contains(v));
+    if options {
+        if let Some((flag, value)) = config_value(prefix) {
+            return Ok(complete_files(value, flag));
+        }
+        if command == Some("search") {
+            if let Some(value) = prefix.strip_prefix("--format=") {
+                return Ok(complete_values(FORMATS, value, "--format="));
+            }
+            if let Some(value) = prefix.strip_prefix("-f=") {
+                return Ok(complete_values(FORMATS, value, "-f="));
+            }
+        }
+        if prefix.starts_with('-') {
+            let mut flags = vec![
+                "-c",
                 "--config",
+                "-t",
                 "--tty",
+                "-s",
                 "--search",
                 "--no-update-check",
+                "-h",
                 "--help",
+                "-v",
                 "--version",
-            ]
-            .iter()
-            .filter(|s| s.starts_with(&prefix))
-            .map(|s| s.to_string()),
-        );
-    } else if target_command == Some("completion") {
-        completions.extend(
-            ["bash", "zsh", "fish", "powershell"]
-                .iter()
-                .filter(|s| s.starts_with(&prefix))
-                .map(|s| s.to_string()),
-        );
-    } else if hosts_allowed {
-        for host in crate::config::load_hosts(&config)? {
-            if (target_command == Some("info") || !host.hidden())
-                && host.name.to_lowercase().starts_with(&prefix)
+            ];
+            match command {
+                Some("search") => flags.extend(["-f", "--format", "--names", "--tags"]),
+                Some("info") => flags.push("--pretty"),
+                _ => {}
+            }
+            return Ok(complete_values(&flags, prefix, ""));
+        }
+    }
+    if command == Some("completion") && positional.len() == 1 {
+        return Ok(complete_values(SHELLS, prefix, ""));
+    }
+    if command == Some("help") && positional.len() == 1 {
+        return Ok(complete_values(SUBCOMMANDS, prefix, ""));
+    }
+    let mut completions = if positional.is_empty() && options {
+        complete_values(SUBCOMMANDS, prefix, "")
+    } else {
+        Vec::new()
+    };
+    let hosts_allowed = positional.is_empty()
+        || (positional.len() == 1 && matches!(command, Some("edit" | "move" | "info")));
+    if hosts_allowed {
+        // A missing/unreadable config must not suppress static command candidates.
+        for host in crate::config::load_hosts(&config).unwrap_or_default() {
+            if (command == Some("info") || !host.hidden())
+                && host.name.to_lowercase().starts_with(&prefix.to_lowercase())
                 && !completions.contains(&host.name)
             {
-                completions.push(host.name)
+                completions.push(host.name);
             }
         }
     }
     Ok(completions)
+}
+
+fn complete_values(values: &[&str], prefix: &str, flag: &str) -> Vec<String> {
+    values
+        .iter()
+        .filter(|v| v.starts_with(prefix))
+        .map(|v| format!("{flag}{v}"))
+        .collect()
+}
+
+// Return the exact option prefix so inline file candidates replace the whole word.
+fn config_value(word: &str) -> Option<(&str, &str)> {
+    for flag in ["--config=", "-c="] {
+        if let Some(value) = word.strip_prefix(flag) {
+            return Some((flag, value));
+        }
+    }
+    word.strip_prefix("-c")
+        .filter(|v| !v.is_empty())
+        .map(|v| ("-c", v))
+}
+
+fn completion_path(value: &str) -> PathBuf {
+    if let Some(rest) = value.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(value)
+}
+
+fn complete_files(prefix: &str, flag: &str) -> Vec<String> {
+    let split = prefix.rfind(std::path::is_separator).map_or(0, |i| i + 1);
+    let (directory, basename) = prefix.split_at(split);
+    let path = if directory.is_empty() {
+        PathBuf::from(".")
+    } else {
+        completion_path(directory)
+    };
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !name.starts_with(basename)
+            || (basename.is_empty() && name.starts_with('.'))
+            || name.contains(['\n', '\r', '\t'])
+        {
+            continue;
+        }
+        let slash = if entry.path().is_dir() { "/" } else { "" };
+        candidates.push(format!("{flag}{directory}{name}{slash}"));
+    }
+    candidates.sort();
+    candidates
 }
 
 pub fn help(command: Option<&str>) -> String {
@@ -523,14 +620,47 @@ pub fn help(command: Option<&str>) -> String {
 pub fn completion_script(shell: &str) -> Result<&'static str> {
     Ok(match shell {
         "bash" => {
-            r#"_ssho() {
-    local line
+            r#"_ssho_unquote() {
+    local raw=$1 quote= value= char next i
+    for ((i=0; i<${#raw}; i++)); do
+        char=${raw:i:1}
+        if [[ "$char" == '\' && "$quote" != "'" ]]; then
+            next=${raw:i+1:1}
+            if [[ -n "$next" && ( "$quote" != '"' || "$next" == '\' || "$next" == '$' || "$next" == '`' || "$next" == '"' ) ]]; then
+                value+=$next
+                ((i++))
+            else
+                value+=$char
+            fi
+        elif [[ -z "$quote" && ( "$char" == "'" || "$char" == '"' ) ]]; then
+            quote=$char
+        elif [[ "$char" == "$quote" ]]; then
+            quote=
+        else
+            value+=$char
+        fi
+    done
+    REPLY=$value
+}
+_ssho() {
+    local line word REPLY previous= i=0
+    local -a args=()
+    for word in "${COMP_WORDS[@]:1:COMP_CWORD}"; do
+        i=$((i + 1))
+        if [[ "$word" == '=' && ( "$previous" == '--config' || "$previous" == '-c' || "$previous" == '--format' || "$previous" == '-f' ) ]]; then
+            if ((i == COMP_CWORD)); then args+=(''); fi
+            continue
+        fi
+        _ssho_unquote "$word"
+        args+=("$REPLY")
+        previous=$REPLY
+    done
     COMPREPLY=()
     while IFS= read -r line; do
         [[ "$line" == :* ]] || COMPREPLY+=("$line")
-    done < <(ssho __complete "${COMP_WORDS[@]:1:COMP_CWORD}" 2>/dev/null)
+    done < <(ssho __complete "${args[@]}" 2>/dev/null)
 }
-complete -o nospace -F _ssho ssho
+complete -o filenames -F _ssho ssho
 "#
         }
         "zsh" => {
@@ -540,15 +670,16 @@ _ssho() {
     local line
     while IFS= read -r line; do
         [[ "$line" == :* ]] || candidates+=("$line")
-    done < <(ssho __complete "${words[@]:1}" 2>/dev/null)
-    _describe 'SSH hosts' candidates
+    done < <(ssho __complete "${words[@]:1:$((CURRENT - 1))}" 2>/dev/null)
+    compadd -f -- "${candidates[@]}"
 }
 compdef _ssho ssho
 "#
         }
         "fish" => {
             r#"function __ssho_complete
-    ssho __complete (commandline -opc)[2..-1] (commandline -ct) 2>/dev/null | string match -rv '^:'
+    set -l current (commandline -ct | string unescape)
+    ssho __complete (commandline -opc)[2..-1] "$current" 2>/dev/null | string match -rv '^:'
 end
 complete -c ssho -f -a '(__ssho_complete)'
 "#
@@ -556,10 +687,16 @@ complete -c ssho -f -a '(__ssho_complete)'
         "powershell" => {
             r#"Register-ArgumentCompleter -Native -CommandName ssho -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    $words = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString().Trim('"', "'") })
+    $words = @($commandAst.CommandElements | Select-Object -Skip 1 | Where-Object {
+        $_.Extent.StartOffset -lt $cursorPosition
+    } | ForEach-Object {
+        if ($_ -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $_.Value }
+        else { $_.Extent.Text }
+    })
     if (-not $wordToComplete) { $words += '' }
     & ssho __complete @words 2>$null | Where-Object { $_ -notmatch '^:' } | ForEach-Object {
-        [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+        $quoted = "'" + $_.Replace("'", "''") + "'"
+        [System.Management.Automation.CompletionResult]::new($quoted, $_, 'ParameterValue', $_)
     }
 }
 "#

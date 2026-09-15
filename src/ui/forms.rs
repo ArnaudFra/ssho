@@ -383,6 +383,10 @@ impl HostForm {
             host.user = self.default_user.clone();
         }
         if let Some(original) = &self.original {
+            // The selected alias identifies the edited host until explicitly removed.
+            if names.contains(&original.name) {
+                host.name = original.name.clone();
+            }
             host.extra_identities = original.extra_identities.clone();
             host.line_number = original.line_number;
             host.aliases = names.clone();

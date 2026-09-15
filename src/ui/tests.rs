@@ -429,3 +429,61 @@ fn short_host_list_places_footer_immediately_after_table() {
     assert_eq!(footer, table_bottom + 1, "help follows the table directly");
     assert!(rows[footer + 2..].iter().all(|row| row.trim().is_empty()));
 }
+
+#[test]
+fn saving_secondary_alias_unchanged_keeps_both_names() {
+    save_secondary_alias(false, false);
+}
+#[test]
+fn saving_secondary_alias_property_change_keeps_both_names() {
+    save_secondary_alias(true, false);
+}
+#[test]
+fn removing_selected_secondary_alias_keeps_explicit_names() {
+    save_secondary_alias(false, true);
+}
+fn save_secondary_alias(change_user: bool, remove_selected: bool) {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config");
+    std::fs::write(
+        &path,
+        "Host one two\n HostName example.org\n User old\n Port 22\n",
+    )
+    .unwrap();
+    let original = config::find_host(&path, "two").unwrap();
+    let mut form = forms::HostForm::edit(original.clone());
+    if change_user {
+        form.inputs[2].set("new");
+    }
+    if remove_selected {
+        form.names.pop();
+    }
+    config::update_host(&original, &form.host().unwrap(), &temp.path().join("app")).unwrap();
+    let updated = config::find_host(&path, "one").unwrap();
+    assert_eq!(
+        updated.aliases,
+        if remove_selected {
+            vec!["one"]
+        } else {
+            vec!["one", "two"]
+        }
+    );
+    assert_eq!(updated.user, if change_user { "new" } else { "old" });
+    assert_eq!(config::find_host(&path, "two").is_ok(), !remove_selected);
+}
+
+#[test]
+fn renaming_selected_secondary_alias_keeps_other_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config");
+    std::fs::write(&path, "Host one two\n HostName example.org\n").unwrap();
+    let original = config::find_host(&path, "two").unwrap();
+    let mut form = forms::HostForm::edit(original.clone());
+    form.names[1].set("renamed");
+    config::update_host(&original, &form.host().unwrap(), &temp.path().join("app")).unwrap();
+    assert_eq!(
+        config::find_host(&path, "renamed").unwrap().aliases,
+        ["one", "renamed"]
+    );
+    assert!(config::find_host(&path, "two").is_err());
+}
