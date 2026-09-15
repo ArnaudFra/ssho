@@ -93,6 +93,23 @@ Les hôtes masqués restent accessibles en connexion directe. La recherche de la
 
 ## Complétion
 
+La complétion doit être chargée dans le shell. Avec le binaire
+compilé localement, depuis la racine du projet :
+
+```bash
+source <(./target/release/ssho completion bash)
+./target/release/ssho BS<Tab>
+```
+
+Pour la charger à chaque nouveau terminal Bash, ajouter à `~/.bashrc` la ligne
+suivante en remplaçant le chemin par le chemin absolu du binaire :
+
+```bash
+source <(/absolute/path/to/ssho/target/release/ssho completion bash)
+```
+
+Une fois `ssho` installé dans le `PATH`, utiliser :
+
 ```sh
 # Bash
 source <(ssho completion bash)

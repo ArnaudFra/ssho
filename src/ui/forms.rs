@@ -6,6 +6,7 @@ use crate::{
 use anyhow::{bail, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::PathBuf;
+use unicode_width::UnicodeWidthChar;
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct Input {
@@ -120,34 +121,41 @@ impl Input {
         }
         self.value = chars.into_iter().collect();
     }
-    pub fn display(&self, focused: bool, width: usize) -> String {
-        if self.value.is_empty() {
-            let prefix = if focused { "▏" } else { "" };
-            return format!(
-                "{prefix}{}",
-                self.placeholder
-                    .chars()
-                    .take(width.saturating_sub(usize::from(focused)))
-                    .collect::<String>()
-            );
+    /// Visible text and terminal cursor column; never insert a fake cursor into the value.
+    pub fn viewport(&self, focused: bool, width: usize) -> (String, Option<u16>) {
+        if width == 0 {
+            return (String::new(), None);
         }
-        let chars: Vec<char> = self.value.chars().collect();
-        let start = if focused {
-            self.cursor.saturating_sub(width.saturating_sub(2))
+        let text = if self.value.is_empty() {
+            &self.placeholder
         } else {
-            0
+            &self.value
         };
-        let mut out = String::new();
-        for (i, c) in chars.iter().enumerate().skip(start).take(width) {
-            if focused && i == self.cursor {
-                out.push('▏');
+        let chars: Vec<char> = text.chars().collect();
+        let cursor = if self.value.is_empty() {
+            0
+        } else {
+            self.cursor.min(chars.len())
+        };
+        let char_width = |c: &char| c.width().unwrap_or(0);
+        let mut start = 0;
+        let mut column: usize = chars[..cursor].iter().map(char_width).sum();
+        if focused {
+            while column >= width && start < cursor {
+                column -= char_width(&chars[start]);
+                start += 1;
             }
-            out.push(*c);
         }
-        if focused && self.cursor == chars.len() {
-            out.push('▏');
+        let mut visible = String::new();
+        let mut used = 0;
+        for c in &chars[start..] {
+            used += char_width(c);
+            if used > width {
+                break;
+            }
+            visible.push(*c);
         }
-        out
+        (visible, focused.then_some(column as u16))
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq)]

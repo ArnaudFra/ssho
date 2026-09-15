@@ -139,17 +139,27 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     }
     f.render_widget(Paragraph::new(notices), chunks[1]);
     let prompt = if m.search_focus {
-        "Search: "
+        "Search: > "
     } else {
         "Search (/ or Tab to focus): "
     };
-    let width = chunks[2].width.saturating_sub(prompt.len() as u16 + 3) as usize;
-    let search = format!("{prompt}{}", m.query.display(m.search_focus, width));
-    let search = Paragraph::new(search);
+    let search_area = if chunks[2].height >= 3 {
+        block("", m.search_focus).inner(chunks[2])
+    } else {
+        chunks[2]
+    };
+    let width = search_area.width.saturating_sub(prompt.len() as u16) as usize;
+    let search = Paragraph::new(Line::from(vec![
+        Span::raw(prompt),
+        input_span(&m.query, m.search_focus, width),
+    ]));
     if chunks[2].height >= 3 {
         f.render_widget(search.block(block("", m.search_focus)), chunks[2]);
     } else {
         f.render_widget(search, chunks[2]);
+    }
+    if m.search_focus {
+        input_cursor(f, &m.query, search_area, prompt.len() as u16, 0);
     }
     let table_area = chunks[3];
     let header = Row::new(vec![
@@ -254,6 +264,26 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         chunks[4],
     );
 }
+fn input_span(input: &Input, focused: bool, width: usize) -> Span<'static> {
+    Span::styled(
+        input.viewport(focused, width).0,
+        if input.value.is_empty() {
+            Style::default().fg(GRAY)
+        } else {
+            Style::default()
+        },
+    )
+}
+
+fn input_cursor(f: &mut Frame, input: &Input, area: Rect, prefix: u16, row: usize) {
+    if row >= area.height as usize || prefix >= area.width {
+        return;
+    }
+    if let Some(column) = input.viewport(true, (area.width - prefix) as usize).1 {
+        f.set_cursor_position((area.x + prefix + column, area.y + row as u16));
+    }
+}
+
 fn field_lines(
     lines: &mut Vec<Line<'static>>,
     label: String,
@@ -266,18 +296,10 @@ fn field_lines(
         label,
         if focused { accent() } else { Style::default() },
     ));
-    lines.push(Line::styled(
-        format!(
-            "{}{}",
-            if focused { "> " } else { "  " },
-            input.display(focused, width.saturating_sub(2))
-        ),
-        if input.value.is_empty() && !focused {
-            Style::default().fg(GRAY)
-        } else {
-            Style::default()
-        },
-    ));
+    lines.push(Line::from(vec![
+        Span::raw(if focused { "> " } else { "  " }),
+        input_span(input, focused, width.saturating_sub(2)),
+    ]));
     lines.push(Line::from(""));
     y
 }
@@ -402,6 +424,14 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
         Paragraph::new(lines).scroll((form.scroll as u16, 0)),
         parts[1],
     );
+    let input = if form.name_focus {
+        form.names.get(form.focus)
+    } else {
+        form.inputs.get(form.focus)
+    };
+    if let (Some(input), Some(row)) = (input, (focus_y + 1).checked_sub(form.scroll)) {
+        input_cursor(f, input, parts[1], 2, row);
+    }
     let mut footer = vec![];
     if !form.error.is_empty() {
         footer.push(Line::styled(
@@ -501,6 +531,11 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
         Paragraph::new(lines).scroll((form.scroll as u16, 0)),
         parts[1],
     );
+    if form.focus != 0 {
+        if let Some(row) = (focus_y + 1).checked_sub(form.scroll) {
+            input_cursor(f, &form.inputs[form.focus], parts[1], 2, row);
+        }
+    }
     let mut footer = vec![];
     if !form.error.is_empty() {
         footer.push(Line::styled(

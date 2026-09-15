@@ -343,6 +343,48 @@ fn completion_handles_config_paths_spaces_directories_and_short_flags() {
 
 #[cfg(unix)]
 #[test]
+fn bash_completion_uses_the_invoked_binary_without_path_installation() {
+    let f = Fixture::new();
+    fs::write(
+        f.dir.path().join(".ssh/config"),
+        "Host BS-one BS-two\n HostName example.org\n",
+    )
+    .unwrap();
+    let script = f.dir.path().join("completion.bash");
+    fs::write(&script, f.run(&["completion", "bash"]).stdout).unwrap();
+    let Some(out) = optional_shell_output(
+        Command::new("bash")
+            .args([
+                "--noprofile",
+                "--norc",
+                "-c",
+                r#"
+source "$SSHM_COMPLETION"
+cd "$SSHM_PROJECT"
+COMP_WORDS=(./ssho BS); COMP_CWORD=1
+_ssho
+printf '%s\n' "${COMPREPLY[@]}"
+"#,
+            ])
+            .env("HOME", f.dir.path())
+            .env("SSHM_COMPLETION", &script)
+            .env(
+                "SSHM_PROJECT",
+                Path::new(env!("CARGO_BIN_EXE_ssho")).parent().unwrap(),
+            ),
+    ) else {
+        return;
+    };
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "BS-one\nBS-two\n");
+    assert!(!f.config_root().exists());
+}
+
+#[test]
 fn generated_bash_and_fish_adapters_complete_commands_and_quoted_paths() {
     let f = Fixture::new();
     let folder = f.dir.path().join("config paths");

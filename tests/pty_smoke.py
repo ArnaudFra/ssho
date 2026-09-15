@@ -97,6 +97,8 @@ with tempfile.TemporaryDirectory(prefix="ssho-pty-") as directory:
 
     session = Session(env)
     session.expect("Last Login")
+    assert b"\x1b[1 q" in session.output, "focused input must select a blinking block cursor"
+    assert b"\x1b[?25h" in session.output, "focused search must show the terminal cursor"
     session.send(b"server\x0e\r")
     session.expect("SSH_TAKEOVER")
     session.close(37)
@@ -107,7 +109,9 @@ with tempfile.TemporaryDirectory(prefix="ssho-pty-") as directory:
 
     session = Session(env)
     session.expect("Last Login")
-    session.send(b"\ti")
+    session.send(b"\t")
+    assert b"\x1b[?25l" in session.output[session.mark:], "table focus must hide the input cursor"
+    session.send(b"i")
     session.expect("SSH Host Information")
     session.send(b"e")
     session.expect("Edit SSH Host")

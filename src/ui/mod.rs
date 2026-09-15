@@ -392,7 +392,12 @@ impl TerminalGuard {
     fn enter() -> Result<Self> {
         terminal::enable_raw_mode()?;
         let mut guard = Self { active: true };
-        if let Err(e) = execute!(io::stdout(), EnterAlternateScreen, cursor::Hide) {
+        if let Err(e) = execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            cursor::SetCursorStyle::BlinkingBlock,
+            cursor::Hide
+        ) {
             guard.restore();
             return Err(e.into());
         }
@@ -401,7 +406,12 @@ impl TerminalGuard {
     fn restore(&mut self) {
         if self.active {
             let _ = terminal::disable_raw_mode();
-            let _ = execute!(io::stdout(), LeaveAlternateScreen, cursor::Show);
+            let _ = execute!(
+                io::stdout(),
+                LeaveAlternateScreen,
+                cursor::SetCursorStyle::DefaultUserShape,
+                cursor::Show
+            );
             self.active = false;
         }
     }

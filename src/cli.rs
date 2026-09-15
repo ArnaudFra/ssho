@@ -658,7 +658,7 @@ _ssho() {
     COMPREPLY=()
     while IFS= read -r line; do
         [[ "$line" == :* ]] || COMPREPLY+=("$line")
-    done < <(ssho __complete "${args[@]}" 2>/dev/null)
+    done < <("${COMP_WORDS[0]}" __complete "${args[@]}" 2>/dev/null)
 }
 complete -o filenames -F _ssho ssho
 "#

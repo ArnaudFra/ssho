@@ -117,6 +117,66 @@ fn layout_columns_order_and_small_sizes() {
         screen(&mut m, w, h);
     }
 }
+
+#[test]
+fn focused_search_has_a_real_cursor_and_dim_placeholder() {
+    use ratatui::{backend::Backend, style::Color};
+    let mut m = model();
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    let position = terminal.backend_mut().get_cursor_position().unwrap();
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[position].symbol(), "S");
+    assert_eq!(buffer[position].fg, Color::DarkGray);
+    let row: String = (0..position.x)
+        .map(|x| buffer[(x, position.y)].symbol())
+        .collect();
+    assert!(row.ends_with("Search: > "), "{row:?}");
+    typing(&mut m, "abc");
+    m.key(key(KeyCode::Left));
+    terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    let typed_position = terminal.backend_mut().get_cursor_position().unwrap();
+    assert_eq!(typed_position.x, position.x + 2);
+    assert_eq!(terminal.backend().buffer()[typed_position].symbol(), "c");
+    assert_eq!(terminal.backend().buffer()[typed_position].fg, Color::Reset);
+    m.key(key(KeyCode::Tab));
+    terminal
+        .backend_mut()
+        .set_cursor_position((99, 29))
+        .unwrap();
+    terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    terminal.backend_mut().assert_cursor_position((99, 29));
+}
+
+#[test]
+fn form_inputs_show_a_cursor_on_the_placeholder_after_scrolling() {
+    use ratatui::{backend::Backend, style::Color};
+    let mut m = model();
+    m.view = View::Host(Box::new(forms::HostForm::add(
+        String::new(),
+        "config".into(),
+    )));
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    let position = terminal.backend_mut().get_cursor_position().unwrap();
+    assert_eq!(terminal.backend().buffer()[position].symbol(), "s");
+    assert_eq!(terminal.backend().buffer()[position].fg, Color::DarkGray);
+    for _ in 0..7 {
+        m.key(key(KeyCode::Tab));
+    }
+    terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    let position = terminal.backend_mut().get_cursor_position().unwrap();
+    assert_eq!(terminal.backend().buffer()[position].symbol(), "p");
+    assert_eq!(terminal.backend().buffer()[position].fg, Color::DarkGray);
+}
+
+#[test]
+fn input_viewport_respects_wide_characters_and_reserves_cursor_space() {
+    let input = forms::Input::new("界界abc");
+    assert_eq!(input.viewport(true, 5), ("abc".into(), Some(3)));
+    assert_eq!(input.viewport(false, 5), ("界界a".into(), None));
+    assert_eq!(input.viewport(true, 0), (String::new(), None));
+}
 #[test]
 fn forms_aliases_navigation_identity_and_validation() {
     let h = Host {
