@@ -1,4 +1,5 @@
 //! Native terminal interface, adapted from SSHM, copyright Guillaume Archambault (MIT).
+mod actions;
 mod forms;
 mod render;
 #[cfg(test)]
@@ -10,6 +11,7 @@ use crate::{
     types::{ConnectionInfo, Forward, Host},
     version::{self, UpdateInfo},
 };
+use actions::PaletteAction;
 use anyhow::Result;
 use chrono::Utc;
 use crossterm::{
@@ -37,6 +39,9 @@ pub enum InitialView {
 #[derive(Clone, Debug)]
 enum View {
     List,
+    Actions {
+        selected: usize,
+    },
     Host(Box<HostForm>),
     Info(Host),
     Help,
@@ -255,6 +260,23 @@ impl Model {
                 }
                 return Action::None;
             }
+            View::Actions { selected } => {
+                match k.code {
+                    KeyCode::Up => *selected = selected.saturating_sub(1),
+                    KeyCode::Down => *selected = (*selected + 1).min(PaletteAction::ALL.len() - 1),
+                    KeyCode::Esc => self.back(),
+                    KeyCode::Char('c') if ctrl => self.back(),
+                    KeyCode::Enter => {
+                        let action = PaletteAction::ALL[*selected];
+                        if action.enabled(self.selected_host().is_some()) {
+                            self.back();
+                            return self.activate_action(action);
+                        }
+                    }
+                    _ => {}
+                }
+                return Action::None;
+            }
             View::List => {}
         }
         if let Some(host) = self.delete.clone() {
@@ -263,6 +285,10 @@ impl Model {
             } else if k.code == KeyCode::Enter {
                 return Action::Delete(host);
             }
+            return Action::None;
+        }
+        if k.code == KeyCode::F(2) {
+            self.view = View::Actions { selected: 0 };
             return Action::None;
         }
         if k.code == KeyCode::Esc && self.search_focus && !self.query.value.is_empty() {
@@ -302,12 +328,8 @@ impl Model {
             KeyCode::PageUp => self.navigate(-(self.page as isize)),
             KeyCode::Home => self.selected = 0,
             KeyCode::End => self.selected = self.visible.len().saturating_sub(1),
-            KeyCode::Char('a') => return Action::Add(String::new()),
-            KeyCode::Char('e') => {
-                if let Some(h) = self.selected_host() {
-                    self.view = View::Host(Box::new(HostForm::edit(h)));
-                }
-            }
+            KeyCode::Char('a') => return self.activate_action(PaletteAction::Add),
+            KeyCode::Char('e') => return self.activate_action(PaletteAction::Edit),
             KeyCode::Char('i') => {
                 if let Some(h) = self.selected_host() {
                     self.view = View::Info(h);
@@ -320,16 +342,8 @@ impl Model {
                 }
             }
             KeyCode::Char('d') => self.delete = self.selected_host(),
-            KeyCode::Char('f') => {
-                if let Some(h) = self.selected_host() {
-                    let saved = self
-                        .history
-                        .get(&h.name)
-                        .and_then(|c| c.port_forwarding.clone());
-                    self.view = View::Forward(ForwardForm::new(h.name, saved));
-                }
-            }
-            KeyCode::Char('p') => return Action::Ping,
+            KeyCode::Char('f') => return self.activate_action(PaletteAction::Tunnel),
+            KeyCode::Char('p') => return self.activate_action(PaletteAction::Test),
             KeyCode::Char('H') => {
                 self.show_hidden = !self.show_hidden;
                 self.filter(false);
@@ -346,11 +360,33 @@ impl Model {
                 self.recent = true;
                 self.filter(false);
             }
-            KeyCode::Char('h') => {
+            KeyCode::Char('h') => return self.activate_action(PaletteAction::Help),
+            _ => {}
+        }
+        Action::None
+    }
+    fn activate_action(&mut self, action: PaletteAction) -> Action {
+        match action {
+            PaletteAction::Add => return Action::Add(String::new()),
+            PaletteAction::Edit => {
+                if let Some(host) = self.selected_host() {
+                    self.view = View::Host(Box::new(HostForm::edit(host)));
+                }
+            }
+            PaletteAction::Tunnel => {
+                if let Some(host) = self.selected_host() {
+                    let saved = self
+                        .history
+                        .get(&host.name)
+                        .and_then(|c| c.port_forwarding.clone());
+                    self.view = View::Forward(ForwardForm::new(host.name, saved));
+                }
+            }
+            PaletteAction::Test => return Action::Ping,
+            PaletteAction::Help => {
                 self.view = View::Help;
                 self.scroll = 0;
             }
-            _ => {}
         }
         Action::None
     }

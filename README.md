@@ -79,6 +79,7 @@ L'écran principal conserve le titre, la recherche, le tableau **Name / Hostname
 | Contexte | Touches |
 | --- | --- |
 | Recherche | Saisir pour filtrer ; ↑/↓ ou Ctrl+P/Ctrl+N pour sélectionner ; Entrée pour se connecter |
+| Palette d'actions | F2 depuis la recherche ou le tableau ; ↑/↓ puis Entrée ; Échap annule sans changer la recherche ni le focus |
 | Changer le focus | Tab ; `/` pour revenir à la recherche depuis le tableau |
 | Effacer ou quitter | Échap efface d'abord une recherche non vide ; les préférences contrôlent la sortie |
 | Tableau | ↑/↓ ou j/k ; a ajouter, e modifier, d supprimer avec confirmation, m déplacer |
@@ -90,6 +91,8 @@ L'écran principal conserve le titre, la recherche, le tableau **Name / Hostname
 | Alias en édition | Ctrl+A ajoute un nom, Ctrl+D supprime le nom actif lorsqu'il en reste plusieurs |
 
 Les hôtes masqués restent accessibles en connexion directe. La recherche de la TUI combine plusieurs mots sur le nom, l'adresse, l'utilisateur et les tags. La recherche CLI conserve ses propres filtres de champs.
+
+La palette propose **Ajouter**, **Modifier**, **Tunnel**, **Tester** et **Aide**. Modifier, Tunnel et Tester sont indisponibles sans hôte sélectionné ; Ajouter et Aide restent accessibles avec une liste vide. Tester réutilise le contrôle de connectivité de tous les hôtes, comme `p`. La barre sous le tableau rappelle les raccourcis du contexte courant ; les lettres saisies dans la recherche restent du texte.
 
 ## Complétion
 

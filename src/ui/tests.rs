@@ -547,3 +547,180 @@ fn renaming_selected_secondary_alias_keeps_other_names() {
     );
     assert!(config::find_host(&path, "two").is_err());
 }
+
+#[test]
+fn palette_from_search_edits_the_filtered_host() {
+    let mut m = model();
+    typing(&mut m, "beta");
+    assert_eq!(m.key(key(KeyCode::F(2))), Action::None);
+    assert!(screen(&mut m, 100, 30).contains("Modifier"));
+    m.key(key(KeyCode::Down));
+    m.key(key(KeyCode::Down));
+    m.key(key(KeyCode::Up));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    let View::Host(form) = &m.view else {
+        panic!("palette must open the existing edit form");
+    };
+    assert_eq!(form.original.as_ref().unwrap().name, "beta");
+    assert_eq!(m.query.value, "beta");
+    assert!(m.search_focus);
+}
+
+#[test]
+fn palette_cancel_preserves_query_selection_and_focus() {
+    for search_focus in [true, false] {
+        let mut m = model();
+        typing(&mut m, "a");
+        m.key(key(KeyCode::Down));
+        m.key(key(KeyCode::Left));
+        m.search_focus = search_focus;
+        m.key(key(KeyCode::F(2)));
+        assert!(screen(&mut m, 100, 30).contains("Modifier"));
+        // Modal keys must not edit the search or trigger list shortcuts.
+        typing(&mut m, "q");
+        m.key(key(KeyCode::Down));
+        assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+        assert!(matches!(m.view, View::List));
+        assert_eq!(m.query.value, "a");
+        assert_eq!(m.search_focus, search_focus);
+        assert_eq!(m.selected_host().unwrap().name, "beta");
+        if search_focus {
+            typing(&mut m, "b");
+            assert_eq!(m.query.value, "ba", "search cursor must be retained");
+        }
+    }
+}
+
+#[test]
+fn palette_empty_list_disables_host_actions_but_allows_add_and_help() {
+    for has_filtered_hosts in [false, true] {
+        let mut m = if has_filtered_hosts {
+            let mut m = model();
+            typing(&mut m, "missing");
+            m
+        } else {
+            Model::new(vec![], AppConfig::default(), BTreeMap::new(), false)
+        };
+        m.key(key(KeyCode::F(2)));
+        let output = screen(&mut m, 100, 30);
+        assert!(output.contains("Ajouter"));
+        assert!(output.contains("Aide"));
+        for _ in 0..3 {
+            m.key(key(KeyCode::Down));
+            assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+            assert!(screen(&mut m, 100, 30).contains("Ajouter"));
+        }
+        m.key(key(KeyCode::Down));
+        for (width, height) in [(40, 12), (10, 5), (1, 1)] {
+            screen(&mut m, width, height);
+        }
+        m.key(key(KeyCode::Enter));
+        assert!(matches!(m.view, View::Help));
+        m.key(key(KeyCode::Esc));
+        m.key(key(KeyCode::F(2)));
+        assert_eq!(m.key(key(KeyCode::Enter)), Action::Add(String::new()));
+    }
+}
+
+#[test]
+fn palette_tunnel_and_test_reuse_existing_actions() {
+    let mut m = model();
+    typing(&mut m, "beta");
+    m.history.insert(
+        "beta".into(),
+        ConnectionInfo {
+            host_name: "beta".into(),
+            last_connect: Utc::now(),
+            connect_count: 1,
+            port_forwarding: Some(Forward {
+                kind: "dynamic".into(),
+                local_port: "1080".into(),
+                ..Forward::default()
+            }),
+        },
+    );
+    m.key(key(KeyCode::F(2)));
+    assert!(screen(&mut m, 100, 30).contains("Tunnel"));
+    m.key(key(KeyCode::Up));
+    m.key(key(KeyCode::Down));
+    m.key(key(KeyCode::Down));
+    m.key(key(KeyCode::Enter));
+    let View::Forward(form) = &m.view else {
+        panic!("palette must open the existing tunnel form");
+    };
+    assert_eq!(form.host, "beta");
+    assert_eq!(form.kind, 2);
+    assert_eq!(form.inputs[1].value, "1080");
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::F(2)));
+    for _ in 0..3 {
+        m.key(key(KeyCode::Down));
+    }
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::Ping);
+    assert!(matches!(m.view, View::List));
+    assert_eq!(m.query.value, "beta");
+}
+
+#[test]
+fn contextual_bar_exposes_palette_and_existing_list_actions() {
+    let mut m = model();
+    assert!(screen(&mut m, 120, 30).contains("F2: actions"));
+    m.key(key(KeyCode::Tab));
+    let output = screen(&mut m, 120, 30);
+    for shortcut in [
+        "F2: actions",
+        "a: add",
+        "e: edit",
+        "f: tunnel",
+        "p: test",
+        "h: help",
+    ] {
+        assert!(output.contains(shortcut), "missing {shortcut}");
+    }
+}
+
+#[test]
+fn palette_selected_actions_and_selector_have_explicit_high_contrast_colors() {
+    use ratatui::style::{Color, Modifier};
+
+    for (has_host, selected, label) in [
+        (true, 0, "Ajouter"),
+        (true, 2, "Tunnel"),
+        (false, 1, "Modifier"),
+    ] {
+        let mut m = if has_host {
+            model()
+        } else {
+            Model::new(vec![], AppConfig::default(), BTreeMap::new(), false)
+        };
+        m.key(key(KeyCode::F(2)));
+        for _ in 0..selected {
+            m.key(key(KeyCode::Down));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+        let row = terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(100)
+            .find(|row| row.iter().any(|cell| cell.symbol() == "▶"))
+            .expect("the selected palette action must have a selector");
+        let text: String = row.iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains(label), "wrong selected action: {text}");
+        let mut selected_text = vec![label, "▶"];
+        if !has_host {
+            assert!(text.contains("Unavailable: no host"));
+            selected_text.push("Unavailable: no host");
+        }
+        for text in selected_text {
+            let first = text.chars().next().unwrap().to_string();
+            let start = row.iter().position(|cell| cell.symbol() == first).unwrap();
+            for cell in &row[start..start + text.chars().count()] {
+                assert_eq!(cell.fg, Color::Black, "foreground of {text}: {cell:?}");
+                assert_eq!(cell.bg, Color::Rgb(0, 173, 216));
+                assert!(cell.modifier.contains(Modifier::BOLD));
+            }
+        }
+    }
+}

@@ -46,6 +46,10 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     }
     match &m.view {
         View::List => list(f, m, area),
+        View::Actions { .. } => {
+            list(f, m, area);
+            actions(f, m, area);
+        }
         View::Host(_) => host_form(f, m, area),
         View::Forward(_) => forward_form(f, m, area),
         View::Info(_) => info(f, m, area),
@@ -158,7 +162,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     } else {
         f.render_widget(search, chunks[2]);
     }
-    if m.search_focus {
+    if m.search_focus && matches!(m.view, View::List) {
         input_cursor(f, &m.query, search_area, prompt.len() as u16, 0);
     }
     let table_area = chunks[3];
@@ -244,7 +248,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         });
         f.render_widget(
             Paragraph::new(if m.all.is_empty() {
-                "No SSH hosts found. Press Tab, then a to add a host."
+                "No SSH hosts found. Press F2 to add a host."
             } else {
                 "No matching hosts."
             })
@@ -253,15 +257,69 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         );
     }
     let help = if m.search_focus {
-        "↑/↓: select • Enter: connect • Tab: table shortcuts • Esc: clear/quit"
+        "F2: actions • ↑/↓: select • Enter: connect • Tab: table • Esc: clear/quit"
     } else {
-        "↑/↓: navigate • Enter: connect • Tab: search • i: info • h: help • q: quit"
+        "F2: actions • ↑/↓: navigate • Enter: connect • Tab: search • i: info • h: help • q: quit\na: add • e: edit • d: delete • m: move • f: tunnel • p: test • s: sort • n/r: name/recent • H: hidden"
     };
     f.render_widget(
         Paragraph::new(help)
             .style(Style::default().fg(GRAY))
             .wrap(Wrap { trim: false }),
         chunks[4],
+    );
+}
+fn actions(f: &mut Frame, m: &Model, area: Rect) {
+    let View::Actions { selected } = m.view else {
+        return;
+    };
+    let area = panel(area, 62, 11);
+    f.render_widget(Clear, area);
+    let border = block("Actions", true);
+    let inner = border.inner(area);
+    f.render_widget(border, area);
+    let parts = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    let host = m.selected_host();
+    f.render_widget(
+        Paragraph::new(
+            host.as_ref()
+                .map(|host| format!("Host: {}", host.name))
+                .unwrap_or_else(|| "No selected host".into()),
+        ),
+        parts[0],
+    );
+    let rows = PaletteAction::ALL.into_iter().map(|action| {
+        let enabled = action.enabled(host.is_some());
+        Row::new(vec![
+            Cell::from(action.label()),
+            Cell::from(if enabled { "" } else { "Unavailable: no host" }),
+        ])
+        .style(if enabled {
+            Style::default()
+        } else {
+            Style::default().fg(GRAY)
+        })
+    });
+    let mut state = TableState::default().with_selected(Some(selected));
+    f.render_stateful_widget(
+        Table::new(rows, [Constraint::Length(12), Constraint::Min(0)])
+            .highlight_symbol("▶ ")
+            .row_highlight_style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(CYAN)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        parts[1],
+        &mut state,
+    );
+    f.render_widget(
+        Paragraph::new("↑/↓: select • Enter: run • Esc: cancel").style(Style::default().fg(GRAY)),
+        parts[2],
     );
 }
 fn input_span(input: &Input, focused: bool, width: usize) -> Span<'static> {
@@ -691,6 +749,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "i      show host information",
         "/      search hosts",
         "Tab    switch search / table",
+        "F2     actions (also from search)",
         "",
         "Host Management",
         "",
@@ -708,6 +767,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "s      cycle sort modes",
         "n      sort by name",
         "r      sort by recent connection",
+        "       Tester: check all hosts",
         "",
         "System",
         "",
