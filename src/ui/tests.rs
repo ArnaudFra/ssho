@@ -946,3 +946,236 @@ fn palette_selected_actions_and_selector_have_explicit_high_contrast_colors() {
         }
     }
 }
+
+#[test]
+fn details_f4_from_search_tracks_selection_and_keeps_list() {
+    let mut m = model();
+    m.all[0].port = "2201".into();
+    m.all[0].identity = "/keys/primary".into();
+    m.all[0].extra_identities = vec!["/keys/second".into()];
+    m.all[0].proxy_jump = "bastion".into();
+    m.all[0].proxy_command = "nc %h %p".into();
+    m.all[0].source_file = "/ssh/config".into();
+    m.all[0].line_number = 42;
+    m.statuses.insert(
+        "alpha".into(),
+        PingResult {
+            name: "alpha".into(),
+            status: PingStatus::Offline,
+            duration: Duration::ZERO,
+            error: Some("connection refused".into()),
+        },
+    );
+    assert!(!screen(&mut m, 150, 40).contains("Details"));
+    m.key(key(KeyCode::F(4)));
+    let output = screen(&mut m, 150, 40);
+    for text in [
+        "Details",
+        "User: deploy",
+        "Port: 2201",
+        "/keys/primary",
+        "/keys/second",
+        "ProxyJump: bastion",
+        "ProxyCommand: nc %h %p",
+        "/ssh/config:42",
+        "connection refused",
+        "Hosts: 2/3",
+        "beta",
+    ] {
+        assert!(output.contains(text), "missing {text}: {output}");
+    }
+    assert!(m.search_focus);
+    m.key(key(KeyCode::Down));
+    let output = screen(&mut m, 150, 40);
+    assert!(output.contains("Host: beta"));
+    assert!(!output.contains("User: deploy"));
+    m.key(key(KeyCode::F(4)));
+    assert!(!screen(&mut m, 150, 40).contains("Host: beta"));
+}
+
+#[test]
+fn details_palette_appends_toggle_and_allows_empty_list() {
+    for empty in [false, true] {
+        let mut m = if empty {
+            Model::new(vec![], AppConfig::default(), BTreeMap::new(), false)
+        } else {
+            model()
+        };
+        m.key(key(KeyCode::F(2)));
+        let output = screen(&mut m, 150, 40);
+        assert!(output.contains("Détails"));
+        for _ in 0..5 {
+            m.key(key(KeyCode::Down));
+        }
+        m.key(key(KeyCode::Enter));
+        assert!(matches!(m.view, View::List));
+        let output = screen(&mut m, 150, 40);
+        assert!(output.contains("Details"));
+        assert!(output.contains(if empty {
+            "No selected host"
+        } else {
+            "Host: alpha"
+        }));
+    }
+}
+
+#[test]
+fn details_narrow_view_hides_temporarily_and_offers_info_hint() {
+    let mut m = model();
+    m.key(key(KeyCode::F(4)));
+    assert!(screen(&mut m, 110, 30).contains("Host: alpha"));
+    let output = screen(&mut m, 109, 30);
+    assert!(!output.contains("Host: alpha"));
+    assert!(output.contains("i: info"));
+    assert!(output.contains("Tab: table"));
+    assert!(
+        output.contains("Last Login"),
+        "narrow mode must restore full list width"
+    );
+    for (w, h) in [(80, 18), (28, 8), (1, 1)] {
+        screen(&mut m, w, h);
+    }
+    assert!(screen(&mut m, 110, 30).contains("Host: alpha"));
+    m.key(key(KeyCode::F(4)));
+    assert!(!screen(&mut m, 110, 30).contains("Host: alpha"));
+}
+
+#[test]
+fn details_long_values_scroll_to_all_tails_without_changing_search_or_selection() {
+    let mut m = model();
+    m.all[0].user = format!("{}USERTAIL", "u".repeat(1500));
+    m.all[0].identity = format!("{}KEYTAIL", "界e\u{301}".repeat(600));
+    m.all[0].extra_identities = vec![format!("{}EXTRATAIL", "x".repeat(1500))];
+    m.all[0].proxy_jump = format!("{}JUMPTAIL", "j".repeat(1500));
+    m.all[0].proxy_command = format!("{}COMMANDTAIL", "c".repeat(1500));
+    m.all[0].options = format!("{}OPTIONTAIL", "o".repeat(1500));
+    m.key(key(KeyCode::F(4)));
+    let mut gathered = String::new();
+    for _ in 0..120 {
+        let output = screen(&mut m, 120, 20);
+        assert!(output.contains("alpha"));
+        assert!(output.contains("2/3"));
+        gathered.extend(
+            output
+                .lines()
+                .filter_map(|line| line.rsplit('│').nth(1))
+                .flat_map(|line| line.chars().filter(|c| !c.is_whitespace())),
+        );
+        m.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL));
+    }
+    for tail in [
+        "USERTAIL",
+        "KEYTAIL",
+        "EXTRATAIL",
+        "JUMPTAIL",
+        "COMMANDTAIL",
+        "OPTIONTAIL",
+    ] {
+        assert!(gathered.contains(tail), "inaccessible {tail}");
+    }
+    assert_eq!(m.selected, 0);
+    assert!(m.query.value.is_empty());
+    assert!(m.search_focus);
+    let bottom = screen(&mut m, 120, 20);
+    assert!(bottom.contains("Tags: work"));
+    for _ in 0..120 {
+        m.key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::CONTROL));
+    }
+    assert!(screen(&mut m, 120, 20).contains("Host: alpha"));
+    for _ in 0..120 {
+        m.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL));
+    }
+    assert!(screen(&mut m, 120, 20).contains("Tags: work"));
+    m.key(key(KeyCode::Down));
+    assert!(
+        screen(&mut m, 120, 20).contains("Host: beta"),
+        "selection changes reset detail scroll"
+    );
+}
+
+#[test]
+fn details_split_preserves_list_row_capacity_and_high_contrast_selection() {
+    use ratatui::style::Color;
+    let mut m = adaptive_model();
+    m.search_focus = false;
+    screen(&mut m, 120, 35);
+    let capacity = m.page;
+    m.key(key(KeyCode::F(4)));
+    m.key(key(KeyCode::End));
+    let mut terminal = Terminal::new(TestBackend::new(120, 35)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut m)).unwrap();
+    assert_eq!(m.page, capacity);
+    let output = screen(&mut m, 120, 35);
+    for text in ["fleet39-", "40/41", "40/40", "18-40"] {
+        assert!(output.contains(text), "missing {text}: {output}");
+    }
+    assert!(
+        !output.contains("Last Login"),
+        "columns must use the list pane width"
+    );
+    assert!(terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .any(|cell| cell.symbol() == "f"
+            && cell.bg == Color::Rgb(0, 173, 216)
+            && cell.fg == Color::Black));
+}
+
+#[test]
+fn details_info_fallback_reaches_wrapped_command_tail() {
+    let mut m = model();
+    m.all[0].proxy_command = format!("{}INFOTAIL", "c".repeat(2500));
+    m.search_focus = false;
+    m.key(key(KeyCode::Char('i')));
+    let mut gathered = String::new();
+    for _ in 0..100 {
+        gathered.push_str(&screen(&mut m, 80, 18));
+        m.key(key(KeyCode::PageDown));
+    }
+    assert!(
+        gathered.contains("INFOTAIL"),
+        "the narrow-terminal info fallback must reach wrapped content"
+    );
+}
+
+#[test]
+fn details_keep_search_home_end_cursor_editing() {
+    let mut m = model();
+    typing(&mut m, "alp");
+    m.key(key(KeyCode::F(4)));
+    screen(&mut m, 120, 30);
+    m.key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+    typing(&mut m, "h");
+    assert_eq!(m.query.value, "halp");
+    m.query.set("alp");
+    m.filter(true);
+    m.key(key(KeyCode::Home));
+    m.key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+    typing(&mut m, "h");
+    assert_eq!(m.query.value, "alph");
+}
+
+#[test]
+fn details_alt_arrows_scroll_without_navigating_or_consuming_search_text() {
+    for search_focus in [true, false] {
+        let mut m = model();
+        m.search_focus = search_focus;
+        m.key(key(KeyCode::F(4)));
+        assert!(screen(&mut m, 120, 20).contains("Host: alpha"));
+        m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+        let output = screen(&mut m, 120, 20);
+        assert!(!output.contains("Host: alpha"));
+        assert!(output.contains("Hostname/IP: a.example"));
+        assert_eq!(m.selected, 0, "Alt+Down scrolls details, not the list");
+        m.key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        assert!(screen(&mut m, 120, 20).contains("Host: alpha"));
+        assert_eq!(m.search_focus, search_focus);
+        if search_focus {
+            typing(&mut m, "[]jk");
+            assert_eq!(m.query.value, "[]jk");
+            assert!(matches!(m.view, View::List));
+        }
+    }
+}

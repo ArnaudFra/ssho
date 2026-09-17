@@ -88,6 +88,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         );
         return;
     }
+    let viewport_width = area.width;
     let area = if area.height >= 12 { inset(area) } else { area };
     let notice_count = u16::from(!m.error.is_empty())
         + u16::from(m.update.as_ref().is_some_and(|u| u.available))
@@ -98,7 +99,10 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         notice_count
     };
     let search_height = if area.height < 12 { 1 } else { 3 };
-    let help = list_footer(area.width, m.search_focus);
+    let mut help = list_footer(area.width, m.search_focus);
+    if m.details.shown && viewport_width < 110 {
+        help.push(Line::from(details::narrow_hint(area.width, m.search_focus)));
+    }
     let help_height = help.len() as u16;
     let status_height = list_status(
         area.width,
@@ -124,7 +128,10 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             Constraint::Length(help_height),
         ])
         .split(area);
-    f.render_widget(Paragraph::new("SSHO").style(accent()), chunks[0]);
+    f.render_widget(
+        Paragraph::new("SSHO • F4: details").style(accent()),
+        chunks[0],
+    );
     let mut notices = vec![];
     if let Some(update) = &m.update {
         if update.available {
@@ -203,7 +210,10 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     if m.search_focus && matches!(m.view, View::List) {
         input_cursor(f, &m.query, search_area, prompt.len() as u16, 0);
     }
-    let table_area = chunks[3];
+    let (table_area, detail_area) = details::split(&mut m.details, viewport_width, chunks[3]);
+    if let Some(area) = detail_area {
+        details::draw(f, m, area);
+    }
     let border = if area.height < 12 {
         Block::default()
     } else {
@@ -435,7 +445,7 @@ fn actions(f: &mut Frame, m: &Model, area: Rect) {
     let View::Actions { selected } = m.view else {
         return;
     };
-    let area = panel(area, 62, 11);
+    let area = panel(area, 62, 12);
     f.render_widget(Clear, area);
     let border = block("Actions", true);
     let inner = border.inner(area);
@@ -841,58 +851,12 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     let inner = border.inner(area);
     f.render_widget(border, area);
     let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(4)]).split(inner);
-    let optional = |s: &str| {
-        if s.is_empty() {
-            "Not set".to_string()
-        } else {
-            s.to_string()
-        }
-    };
-    let mut identities = vec![optional(&h.identity)];
-    identities.extend(h.extra_identities.clone());
-    let sections = [
-        ("Host Name", h.name.clone()),
-        ("Config File", h.source_file.display().to_string()),
-        ("Hostname/IP", h.hostname.clone()),
-        ("User", optional(&h.user)),
-        ("Port", optional(&h.port)),
-        ("Identity File", identities.join("\n")),
-        ("ProxyJump", optional(&h.proxy_jump)),
-        ("ProxyCommand", optional(&h.proxy_command)),
-        ("SSH Options", optional(&h.options)),
-        ("Tags", optional(&h.tags.join(", "))),
-    ];
-    let mut lines = vec![Line::from("")];
-    for (label, value) in sections {
-        for (i, line) in value.lines().enumerate() {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(
-                        "{:>15} ",
-                        if i == 0 {
-                            format!("{label}:")
-                        } else {
-                            String::new()
-                        }
-                    ),
-                    accent(),
-                ),
-                Span::raw(line.to_string()),
-            ]));
-        }
-    }
-    m.scroll = m
-        .scroll
-        .min(lines.len().saturating_sub(parts[0].height as usize));
-    f.render_widget(
-        Paragraph::new(lines)
-            .scroll((m.scroll as u16, 0))
-            .wrap(Wrap { trim: false }),
-        parts[0],
-    );
+    let lines = details::content(h, m.statuses.get(&h.name));
+    m.page = usize::from(parts[0].height).max(1);
+    details::render_rows(f, parts[0], lines, &mut m.scroll);
     f.render_widget(
         Paragraph::new(
-            "Actions:\n  e/Enter - Switch to edit mode\n  q/Esc   - Return to host list",
+            "Actions: ↑/↓/PgUp/PgDn scroll\n  e/Enter - Switch to edit mode\n  q/Esc   - Return to host list",
         )
         .style(Style::default().fg(GRAY)),
         parts[1],
@@ -913,6 +877,8 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "/      search hosts",
         "Tab    switch search / table",
         "F2     actions (also from search)",
+        "F4     toggle details (width >=110)",
+        "Alt+↑↓ scroll details (Ctrl+PgUp/PgDn)",
         "",
         "Host Management",
         "",
@@ -940,7 +906,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     ];
     let text = if inner.width >= 77 {
         left.iter()
-            .zip(right.iter())
+            .zip(right.iter().chain(std::iter::repeat(&"")))
             .map(|(a, b)| format!("{a:<39}  {b}"))
             .collect::<Vec<_>>()
     } else {

@@ -1,5 +1,6 @@
 //! Native terminal interface, adapted from SSHM, copyright Guillaume Archambault (MIT).
 mod actions;
+mod details;
 mod forms;
 mod render;
 #[cfg(test)]
@@ -83,6 +84,7 @@ struct Model {
     update: Option<UpdateInfo>,
     page: usize,
     scroll: usize,
+    details: details::State,
 }
 impl Model {
     fn new(
@@ -114,6 +116,7 @@ impl Model {
             update: None,
             page: 10,
             scroll: 0,
+            details: details::State::default(),
         };
         m.filter(false);
         m
@@ -291,6 +294,12 @@ impl Model {
             self.view = View::Actions { selected: 0 };
             return Action::None;
         }
+        if k.code == KeyCode::F(4) {
+            return self.activate_action(PaletteAction::Details);
+        }
+        if self.details.key(k) {
+            return Action::None;
+        }
         if k.code == KeyCode::Esc && self.search_focus && !self.query.value.is_empty() {
             self.query.set("");
             self.filter(true);
@@ -383,6 +392,7 @@ impl Model {
                 }
             }
             PaletteAction::Test => return Action::Ping,
+            PaletteAction::Details => self.details.shown = !self.details.shown,
             PaletteAction::Help => {
                 self.view = View::Help;
                 self.scroll = 0;

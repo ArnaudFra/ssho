@@ -6,10 +6,18 @@ pub(super) enum PaletteAction {
     Tunnel,
     Test,
     Help,
+    Details,
 }
 
 impl PaletteAction {
-    pub(super) const ALL: [Self; 5] = [Self::Add, Self::Edit, Self::Tunnel, Self::Test, Self::Help];
+    pub(super) const ALL: [Self; 6] = [
+        Self::Add,
+        Self::Edit,
+        Self::Tunnel,
+        Self::Test,
+        Self::Help,
+        Self::Details,
+    ];
 
     pub(super) fn label(self) -> &'static str {
         match self {
@@ -18,10 +26,11 @@ impl PaletteAction {
             Self::Tunnel => "Tunnel",
             Self::Test => "Tester",
             Self::Help => "Aide",
+            Self::Details => "Détails",
         }
     }
 
     pub(super) fn enabled(self, has_host: bool) -> bool {
-        has_host || matches!(self, Self::Add | Self::Help)
+        has_host || matches!(self, Self::Add | Self::Help | Self::Details)
     }
 }

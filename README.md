@@ -85,6 +85,7 @@ L'écran principal utilise un titre compact et toute la hauteur disponible pour 
 | Tableau | ↑/↓ ou j/k ; a ajouter, e modifier, d supprimer avec confirmation, m déplacer |
 | Défilement du tableau | Page précédente/suivante ; Début/Fin pour le premier/dernier hôte |
 | Informations et aide | i pour la fiche de l'hôte, h pour l'aide |
+| Détails à côté de la liste | F4 depuis la recherche ou le tableau ; Alt+↑/↓ pour défiler ligne par ligne, Ctrl+Page précédente/suivante par page |
 | Connectivité et visibilité | p pour relancer les contrôles, H pour afficher les hôtes portant le tag `hidden` |
 | Tri | s alterne nom/date, n trie par nom, r par dernière connexion |
 | Tunnel | f ; ←/→ pour Local, Remote ou Dynamic, puis ports et adresses |
@@ -93,7 +94,11 @@ L'écran principal utilise un titre compact et toute la hauteur disponible pour 
 
 Les hôtes masqués restent accessibles en connexion directe. La recherche de la TUI combine plusieurs mots sur le nom, l'adresse, l'utilisateur et les tags. La recherche CLI conserve ses propres filtres de champs.
 
-La palette propose **Ajouter**, **Modifier**, **Tunnel**, **Tester** et **Aide**. Modifier, Tunnel et Tester sont indisponibles sans hôte sélectionné ; Ajouter et Aide restent accessibles avec une liste vide. Tester réutilise le contrôle de connectivité de tous les hôtes, comme `p`. La barre sous le tableau adapte ses rappels à la largeur ; sur un écran étroit, **F2**, puis **Aide**, donne accès aux raccourcis détaillés. Les lettres saisies dans la recherche restent du texte.
+La palette propose **Ajouter**, **Modifier**, **Tunnel**, **Tester**, **Aide** et **Détails**. Modifier, Tunnel et Tester sont indisponibles sans hôte sélectionné ; Ajouter, Aide et Détails restent accessibles avec une liste vide. Tester réutilise le contrôle de connectivité de tous les hôtes, comme `p`. La barre sous le tableau adapte ses rappels à la largeur ; sur un écran étroit, **F2**, puis **Aide**, donne accès aux raccourcis détaillés. Les lettres saisies dans la recherche restent du texte.
+
+Le panneau **Détails** est désactivé au lancement et s'ouvre à droite lorsque le terminal atteint **110 colonnes**. Il suit l'hôte sélectionné sans réduire le nombre de lignes du tableau ; les colonnes du tableau s'adaptent à la place restante. En dessous de 110 colonnes, la liste reprend toute la largeur et un rappel indique **Tab, puis i** depuis la recherche, ou **i** depuis le tableau, pour ouvrir la fiche. Agrandir le terminal réaffiche le panneau si son activation a été conservée. Les raccourcis Alt+↑/↓ (ligne par ligne) et Ctrl+Page précédente/suivante (par page) défilent uniquement lorsque le panneau est visible, sans modifier le texte recherché ni l'hôte sélectionné. Alt+↑/↓ reste disponible si le terminal réserve Ctrl+Page précédente/suivante à ses onglets.
+
+Les détails affichent les valeurs du bloc SSH chargé : utilisateur, port, toutes les identités, ProxyJump, ProxyCommand, fichier et ligne source, options et diagnostic de connectivité disponible. Les longues valeurs sont repliées et restent entièrement accessibles par défilement, y compris dans la fiche **i**. Ces valeurs ne représentent pas encore une résolution de la configuration SSH effective.
 
 ## Complétion
 
