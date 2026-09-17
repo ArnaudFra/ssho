@@ -7,6 +7,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 const CYAN: Color = Color::Rgb(0, 173, 216);
 const GRAY: Color = Color::DarkGray;
 fn accent() -> Style {
@@ -87,39 +88,43 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         );
         return;
     }
-    let area = inset(area);
-    let title_height = if area.height >= 20 { 5 } else { 1 };
-    let notice_height = u16::from(!m.error.is_empty())
+    let area = if area.height >= 12 { inset(area) } else { area };
+    let notice_count = u16::from(!m.error.is_empty())
         + u16::from(m.update.as_ref().is_some_and(|u| u.available))
         + u16::from(m.show_hidden);
-    let search_height = if area.height < 9 { 1 } else { 3 };
-    let help_height = if area.height > 13 { 2 } else { 1 };
-    let available_table_height = area
-        .height
-        .saturating_sub(title_height + notice_height + search_height + help_height)
-        .max(1);
-    // Two border lines, header plus its separator, then only the existing rows.
-    let table_height = u16::try_from(m.visible.len().max(1))
-        .unwrap_or(u16::MAX)
-        .saturating_add(4)
-        .min(available_table_height);
+    let notice_height = if area.height < 12 {
+        notice_count.min(1)
+    } else {
+        notice_count
+    };
+    let search_height = if area.height < 12 { 1 } else { 3 };
+    let help = list_footer(area.width, m.search_focus);
+    let help_height = help.len() as u16;
+    let status_height = list_status(
+        area.width,
+        m.visible.len(),
+        m.all.len(),
+        if m.visible.is_empty() {
+            0
+        } else {
+            m.selected + 1
+        },
+        m.visible.len(),
+        m.visible.len(),
+    )
+    .len() as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(title_height),
+            Constraint::Length(1),
             Constraint::Length(notice_height),
             Constraint::Length(search_height),
-            Constraint::Length(table_height),
+            Constraint::Min(1),
+            Constraint::Length(status_height),
             Constraint::Length(help_height),
-            Constraint::Min(0),
         ])
         .split(area);
-    let title = if title_height == 5 {
-        " _____ _____ __ __ _____\n|   __|   __|  |  |     |\n|__   |__   |     |  |  |\n|_____|_____|__|__|_____|\n          SSHO"
-    } else {
-        "SSHO"
-    };
-    f.render_widget(Paragraph::new(title).style(accent()), chunks[0]);
+    f.render_widget(Paragraph::new("SSHO").style(accent()), chunks[0]);
     let mut notices = vec![];
     if let Some(update) = &m.update {
         if update.available {
@@ -141,8 +146,41 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             Style::default().fg(Color::Yellow),
         ));
     }
+    if notice_height < notice_count {
+        let mut badges = vec![];
+        if m.update.as_ref().is_some_and(|u| u.available) {
+            badges.push("Update");
+        }
+        if m.show_hidden {
+            badges.push("Hidden");
+        }
+        let suffix = format!(" • {}", badges.join(" • "));
+        let mut spans = vec![];
+        if !m.error.is_empty() {
+            spans.push(Span::styled(
+                ellipsize(
+                    &format!("Error: {}", m.error),
+                    (area.width as usize).saturating_sub(suffix.width()),
+                ),
+                Style::default().fg(Color::Red),
+            ));
+            spans.push(Span::styled(suffix, Style::default().fg(Color::Yellow)));
+        } else {
+            spans.push(Span::styled(
+                badges.join(" • "),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+        notices = vec![Line::from(spans)];
+    }
     f.render_widget(Paragraph::new(notices), chunks[1]);
-    let prompt = if m.search_focus {
+    let prompt = if chunks[2].width < 40 {
+        if m.search_focus {
+            "/ > "
+        } else {
+            "/: "
+        }
+    } else if m.search_focus {
         "Search: > "
     } else {
         "Search (/ or Tab to focus): "
@@ -166,19 +204,29 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         input_cursor(f, &m.query, search_area, prompt.len() as u16, 0);
     }
     let table_area = chunks[3];
-    let header = Row::new(vec![
-        if m.recent { "Name" } else { "Name ↓" },
-        "Hostname",
-        "Tags",
-        if m.recent {
-            "Last Login ↓"
-        } else {
-            "Last Login"
-        },
-    ])
-    .style(Style::default().fg(if m.search_focus { GRAY } else { CYAN }))
-    .bottom_margin(1);
-    let rows = m.visible.iter().map(|&index| {
+    let border = if area.height < 12 {
+        Block::default()
+    } else {
+        block("", !m.search_focus)
+    };
+    let inner = border.inner(table_area);
+    let widths = list_column_widths(inner.width);
+    let header = Row::new(
+        vec![
+            if m.recent { "Name" } else { "Name ↓" },
+            "Hostname",
+            "Tags",
+            if m.recent {
+                "Last Login ↓"
+            } else {
+                "Last Login"
+            },
+        ]
+        .into_iter()
+        .take(widths.len()),
+    )
+    .style(Style::default().fg(if m.search_focus { GRAY } else { CYAN }));
+    let rows = m.visible.iter().enumerate().map(|(position, &index)| {
         let h = &m.all[index];
         let (status, color) = match m.statuses.get(&h.name).map(|r| &r.status) {
             Some(PingStatus::Online) => ("●", Color::Green),
@@ -187,8 +235,15 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             _ => ("●", GRAY),
         };
         let name = Cell::from(Line::from(vec![
-            Span::styled(format!("{status} "), Style::default().fg(color)),
-            Span::raw(h.name.clone()),
+            Span::styled(
+                format!("{status} "),
+                Style::default().fg(if position == m.selected {
+                    Color::Black
+                } else {
+                    color
+                }),
+            ),
+            Span::raw(ellipsize(&h.name, widths[0].saturating_sub(2) as usize)),
         ]));
         let tags = h
             .tags
@@ -201,29 +256,25 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             .get(&h.name)
             .map(|c| time_ago(c.last_connect))
             .unwrap_or_default();
-        Row::new(vec![
+        let cells = vec![
             name,
-            Cell::from(h.hostname.clone()),
-            Cell::from(tags),
-            Cell::from(time),
-        ])
+            Cell::from(ellipsize(
+                &h.hostname,
+                widths.get(1).copied().unwrap_or(0) as usize,
+            )),
+            Cell::from(ellipsize(
+                &tags,
+                widths.get(2).copied().unwrap_or(0) as usize,
+            )),
+            Cell::from(ellipsize(
+                &time,
+                widths.get(3).copied().unwrap_or(0) as usize,
+            )),
+        ];
+        Row::new(cells.into_iter().take(widths.len()))
     });
-    let widths = if table_area.width >= 75 {
-        vec![
-            Constraint::Percentage(26),
-            Constraint::Percentage(30),
-            Constraint::Percentage(23),
-            Constraint::Percentage(21),
-        ]
-    } else {
-        vec![
-            Constraint::Percentage(25),
-            Constraint::Percentage(30),
-            Constraint::Percentage(20),
-            Constraint::Percentage(25),
-        ]
-    };
-    m.page = table_area.height.saturating_sub(4).max(1) as usize;
+    let row_capacity = inner.height.saturating_sub(1) as usize;
+    m.page = row_capacity.max(1);
     let mut state = TableState::default()
         .with_selected(if m.visible.is_empty() {
             None
@@ -232,20 +283,22 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         })
         .with_offset(m.offset);
     f.render_stateful_widget(
-        Table::new(rows, widths)
+        Table::new(rows, widths.iter().copied().map(Constraint::Length))
             .header(header)
             .column_spacing(1)
-            .row_highlight_style(Style::default().bg(CYAN).fg(Color::Indexed(229)))
-            .block(block("", !m.search_focus)),
+            .row_highlight_style(Style::default().bg(CYAN).fg(Color::Black))
+            .block(border),
         table_area,
         &mut state,
     );
     m.offset = state.offset();
     if m.visible.is_empty() {
-        let empty = table_area.inner(Margin {
-            horizontal: 1,
-            vertical: 2,
-        });
+        let empty = Rect::new(
+            inner.x,
+            inner.y.saturating_add(1),
+            inner.width,
+            inner.height.saturating_sub(1),
+        );
         f.render_widget(
             Paragraph::new(if m.all.is_empty() {
                 "No SSH hosts found. Press F2 to add a host."
@@ -256,17 +309,127 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             empty,
         );
     }
-    let help = if m.search_focus {
-        "F2: actions • ↑/↓: select • Enter: connect • Tab: table • Esc: clear/quit"
+    let (position, first, last) = if m.visible.is_empty() {
+        (0, 0, 0)
+    } else if row_capacity == 0 {
+        (m.selected + 1, 0, 0)
     } else {
-        "F2: actions • ↑/↓: navigate • Enter: connect • Tab: search • i: info • h: help • q: quit\na: add • e: edit • d: delete • m: move • f: tunnel • p: test • s: sort • n/r: name/recent • H: hidden"
+        (
+            m.selected + 1,
+            m.offset + 1,
+            (m.offset + row_capacity).min(m.visible.len()),
+        )
     };
+    let status = list_status(
+        chunks[4].width,
+        m.visible.len(),
+        m.all.len(),
+        position,
+        first,
+        last,
+    );
     f.render_widget(
-        Paragraph::new(help)
-            .style(Style::default().fg(GRAY))
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(status).style(Style::default().fg(GRAY)),
         chunks[4],
     );
+    f.render_widget(
+        Paragraph::new(help).style(Style::default().fg(GRAY)),
+        chunks[5],
+    );
+}
+
+fn list_status(
+    width: u16,
+    count: usize,
+    total: usize,
+    position: usize,
+    first: usize,
+    last: usize,
+) -> Vec<Line<'static>> {
+    let counts = format!("{count}/{total}");
+    let range = format!("{first}-{last}");
+    let candidates = [
+        format!("Hosts: {counts} • Selected: {position}/{count} • Rows: {range}"),
+        format!("{counts} | {position}/{count} | {range}"),
+        format!("{counts}|{position}/{count}|{range}"),
+        format!("{counts} @{position} {range}"),
+    ];
+    if let Some(text) = candidates
+        .into_iter()
+        .find(|text| text.width() <= width as usize)
+    {
+        vec![Line::from(text)]
+    } else {
+        vec![
+            Line::from(counts),
+            Line::from(format!("@{position}")),
+            Line::from(range),
+        ]
+    }
+}
+
+fn list_column_widths(width: u16) -> Vec<u16> {
+    let percentages: &[u16] = match width {
+        0..=36 => &[100],
+        37..=64 => &[45, 55],
+        65..=94 => &[40, 38, 22],
+        _ => &[26, 30, 23, 21],
+    };
+    let available = width.saturating_sub(percentages.len() as u16 - 1);
+    let mut widths: Vec<_> = percentages
+        .iter()
+        .map(|p| (u32::from(available) * u32::from(*p) / 100) as u16)
+        .collect();
+    let remainder = available - widths.iter().sum::<u16>();
+    *widths.last_mut().unwrap() += remainder;
+    widths
+}
+
+fn ellipsize(text: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= width {
+        return text.into();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let span = Span::raw(text);
+    let mut used = 0;
+    let mut result = String::new();
+    for grapheme in span.styled_graphemes(Style::default()) {
+        let columns = UnicodeWidthStr::width(grapheme.symbol);
+        if used + columns > width - 1 {
+            break;
+        }
+        result.push_str(grapheme.symbol);
+        used += columns;
+    }
+    result.push('…');
+    result
+}
+
+fn list_footer(width: u16, search_focus: bool) -> Vec<Line<'static>> {
+    let lines: Vec<&str> = if width >= 105 {
+        if search_focus {
+            vec!["F2: actions • ↑/↓: select • Enter: connect • Tab: table • Esc: clear/quit"]
+        } else {
+            vec![
+                "F2: actions • ↑/↓: navigate • Enter: connect • Tab: search • i: info • h: help • q: quit",
+                "a: add • e: edit • d: delete • m: move • f: tunnel • p: test • s: sort • n/r: name/recent • H: hidden",
+            ]
+        }
+    } else if width >= 65 {
+        if search_focus {
+            vec!["F2: actions • ↑↓: select • Enter: connect • Tab: table • Esc: clear"]
+        } else {
+            vec![
+                "F2: actions • ↑↓: select • Enter: connect • Tab: search • q: quit",
+                "a/e/d/m: add/edit/delete/move • f: tunnel • p: test • h: help",
+            ]
+        }
+    } else {
+        vec!["F2: actions • ↑↓ • Enter"]
+    };
+    lines.into_iter().map(Line::from).collect()
 }
 fn actions(f: &mut Frame, m: &Model, area: Rect) {
     let View::Actions { selected } = m.view else {

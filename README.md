@@ -74,7 +74,7 @@ L'historique enregistre les tentatives de connexion, avec date, compteur et dern
 
 ## Navigation au clavier
 
-L'écran principal conserve le titre, la recherche, le tableau **Name / Hostname / Tags / Last Login**, puis l'aide. Les formulaires reprennent les onglets **General / Advanced** et leurs groupes de champs.
+L'écran principal utilise un titre compact et toute la hauteur disponible pour la liste. **Name** reste visible ; **Hostname**, **Tags**, puis **Last Login** s'ajoutent selon la largeur. Les textes trop longs se terminent par une ellipse `…`, mesurée en colonnes Unicode. Sous le tableau figurent le nombre d'hôtes filtrés/total (y compris les hôtes masqués), la position sélectionnée et la plage de lignes affichée. Les formulaires reprennent les onglets **General / Advanced** et leurs groupes de champs.
 
 | Contexte | Touches |
 | --- | --- |
@@ -83,6 +83,7 @@ L'écran principal conserve le titre, la recherche, le tableau **Name / Hostname
 | Changer le focus | Tab ; `/` pour revenir à la recherche depuis le tableau |
 | Effacer ou quitter | Échap efface d'abord une recherche non vide ; les préférences contrôlent la sortie |
 | Tableau | ↑/↓ ou j/k ; a ajouter, e modifier, d supprimer avec confirmation, m déplacer |
+| Défilement du tableau | Page précédente/suivante ; Début/Fin pour le premier/dernier hôte |
 | Informations et aide | i pour la fiche de l'hôte, h pour l'aide |
 | Connectivité et visibilité | p pour relancer les contrôles, H pour afficher les hôtes portant le tag `hidden` |
 | Tri | s alterne nom/date, n trie par nom, r par dernière connexion |
@@ -92,7 +93,7 @@ L'écran principal conserve le titre, la recherche, le tableau **Name / Hostname
 
 Les hôtes masqués restent accessibles en connexion directe. La recherche de la TUI combine plusieurs mots sur le nom, l'adresse, l'utilisateur et les tags. La recherche CLI conserve ses propres filtres de champs.
 
-La palette propose **Ajouter**, **Modifier**, **Tunnel**, **Tester** et **Aide**. Modifier, Tunnel et Tester sont indisponibles sans hôte sélectionné ; Ajouter et Aide restent accessibles avec une liste vide. Tester réutilise le contrôle de connectivité de tous les hôtes, comme `p`. La barre sous le tableau rappelle les raccourcis du contexte courant ; les lettres saisies dans la recherche restent du texte.
+La palette propose **Ajouter**, **Modifier**, **Tunnel**, **Tester** et **Aide**. Modifier, Tunnel et Tester sont indisponibles sans hôte sélectionné ; Ajouter et Aide restent accessibles avec une liste vide. Tester réutilise le contrôle de connectivité de tous les hôtes, comme `p`. La barre sous le tableau adapte ses rappels à la largeur ; sur un écran étroit, **F2**, puis **Aide**, donne accès aux raccourcis détaillés. Les lettres saisies dans la recherche restent du texte.
 
 ## Complétion
 

@@ -15,7 +15,8 @@ import tempfile
 import termios
 import time
 
-ANSI = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
+from pty_screen import Screen
+
 BINARY = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/ssho").resolve()
 
 
@@ -25,6 +26,7 @@ class Session:
         self.original = termios.tcgetattr(self.slave)
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
         self.output = b""
+        self.screen = Screen()
         self.mark = 0
         self.process = subprocess.Popen([str(BINARY), *args], stdin=self.slave, stdout=self.slave, stderr=self.slave, env=env)
         atexit.register(self.cleanup)
@@ -46,7 +48,8 @@ class Session:
                 if not data:
                     break
                 self.output += data
-        return ANSI.sub(b"", self.output[self.mark:]).decode("utf-8", errors="replace")
+                self.screen.feed(data)
+        return self.screen.text()
 
     def send(self, data):
         self.mark = len(self.output)
@@ -59,7 +62,7 @@ class Session:
             current = self.drain(0.1)
             if re.sub(r"\s+", "", text) in re.sub(r"\s+", "", current):
                 return
-        raise AssertionError(f"did not see {text!r}: {ANSI.sub(b'', self.output[-12000:]).decode('utf-8',errors='replace')}")
+        raise AssertionError(f"did not see {text!r} on terminal screen:\n{self.screen.text()}")
 
     def close(self, expected=0):
         try:

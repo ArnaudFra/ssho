@@ -471,7 +471,7 @@ fn initial_focus_obeys_preference_without_forced_flag() {
     assert!(m.search_focus);
 }
 #[test]
-fn short_host_list_places_footer_immediately_after_table() {
+fn short_host_list_uses_available_height_before_status_and_footer() {
     let mut m = model();
     let output = screen(&mut m, 120, 40);
     let rows: Vec<_> = output.lines().collect();
@@ -481,13 +481,13 @@ fn short_host_list_places_footer_immediately_after_table() {
         .iter()
         .position(|line| line.contains("↑/↓: select"))
         .unwrap();
-    assert_eq!(
-        table_bottom,
-        last_host + 1,
-        "table must end after the final host"
+    assert!(
+        table_bottom > last_host + 1,
+        "table fills the available height"
     );
-    assert_eq!(footer, table_bottom + 1, "help follows the table directly");
-    assert!(rows[footer + 2..].iter().all(|row| row.trim().is_empty()));
+    assert!(rows[table_bottom + 1].contains("Hosts: 2/3"));
+    assert_eq!(footer, table_bottom + 2, "status and help follow the table");
+    assert_eq!(footer, rows.len() - 2, "only the outer margin follows help");
 }
 
 #[test]
@@ -677,6 +677,228 @@ fn contextual_bar_exposes_palette_and_existing_list_actions() {
     ] {
         assert!(output.contains(shortcut), "missing {shortcut}");
     }
+}
+
+fn adaptive_model() -> Model {
+    let mut hosts: Vec<_> = (0..40)
+        .map(|i| Host {
+            name: format!("fleet{i:02}-{}", "界e\u{301}👩‍💻".repeat(12)),
+            hostname: format!("host{i:02}.very-long-address.example.org"),
+            tags: vec!["production-long-tag".into()],
+            ..Host::default()
+        })
+        .collect();
+    hosts.push(Host {
+        name: "secret".into(),
+        tags: vec!["hidden".into()],
+        ..Host::default()
+    });
+    Model::new(hosts, AppConfig::default(), BTreeMap::new(), false)
+}
+
+#[test]
+fn adaptive_list_keeps_selection_counts_and_scroll_range_visible() {
+    use ratatui::style::Color;
+    for (width, height, first_range, last_range, minimum_rows) in [
+        (28, 8, "1-3", "38-40", 3),
+        (70, 18, "1-6", "35-40", 6),
+        (80, 18, "1-6", "35-40", 6),
+        (120, 35, "1-23", "18-40", 23),
+    ] {
+        let mut m = adaptive_model();
+        m.key(key(KeyCode::Tab));
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+        let output = screen(&mut m, width, height);
+        for text in ["40/41", "1/40", first_range, "fleet00-", "F2: actions"] {
+            assert!(
+                output.contains(text),
+                "{width}x{height}: missing {text}\n{output}"
+            );
+        }
+        let visible_rows = output.lines().filter(|row| row.contains("fleet")).count();
+        assert!(visible_rows >= minimum_rows, "unused height: {output}");
+        let buffer = terminal.backend().buffer();
+        let selected = buffer
+            .content()
+            .chunks(width as usize)
+            .find(|row| {
+                row.iter()
+                    .any(|cell| cell.symbol() == "f" && cell.bg == Color::Rgb(0, 173, 216))
+            })
+            .expect("selected host must be drawn with a highlight");
+        for cell in selected
+            .iter()
+            .filter(|cell| cell.bg == Color::Rgb(0, 173, 216) && !cell.symbol().trim().is_empty())
+        {
+            assert_eq!(cell.fg, Color::Black, "selected host must remain readable");
+        }
+        m.key(key(KeyCode::End));
+        let output = screen(&mut m, width, height);
+        for text in ["40/40", last_range, "fleet39-"] {
+            assert!(
+                output.contains(text),
+                "{width}x{height}: missing {text}\n{output}"
+            );
+        }
+        assert_eq!(
+            m.key(key(KeyCode::Enter)),
+            Action::Connect(m.all[39].name.clone(), None)
+        );
+        m.key(key(KeyCode::PageUp));
+        screen(&mut m, width, height);
+        assert!(m.selected < 39);
+        m.key(key(KeyCode::Tab));
+        typing(&mut m, "fleet0");
+        let output = screen(&mut m, width, height);
+        assert!(output.contains("10/41"), "{output}");
+        assert!(output.contains("1/10"), "{output}");
+        typing(&mut m, "missing");
+        let output = screen(&mut m, width, height);
+        for text in ["0/41", "0/0", "0-0"] {
+            assert!(
+                output.contains(text),
+                "missing empty count {text}: {output}"
+            );
+        }
+    }
+}
+
+#[test]
+fn adaptive_list_truncates_unicode_in_rendered_columns() {
+    use unicode_width::UnicodeWidthStr;
+    for (width, height, columns) in [(28, 8, 1), (50, 18, 2), (70, 18, 3), (120, 35, 4)] {
+        let mut m = adaptive_model();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = buffer
+            .content()
+            .chunks(width as usize)
+            .find(|row| {
+                row.windows(7).any(|cells| {
+                    cells.iter().map(|cell| cell.symbol()).collect::<String>() == "fleet00"
+                })
+            })
+            .expect("a usable host name must be visible");
+        assert!(
+            row.iter().any(|cell| cell.symbol() == "…"),
+            "long cells need an ellipsis"
+        );
+        // Reconstruct visible graphemes while skipping the continuation cells of wide glyphs.
+        let mut visible = String::new();
+        let mut x = 0;
+        while x < row.len() {
+            let symbol = row[x].symbol();
+            visible.push_str(symbol);
+            x += UnicodeWidthStr::width(symbol).max(1);
+        }
+        assert_eq!(UnicodeWidthStr::width(visible.as_str()), width as usize);
+        assert!(
+            visible.contains("界e\u{301}👩‍💻"),
+            "graphemes must survive: {visible}"
+        );
+        let output = screen(&mut m, width, height);
+        assert_eq!(output.contains("Hostname"), columns >= 2, "{output}");
+        assert_eq!(output.contains("Tags"), columns >= 3, "{output}");
+        assert_eq!(output.contains("Last Login"), columns >= 4, "{output}");
+    }
+}
+
+#[test]
+fn adaptive_footer_at_eighty_columns_keeps_actions_and_help_visible() {
+    let mut m = model();
+    m.key(key(KeyCode::Tab));
+    let output = screen(&mut m, 80, 18);
+    for text in [
+        "F2: actions",
+        "Enter: connect",
+        "f: tunnel",
+        "p: test",
+        "h: help",
+    ] {
+        assert!(
+            output.contains(text),
+            "missing footer control {text}: {output}"
+        );
+    }
+}
+
+#[test]
+fn adaptive_compact_status_keeps_four_digit_counts_and_complete_range() {
+    let mut m = adaptive_model();
+    m.all = (0..1000)
+        .map(|i| Host {
+            name: format!("host{i:04}"),
+            ..Host::default()
+        })
+        .chain(std::iter::once(Host {
+            name: "hidden".into(),
+            tags: vec!["hidden".into()],
+            ..Host::default()
+        }))
+        .collect();
+    m.filter(true);
+    m.search_focus = false;
+    m.key(key(KeyCode::End));
+    let output = screen(&mut m, 28, 8);
+    for text in ["1000/1001", "1000/1000", "998-1000", "host0999"] {
+        assert!(output.contains(text), "missing {text}: {output}");
+    }
+}
+
+#[test]
+fn adaptive_compact_notices_reserve_real_selected_host_rows() {
+    use ratatui::style::Color;
+    let mut m = adaptive_model();
+    m.show_hidden = true;
+    m.filter(true);
+    m.search_focus = false;
+    m.error = "boom".into();
+    m.update = Some(UpdateInfo {
+        current: "1.0".into(),
+        latest: "2.0".into(),
+        available: true,
+        ..UpdateInfo::default()
+    });
+    m.key(key(KeyCode::End));
+    let mut terminal = Terminal::new(TestBackend::new(28, 8)).unwrap();
+    terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    let output = screen(&mut m, 28, 8);
+    for text in [
+        "secret",
+        "Error",
+        "Update",
+        "Hidden",
+        "41/41",
+        "40-41",
+        "F2: actions",
+    ] {
+        assert!(output.contains(text), "missing {text}: {output}");
+    }
+    let selected = terminal
+        .backend()
+        .buffer()
+        .content()
+        .chunks(28)
+        .find(|row| {
+            row.iter()
+                .any(|cell| cell.symbol() == "s" && cell.bg == Color::Rgb(0, 173, 216))
+        })
+        .expect("selected host must remain visible with every notice");
+    assert!(selected
+        .iter()
+        .any(|cell| cell.symbol() == "s" && cell.fg == Color::Black));
+    assert_eq!(m.page, 2, "page size must match real host row capacity");
+    let output = screen(&mut m, 28, 6);
+    assert!(
+        !output.contains("secret"),
+        "this smaller screen has no host row"
+    );
+    assert!(
+        output.contains("0-0"),
+        "no rendered rows must produce an empty range: {output}"
+    );
 }
 
 #[test]
