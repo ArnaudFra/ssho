@@ -80,8 +80,8 @@ L'écran principal utilise un titre compact et toute la hauteur disponible pour 
 | --- | --- |
 | Recherche | Saisir pour filtrer ; ↑/↓ ou Ctrl+P/Ctrl+N pour sélectionner ; Entrée pour se connecter |
 | Palette d'actions | F2 depuis la recherche ou le tableau ; ↑/↓ puis Entrée ; Échap annule sans changer la recherche ni le focus |
-| Changer le focus | Tab ; `/` pour revenir à la recherche depuis le tableau |
-| Effacer ou quitter | Échap efface d'abord une recherche non vide ; les préférences contrôlent la sortie |
+| Changer le focus | Tab ou Shift+Tab ; `/` pour revenir à la recherche depuis le tableau |
+| Effacer ou quitter | Échap efface d'abord une recherche non vide, puis quitte le focus de recherche ; depuis le tableau, les préférences contrôlent la sortie |
 | Tableau | ↑/↓ ou j/k ; a ajouter, e modifier, d supprimer avec confirmation, m déplacer |
 | Défilement du tableau | Page précédente/suivante ; Début/Fin pour le premier/dernier hôte |
 | Informations et aide | i pour la fiche de l'hôte, h pour l'aide |
@@ -95,6 +95,8 @@ L'écran principal utilise un titre compact et toute la hauteur disponible pour 
 Les hôtes masqués restent accessibles en connexion directe. La recherche de la TUI combine plusieurs mots sur le nom, l'adresse, l'utilisateur et les tags. La recherche CLI conserve ses propres filtres de champs.
 
 La palette propose **Ajouter**, **Modifier**, **Tunnel**, **Tester**, **Aide** et **Détails**. Modifier, Tunnel et Tester sont indisponibles sans hôte sélectionné ; Ajouter, Aide et Détails restent accessibles avec une liste vide. Tester réutilise le contrôle de connectivité de tous les hôtes, comme `p`. La barre sous le tableau adapte ses rappels à la largeur ; sur un écran étroit, **F2**, puis **Aide**, donne accès aux raccourcis détaillés. Les lettres saisies dans la recherche restent du texte.
+
+Le tri, la visibilité et le rechargement conservent l'hôte sélectionné par son nom et son fichier source. Un ajout, un renommage ou un déplacement sélectionne l'hôte résultant ; si la recherche précédente le masque, elle est effacée, et les hôtes cachés sont affichés si nécessaire. Une édition ouverte depuis la fiche revient à cette fiche actualisée après sauvegarde, ou à la fiche initiale après annulation. Annuler un ajout ouvert depuis le sélecteur de fichiers revient à ce sélecteur. Les formulaires lancés directement par la CLI quittent après sauvegarde ou après annulation de leur vue initiale.
 
 Le panneau **Détails** est désactivé au lancement et s'ouvre à droite lorsque le terminal atteint **110 colonnes**. Il suit l'hôte sélectionné sans réduire le nombre de lignes du tableau ; les colonnes du tableau s'adaptent à la place restante. En dessous de 110 colonnes, la liste reprend toute la largeur et un rappel indique **Tab, puis i** depuis la recherche, ou **i** depuis le tableau, pour ouvrir la fiche. Agrandir le terminal réaffiche le panneau si son activation a été conservée. Les raccourcis Alt+↑/↓ (ligne par ligne) et Ctrl+Page précédente/suivante (par page) défilent uniquement lorsque le panneau est visible, sans modifier le texte recherché ni l'hôte sélectionné. Alt+↑/↓ reste disponible si le terminal réserve Ctrl+Page précédente/suivante à ses onglets.
 

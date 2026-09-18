@@ -66,6 +66,8 @@ fn search_first_selection_and_escape() {
     );
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
     assert!(m.query.value.is_empty());
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+    assert!(!m.search_focus);
     assert_eq!(m.key(key(KeyCode::Esc)), Action::Quit);
 }
 #[test]
@@ -296,7 +298,8 @@ fn sorting_history_and_table_shortcuts() {
     assert_eq!(m.selected_host().unwrap().name, "alpha");
     m.key(key(KeyCode::Char('r')));
     assert!(m.recent);
-    assert_eq!(m.selected_host().unwrap().name, "beta");
+    assert_eq!(m.all[m.visible[0]].name, "beta");
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
     m.key(key(KeyCode::Char('s')));
     assert!(!m.recent);
     assert_eq!(m.selected_host().unwrap().name, "alpha");
@@ -310,6 +313,8 @@ fn sorting_history_and_table_shortcuts() {
     assert!(matches!(m.view, View::Info(_)));
     m.key(key(KeyCode::Enter));
     assert!(matches!(m.view, View::Host(_)));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::Info(_)));
     m.key(key(KeyCode::Esc));
     assert!(matches!(m.view, View::List));
 }
@@ -368,6 +373,8 @@ fn selectors_and_tunnels_return_precise_actions() {
     };
     assert_eq!(form.target, PathBuf::from("a"));
     assert_eq!(form.inputs[0].value, "new");
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::Files { .. }));
     m.key(key(KeyCode::Esc));
     m.key(key(KeyCode::Tab));
     m.key(key(KeyCode::Char('f')));
@@ -1178,4 +1185,232 @@ fn details_alt_arrows_scroll_without_navigating_or_consuming_search_text() {
             assert!(matches!(m.view, View::List));
         }
     }
+}
+
+#[test]
+fn navigation_sort_and_visibility_preserve_selected_secondary_alias() {
+    let mut m = model();
+    m.search_focus = false;
+    m.all[1].aliases = vec!["primary".into(), "beta".into()];
+    m.all[1].source_file = "included".into();
+    m.navigate(1);
+    let selected = m.selected_host().unwrap();
+    m.history.insert(
+        "beta".into(),
+        ConnectionInfo {
+            host_name: "beta".into(),
+            last_connect: Utc::now(),
+            connect_count: 1,
+            port_forwarding: None,
+        },
+    );
+    for code in ['r', 'n', 's', 'H', 'H'] {
+        m.key(key(KeyCode::Char(code)));
+        assert_eq!(m.selected_host(), Some(selected.clone()), "after {code}");
+    }
+}
+
+#[test]
+fn navigation_info_edit_cancel_returns_to_info_with_scroll() {
+    let mut m = model();
+    m.search_focus = false;
+    m.key(key(KeyCode::Char('i')));
+    m.scroll = 2;
+    m.key(key(KeyCode::Char('e')));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(&m.view, View::Info(h) if h.name == "alpha"));
+    assert_eq!(m.scroll, 2);
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::List));
+}
+
+#[test]
+fn navigation_files_add_cancel_returns_to_selector() {
+    let mut m = model();
+    m.view = View::Files {
+        files: vec!["first".into(), "second".into()],
+        selected: 1,
+        host: None,
+        seed: "new".into(),
+    };
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(m.view, View::Host(_)));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(&m.view, View::Files { selected: 1, seed, .. } if seed == "new"));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::List));
+}
+
+#[test]
+fn navigation_escape_leaves_search_focus_and_backtab_matches_tab() {
+    let mut m = model();
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+    assert!(!m.search_focus);
+    m.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    assert!(m.search_focus);
+    typing(&mut m, "beta");
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+    assert!(m.query.value.is_empty());
+    assert!(m.search_focus);
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+    assert!(!m.search_focus);
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::Quit);
+}
+
+#[test]
+fn navigation_reload_restores_name_and_source_before_replacing_indices() {
+    let mut m = model();
+    m.search_focus = false;
+    m.all[1].aliases = vec!["primary".into(), "beta".into()];
+    m.all[1].source_file = "included".into();
+    m.navigate(1);
+    let selected = m.selected_host().unwrap();
+    let same_name_elsewhere = Host {
+        source_file: "other".into(),
+        ..selected.clone()
+    };
+    m.offset = 90;
+    m.replace_hosts(
+        vec![selected.clone(), same_name_elsewhere, m.all[0].clone()],
+        None,
+    );
+    assert_eq!(m.selected_host(), Some(selected.clone()));
+    assert!(m.offset <= m.selected);
+    m.replace_hosts(vec![m.all[2].clone()], None);
+    assert_eq!(m.selected, 0);
+    assert_eq!(m.offset, 0);
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    m.replace_hosts(vec![], None);
+    assert!(m.selected_host().is_none());
+    assert_eq!((m.selected, m.offset), (0, 0));
+}
+
+#[test]
+fn navigation_saved_rename_refreshes_info_and_reveals_selection() {
+    let mut m = model();
+    typing(&mut m, "beta");
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Char('i')));
+    m.key(key(KeyCode::Char('e')));
+    let old = m.selected_host().unwrap();
+    let updated = Host {
+        name: "renamed".into(),
+        source_file: "included".into(),
+        tags: vec!["hidden".into()],
+        ..old.clone()
+    };
+    let action = Action::Save(
+        Some(old),
+        Box::new(updated.clone()),
+        updated.source_file.clone(),
+    );
+    m.complete_mutation(vec![m.all[0].clone(), updated.clone()], &action);
+    assert_eq!(m.selected_host(), Some(updated.clone()));
+    assert!(m.query.value.is_empty());
+    assert!(m.show_hidden);
+    assert!(matches!(&m.view, View::Info(h) if h == &updated));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::List));
+}
+
+#[test]
+fn navigation_added_host_selected_after_file_picker_and_incompatible_search() {
+    let mut m = model();
+    typing(&mut m, "alpha");
+    m.open_view(View::Files {
+        files: vec!["target".into()],
+        selected: 0,
+        host: None,
+        seed: String::new(),
+    });
+    m.key(key(KeyCode::Enter));
+    let added = Host {
+        name: "new".into(),
+        source_file: "target".into(),
+        ..Host::default()
+    };
+    let action = Action::Save(None, Box::new(added.clone()), "target".into());
+    let mut hosts = m.all.clone();
+    hosts.push(added.clone());
+    m.complete_mutation(hosts, &action);
+    assert_eq!(m.selected_host(), Some(added));
+    assert!(m.query.value.is_empty());
+    assert!(matches!(m.view, View::List));
+    assert!(m.parents.is_empty());
+}
+
+#[test]
+fn navigation_secondary_alias_unchanged_save_keeps_active_alias() {
+    navigation_save_secondary_alias(false, false);
+}
+
+#[test]
+fn navigation_secondary_alias_property_save_keeps_active_alias() {
+    navigation_save_secondary_alias(true, false);
+}
+
+#[test]
+fn navigation_secondary_alias_rename_selects_returned_primary_alias() {
+    navigation_save_secondary_alias(false, true);
+}
+
+fn navigation_save_secondary_alias(change_user: bool, rename_selected: bool) {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config");
+    std::fs::write(
+        &path,
+        "Host one two\n HostName example.org\n User old\n Port 22\n",
+    )
+    .unwrap();
+    let mut m = Model::new(
+        config::load_hosts(&path).unwrap(),
+        AppConfig::default(),
+        BTreeMap::new(),
+        false,
+    );
+    typing(&mut m, "two");
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Char('i')));
+    m.key(key(KeyCode::Char('e')));
+    let View::Host(form) = &mut m.view else {
+        panic!("expected host form")
+    };
+    assert_eq!(form.original.as_ref().unwrap().name, "two");
+    if change_user {
+        form.inputs[2].set("new");
+    }
+    if rename_selected {
+        form.names[1].set("renamed");
+    }
+    let action = m.key(ctrl('s'));
+    let Action::Save(Some(original), host, _) = &action else {
+        panic!("expected save")
+    };
+    config::update_host(original, host, &temp.path().join("app")).unwrap();
+    m.complete_mutation(config::load_hosts(&path).unwrap(), &action);
+    let selected = m.selected_host().unwrap();
+    assert_eq!(selected.name, if rename_selected { "one" } else { "two" });
+    assert_eq!(selected.source_file, path);
+    assert_eq!(selected.user, if change_user { "new" } else { "old" });
+    assert_eq!(m.query.value, if rename_selected { "" } else { "two" });
+    assert!(matches!(&m.view, View::Info(h) if h == &selected));
+}
+
+#[test]
+fn navigation_move_tracks_target_file_then_delete_clamps_and_clears_dialog() {
+    let mut m = model();
+    m.navigate(1);
+    let original = m.selected_host().unwrap();
+    let moved = Host {
+        source_file: "target".into(),
+        ..original.clone()
+    };
+    let action = Action::MoveTo(original, "target".into());
+    m.complete_mutation(vec![moved.clone(), m.all[0].clone()], &action);
+    assert_eq!(m.selected_host(), Some(moved.clone()));
+    m.delete = Some(moved.clone());
+    m.complete_mutation(vec![m.all[1].clone()], &Action::Delete(moved));
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    assert_eq!((m.selected, m.offset), (0, 0));
+    assert!(m.delete.is_none());
 }

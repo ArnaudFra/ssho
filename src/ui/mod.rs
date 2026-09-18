@@ -77,6 +77,7 @@ struct Model {
     recent: bool,
     delete: Option<Host>,
     view: View,
+    parents: Vec<(View, usize)>,
     preferences: AppConfig,
     history: BTreeMap<String, ConnectionInfo>,
     statuses: BTreeMap<String, PingResult>,
@@ -109,6 +110,7 @@ impl Model {
             recent: false,
             delete: None,
             view: View::List,
+            parents: vec![],
             preferences,
             history,
             statuses: BTreeMap::new(),
@@ -124,9 +126,17 @@ impl Model {
     fn selected_host(&self) -> Option<Host> {
         self.visible
             .get(self.selected)
-            .map(|&i| self.all[i].clone())
+            .and_then(|&i| self.all.get(i).cloned())
     }
     fn filter(&mut self, reset: bool) {
+        let identity = if reset { None } else { self.selected_host() };
+        let fallback = if reset { 0 } else { self.selected };
+        if reset {
+            self.offset = 0;
+        }
+        self.refilter(identity.as_ref(), fallback);
+    }
+    fn refilter(&mut self, identity: Option<&Host>, fallback: usize) {
         self.visible = self
             .all
             .iter()
@@ -148,12 +158,56 @@ impl Model {
                 names()
             }
         });
-        if reset {
-            self.selected = 0;
-            self.offset = 0;
-        } else {
-            self.selected = self.selected.min(self.visible.len().saturating_sub(1));
+        self.selected = identity
+            .and_then(|host| {
+                self.visible.iter().position(|&i| {
+                    self.all[i].name == host.name && self.all[i].source_file == host.source_file
+                })
+            })
+            .unwrap_or(fallback)
+            .min(self.visible.len().saturating_sub(1));
+        self.offset = self.offset.min(self.selected);
+    }
+    /// Replace the backing collection only after capturing the old selection's identity.
+    /// A preferred host (creation/rename/move) is made visible even under an old filter.
+    fn replace_hosts(&mut self, all: Vec<Host>, preferred: Option<Host>) {
+        let identity = preferred.clone().or_else(|| self.selected_host());
+        let fallback = self.selected;
+        if let Some(host) = &preferred {
+            if !host.matches(&self.query.value) {
+                self.query.set("");
+            }
+            if host.hidden() {
+                self.show_hidden = true;
+            }
         }
+        self.all = all;
+        self.refilter(identity.as_ref(), fallback);
+    }
+    fn complete_mutation(&mut self, all: Vec<Host>, action: &Action) {
+        let preferred = match action {
+            Action::Save(_, host, _) => Some((**host).clone()),
+            Action::MoveTo(host, target) => Some(Host {
+                source_file: target.clone(),
+                ..host.clone()
+            }),
+            _ => None,
+        };
+        self.replace_hosts(all, preferred);
+        let info_parent = matches!(action, Action::Save(..))
+            && matches!(self.parents.last(), Some((View::Info(_), _)));
+        if info_parent {
+            self.back();
+            if let Some(host) = self.selected_host() {
+                self.view = View::Info(host);
+            }
+        } else {
+            self.view = View::List;
+            self.parents.clear();
+            self.scroll = 0;
+        }
+        self.delete = None;
+        self.error.clear();
     }
     fn navigate(&mut self, delta: isize) {
         self.selected = self
@@ -161,9 +215,15 @@ impl Model {
             .saturating_add_signed(delta)
             .min(self.visible.len().saturating_sub(1));
     }
-    fn back(&mut self) {
-        self.view = View::List;
+    fn open_view(&mut self, view: View) {
+        let parent = std::mem::replace(&mut self.view, view);
+        self.parents.push((parent, self.scroll));
         self.scroll = 0;
+    }
+    fn back(&mut self) {
+        let (view, scroll) = self.parents.pop().unwrap_or((View::List, 0));
+        self.view = view;
+        self.scroll = scroll;
     }
     fn quit_key(&self, k: KeyEvent) -> bool {
         self.preferences
@@ -212,7 +272,8 @@ impl Model {
             }
             View::Info(h) => {
                 if matches!(k.code, KeyCode::Char('e') | KeyCode::Enter) {
-                    self.view = View::Host(Box::new(HostForm::edit(h.clone())));
+                    let view = View::Host(Box::new(HostForm::edit(h.clone())));
+                    self.open_view(view);
                     return Action::None;
                 }
                 if matches!(k.code, KeyCode::Esc | KeyCode::Char('q'))
@@ -255,8 +316,9 @@ impl Model {
                             if let Some(host) = host {
                                 return Action::MoveTo(host.clone(), target.clone());
                             }
-                            self.view =
+                            let view =
                                 View::Host(Box::new(HostForm::add(seed.clone(), target.clone())));
+                            self.open_view(view);
                         }
                     }
                     _ => {}
@@ -291,7 +353,7 @@ impl Model {
             return Action::None;
         }
         if k.code == KeyCode::F(2) {
-            self.view = View::Actions { selected: 0 };
+            self.open_view(View::Actions { selected: 0 });
             return Action::None;
         }
         if k.code == KeyCode::F(4) {
@@ -300,9 +362,13 @@ impl Model {
         if self.details.key(k) {
             return Action::None;
         }
-        if k.code == KeyCode::Esc && self.search_focus && !self.query.value.is_empty() {
-            self.query.set("");
-            self.filter(true);
+        if k.code == KeyCode::Esc && self.search_focus {
+            if self.query.value.is_empty() {
+                self.search_focus = false;
+            } else {
+                self.query.set("");
+                self.filter(true);
+            }
             return Action::None;
         }
         // Every printable key is text while search is focused, including configured quit letters.
@@ -310,7 +376,7 @@ impl Model {
             return Action::Quit;
         }
         match k.code {
-            KeyCode::Tab => {
+            KeyCode::Tab | KeyCode::BackTab => {
                 self.search_focus = !self.search_focus;
             }
             KeyCode::Up => self.navigate(-1),
@@ -341,8 +407,7 @@ impl Model {
             KeyCode::Char('e') => return self.activate_action(PaletteAction::Edit),
             KeyCode::Char('i') => {
                 if let Some(h) = self.selected_host() {
-                    self.view = View::Info(h);
-                    self.scroll = 0;
+                    self.open_view(View::Info(h));
                 }
             }
             KeyCode::Char('m') => {
@@ -379,7 +444,7 @@ impl Model {
             PaletteAction::Add => return Action::Add(String::new()),
             PaletteAction::Edit => {
                 if let Some(host) = self.selected_host() {
-                    self.view = View::Host(Box::new(HostForm::edit(host)));
+                    self.open_view(View::Host(Box::new(HostForm::edit(host))));
                 }
             }
             PaletteAction::Tunnel => {
@@ -388,14 +453,13 @@ impl Model {
                         .history
                         .get(&host.name)
                         .and_then(|c| c.port_forwarding.clone());
-                    self.view = View::Forward(ForwardForm::new(host.name, saved));
+                    self.open_view(View::Forward(ForwardForm::new(host.name, saved)));
                 }
             }
             PaletteAction::Test => return Action::Ping,
             PaletteAction::Details => self.details.shown = !self.details.shown,
             PaletteAction::Help => {
-                self.view = View::Help;
-                self.scroll = 0;
+                self.open_view(View::Help);
             }
         }
         Action::None
@@ -496,17 +560,17 @@ fn select_files(m: &mut Model, config: &Path, host: Option<Host>, seed: String) 
         }
     }
     if host.is_none() && files.len() <= 1 {
-        m.view = View::Host(Box::new(HostForm::add(
+        m.open_view(View::Host(Box::new(HostForm::add(
             seed,
             files.pop().unwrap_or_else(|| config.to_path_buf()),
-        )));
+        ))));
     } else {
-        m.view = View::Files {
+        m.open_view(View::Files {
             files,
             selected: 0,
             host,
             seed,
-        };
+        });
     }
     Ok(())
 }
@@ -583,6 +647,7 @@ pub fn run(
         if standalone && matches!(m.view, View::List) && matches!(action, Action::None) {
             return Ok(0);
         }
+        let completed_action = action.clone();
         let operation: Result<bool> = match action {
             Action::None => Ok(false),
             Action::Quit => return Ok(0),
@@ -613,11 +678,7 @@ pub fn run(
                 if standalone {
                     return Ok(0);
                 }
-                m.all = config::load_hosts(config)?;
-                m.filter(false);
-                m.delete = None;
-                m.back();
-                m.error.clear();
+                m.complete_mutation(config::load_hosts(config)?, &completed_action);
             }
             Ok(false) => {}
             Err(e) => match &mut m.view {

@@ -420,7 +420,7 @@ fn ellipsize(text: &str, width: usize) -> String {
 fn list_footer(width: u16, search_focus: bool) -> Vec<Line<'static>> {
     let lines: Vec<&str> = if width >= 105 {
         if search_focus {
-            vec!["F2: actions • ↑/↓: select • Enter: connect • Tab: table • Esc: clear/quit"]
+            vec!["F2: actions • ↑/↓: select • Enter: connect • Tab: table • Esc: clear/unfocus"]
         } else {
             vec![
                 "F2: actions • ↑/↓: navigate • Enter: connect • Tab: search • i: info • h: help • q: quit",
@@ -875,7 +875,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "↑↓     select (Ctrl+P/N in search)",
         "i      show host information",
         "/      search hosts",
-        "Tab    switch search / table",
+        "Tab/Shift+Tab switch search / table",
         "F2     actions (also from search)",
         "F4     toggle details (width >=110)",
         "Alt+↑↓ scroll details (Ctrl+PgUp/PgDn)",
@@ -902,7 +902,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "",
         "h      show this help",
         "q      quit application",
-        "Esc    clear search / exit view",
+        "Esc    clear search / leave search / exit view",
     ];
     let text = if inner.width >= 77 {
         left.iter()
