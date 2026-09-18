@@ -45,6 +45,17 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+    if m.discard {
+        let area = panel(area, 64, 7);
+        f.render_widget(Clear, area);
+        f.render_widget(
+            Paragraph::new("Discard changes?\nEnter: discard • Esc: resume editing")
+                .block(block("Unsaved changes", true))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    }
     match &m.view {
         View::List => list(f, m, area),
         View::Actions { .. } => {
@@ -521,6 +532,8 @@ fn field_lines(
     input: &Input,
     focused: bool,
     width: usize,
+    compact: bool,
+    error: Option<&str>,
 ) -> usize {
     let y = lines.len();
     lines.push(Line::styled(
@@ -528,30 +541,76 @@ fn field_lines(
         if focused { accent() } else { Style::default() },
     ));
     lines.push(Line::from(vec![
-        Span::raw(if focused { "> " } else { "  " }),
-        input_span(input, focused, width.saturating_sub(2)),
+        Span::raw(if width < 3 {
+            ""
+        } else if focused {
+            "> "
+        } else {
+            "  "
+        }),
+        input_span(
+            input,
+            focused,
+            width.saturating_sub(if width < 3 { 0 } else { 2 }),
+        ),
     ]));
-    lines.push(Line::from(""));
+    if let Some(error) = error {
+        // Explicit wrapping keeps the native cursor's row aligned with later inputs.
+        let mut line = String::new();
+        let mut columns = 0;
+        let span = Span::raw(error);
+        for grapheme in span.styled_graphemes(Style::default()) {
+            let size = grapheme.symbol.width();
+            if columns + size > width.max(1) && !line.is_empty() {
+                lines.push(Line::styled(
+                    std::mem::take(&mut line),
+                    Style::default().fg(Color::Red),
+                ));
+                columns = 0;
+            }
+            line.push_str(grapheme.symbol);
+            columns += size;
+        }
+        lines.push(Line::styled(line, Style::default().fg(Color::Red)));
+    } else if !compact {
+        lines.push(Line::from(""));
+    }
     y
 }
-fn scroll_focus(scroll: &mut usize, focus: usize, height: u16, total: usize) {
+fn scroll_focus(scroll: &mut usize, focus: usize, height: u16, total: usize, error: bool) {
     let h = height as usize;
+    // Keep label + input + the beginning of its error together where space allows.
+    // With only one row, the actual input and native caret take precedence.
+    let end = focus + 2 + usize::from(error && h >= 3);
     if focus < *scroll {
         *scroll = focus;
     }
-    if focus + 2 >= scroll.saturating_add(h) {
-        *scroll = (focus + 3).saturating_sub(h);
+    if end > scroll.saturating_add(h) {
+        *scroll = end.saturating_sub(h);
     }
     *scroll = (*scroll).min(total.saturating_sub(h));
+}
+fn field_error(errors: &[forms::FieldError], field: forms::FormField) -> Option<&str> {
+    errors
+        .iter()
+        .find(|e| e.field == field)
+        .map(|e| e.message.as_str())
 }
 fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
     let View::Host(form) = &mut m.view else {
         return;
     };
     let area = inset(area);
-    let footer_height = if area.height >= 12 { 4 } else { 2 };
+    let compact = area.height < 30;
+    let footer_height = if area.height >= 12 {
+        4
+    } else if area.height >= 6 {
+        2
+    } else {
+        0
+    };
     let parts = Layout::vertical([
-        Constraint::Length(2),
+        Constraint::Length(if area.height >= 5 { 2 } else { 0 }),
         Constraint::Min(1),
         Constraint::Length(footer_height),
     ])
@@ -584,6 +643,8 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
                 name,
                 selected,
                 width,
+                compact,
+                field_error(&form.errors, forms::FormField::Name(i)),
             );
             if selected {
                 focus_y = y;
@@ -629,7 +690,15 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
         } else {
             forms::LABELS[i]
         };
-        let y = field_lines(&mut lines, label.into(), &form.inputs[i], selected, width);
+        let y = field_lines(
+            &mut lines,
+            label.into(),
+            &form.inputs[i],
+            selected,
+            width,
+            compact,
+            field_error(&form.errors, forms::FormField::Input(i)),
+        );
         if selected {
             focus_y = y;
         }
@@ -650,7 +719,18 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
             ));
         }
     }
-    scroll_focus(&mut form.scroll, focus_y, parts[1].height, lines.len());
+    let focused_field = if form.name_focus {
+        forms::FormField::Name(form.focus)
+    } else {
+        forms::FormField::Input(form.focus)
+    };
+    scroll_focus(
+        &mut form.scroll,
+        focus_y,
+        parts[1].height,
+        lines.len(),
+        field_error(&form.errors, focused_field).is_some(),
+    );
     f.render_widget(
         Paragraph::new(lines).scroll((form.scroll as u16, 0)),
         parts[1],
@@ -661,7 +741,13 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
         form.inputs.get(form.focus)
     };
     if let (Some(input), Some(row)) = (input, (focus_y + 1).checked_sub(form.scroll)) {
-        input_cursor(f, input, parts[1], 2, row);
+        input_cursor(
+            f,
+            input,
+            parts[1],
+            if parts[1].width < 3 { 0 } else { 2 },
+            row,
+        );
     }
     let mut footer = vec![];
     if !form.error.is_empty() {
@@ -672,7 +758,7 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
     }
     footer.push(Line::styled(
         if form.original.is_some() {
-            "Tab/↑↓/Enter: navigate • Ctrl+J/K: switch tabs • Ctrl+A/D: add/delete host"
+            "Tab/↑↓/Enter: navigate • Ctrl+J/K: switch tabs • Alt+A/D: add/delete alias"
         } else {
             "Tab/Shift+Tab: navigate • Ctrl+J/K: switch tabs"
         },
@@ -689,13 +775,24 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
         return;
     };
     let area = panel(area, 88, 30);
-    let border = block("Port Forwarding Setup", true);
+    let compact = area.height < 30;
+    let border = if area.height < 5 || area.width < 4 {
+        Block::default()
+    } else {
+        block("Port Forwarding Setup", true)
+    };
     let inner = border.inner(area);
     f.render_widget(border, area);
     let parts = Layout::vertical([
-        Constraint::Length(2),
+        Constraint::Length(if inner.height >= 5 { 2 } else { 0 }),
         Constraint::Min(1),
-        Constraint::Length(if inner.height > 12 { 4 } else { 2 }),
+        Constraint::Length(if inner.height > 12 {
+            4
+        } else if inner.height >= 6 {
+            2
+        } else {
+            0
+        }),
     ])
     .split(inner);
     f.render_widget(
@@ -712,6 +809,8 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
         &input,
         form.focus == 0,
         inner.width as usize,
+        compact,
+        None,
     );
     lines.push(Line::styled(
         "Use ←/→ to change type",
@@ -752,19 +851,33 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
             &form.inputs[i],
             selected,
             inner.width as usize,
+            compact,
+            field_error(&form.errors, forms::FormField::Input(i)),
         );
         if selected {
             focus_y = y;
         }
     }
-    scroll_focus(&mut form.scroll, focus_y, parts[1].height, lines.len());
+    scroll_focus(
+        &mut form.scroll,
+        focus_y,
+        parts[1].height,
+        lines.len(),
+        field_error(&form.errors, forms::FormField::Input(form.focus)).is_some(),
+    );
     f.render_widget(
         Paragraph::new(lines).scroll((form.scroll as u16, 0)),
         parts[1],
     );
     if form.focus != 0 {
         if let Some(row) = (focus_y + 1).checked_sub(form.scroll) {
-            input_cursor(f, &form.inputs[form.focus], parts[1], 2, row);
+            input_cursor(
+                f,
+                &form.inputs[form.focus],
+                parts[1],
+                if parts[1].width < 3 { 0 } else { 2 },
+                row,
+            );
         }
     }
     let mut footer = vec![];
@@ -898,6 +1011,10 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "r      sort by recent connection",
         "       Tester: check all hosts",
         "",
+        "Forms: Ctrl+S save/connect, Esc cancel",
+        "Ctrl+J/K tabs; Alt+A/D aliases",
+        "Ctrl+A/E start/end of input",
+        "Discard: Enter discard, Esc resume",
         "System",
         "",
         "h      show this help",
@@ -905,9 +1022,14 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "Esc    clear search / leave search / exit view",
     ];
     let text = if inner.width >= 77 {
-        left.iter()
-            .zip(right.iter().chain(std::iter::repeat(&"")))
-            .map(|(a, b)| format!("{a:<39}  {b}"))
+        (0..left.len().max(right.len()))
+            .map(|i| {
+                format!(
+                    "{:<39}  {}",
+                    left.get(i).unwrap_or(&""),
+                    right.get(i).unwrap_or(&"")
+                )
+            })
             .collect::<Vec<_>>()
     } else {
         left.iter()

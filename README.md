@@ -89,8 +89,12 @@ L'écran principal utilise un titre compact et toute la hauteur disponible pour 
 | Connectivité et visibilité | p pour relancer les contrôles, H pour afficher les hôtes portant le tag `hidden` |
 | Tri | s alterne nom/date, n trie par nom, r par dernière connexion |
 | Tunnel | f ; ←/→ pour Local, Remote ou Dynamic, puis ports et adresses |
-| Formulaires | Tab/Shift+Tab pour naviguer, Ctrl+J/Ctrl+K pour changer d'onglet, Ctrl+S pour enregistrer, Échap pour annuler |
-| Alias en édition | Ctrl+A ajoute un nom, Ctrl+D supprime le nom actif lorsqu'il en reste plusieurs |
+| Formulaires | Tab/Shift+Tab pour naviguer, Ctrl+J/Ctrl+K pour changer d'onglet, Ctrl+S pour enregistrer/se connecter, Entrée sur le dernier champ pour valider, Échap ou Ctrl+C pour annuler |
+| Édition de texte | Ctrl+A/E ou Début/Fin pour début/fin de ligne ; ←/→ ou Ctrl+B/F pour un caractère ; Ctrl+←/→ ou Alt+B/F pour un mot ; Retour arrière/Ctrl+H efface avant, Suppr/Ctrl+D après ; Ctrl+U efface avant le curseur, Ctrl+K après (hors formulaire hôte où il change d’onglet), Ctrl+W ou Alt+Retour arrière efface le mot précédent |
+| Abandon des modifications | Entrée confirme l’abandon ; Échap ou Ctrl+C reprend exactement le formulaire |
+| Alias en édition | Alt+A ajoute un nom, Alt+D supprime le nom actif lorsqu'il en reste plusieurs |
+
+Sur un terminal court, les champs occupent deux lignes (libellé et saisie). Chaque erreur apparaît sous son champ et la validation place le focus sur la première erreur, dans le bon onglet. Le curseur natif reste visible pendant la saisie, y compris avec caractères larges, accents combinés et emoji. Une annulation quitte immédiatement un formulaire inchangé ; seules des valeurs, des alias ou un type de tunnel modifiés demandent confirmation. Revenir aux valeurs initiales enlève cette confirmation. Échap dans la confirmation reprend le formulaire avec son texte, son curseur et sa navigation ; Entrée abandonne et revient à la vue parente.
 
 Les hôtes masqués restent accessibles en connexion directe. La recherche de la TUI combine plusieurs mots sur le nom, l'adresse, l'utilisateur et les tags. La recherche CLI conserve ses propres filtres de champs.
 

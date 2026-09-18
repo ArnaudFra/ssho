@@ -76,6 +76,7 @@ struct Model {
     show_hidden: bool,
     recent: bool,
     delete: Option<Host>,
+    discard: bool,
     view: View,
     parents: Vec<(View, usize)>,
     preferences: AppConfig,
@@ -109,6 +110,7 @@ impl Model {
             show_hidden: false,
             recent: false,
             delete: None,
+            discard: false,
             view: View::List,
             parents: vec![],
             preferences,
@@ -235,13 +237,27 @@ impl Model {
             return Action::None;
         }
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        if self.discard {
+            if k.code == KeyCode::Esc || (ctrl && k.code == KeyCode::Char('c')) {
+                self.discard = false;
+            } else if k.code == KeyCode::Enter {
+                self.discard = false;
+                self.back();
+            }
+            return Action::None;
+        }
         match &mut self.view {
             View::Host(f) => {
                 return match f.key(k) {
                     FormEvent::Cancel => {
-                        self.back();
+                        if f.dirty() {
+                            self.discard = true;
+                        } else {
+                            self.back();
+                        }
                         Action::None
                     }
+                    FormEvent::Submit if !f.validate() => Action::None,
                     FormEvent::Submit => match f.host() {
                         Ok(host) => {
                             Action::Save(f.original.clone(), Box::new(host), f.target.clone())
@@ -257,9 +273,14 @@ impl Model {
             View::Forward(f) => {
                 return match f.key(k) {
                     FormEvent::Cancel => {
-                        self.back();
+                        if f.dirty() {
+                            self.discard = true;
+                        } else {
+                            self.back();
+                        }
                         Action::None
                     }
+                    FormEvent::Submit if !f.validate() => Action::None,
                     FormEvent::Submit => match f.forward() {
                         Ok(forward) => Action::Connect(f.host.clone(), Some(forward)),
                         Err(e) => {

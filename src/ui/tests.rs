@@ -190,10 +190,10 @@ fn forms_aliases_navigation_identity_and_validation() {
     };
     let mut f = forms::HostForm::edit(h);
     assert_eq!(f.names.len(), 2);
-    f.key(ctrl('a'));
+    f.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT));
     assert_eq!(f.names.len(), 3);
     f.names[2].set("three");
-    f.key(ctrl('d'));
+    f.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT));
     assert_eq!(f.names.len(), 2);
     f.key(key(KeyCode::Tab));
     assert!(!f.name_focus);
@@ -342,7 +342,8 @@ fn form_tab_order_and_submit_shortcuts() {
     f.inputs[1].set("");
     m.key(ctrl('s'));
     let View::Host(ref f) = m.view else { panic!() };
-    assert!(!f.error.is_empty());
+    assert!(!f.errors.is_empty());
+    assert_eq!(f.errors[0].field, forms::FormField::Input(1));
 }
 #[test]
 fn selectors_and_tunnels_return_precise_actions() {
@@ -1413,4 +1414,366 @@ fn navigation_move_tracks_target_file_then_delete_clamps_and_clears_dialog() {
     assert_eq!(m.selected_host().unwrap().name, "alpha");
     assert_eq!((m.selected, m.offset), (0, 0));
     assert!(m.delete.is_none());
+}
+
+#[test]
+fn dirty_host_cancel_resume_and_discard() {
+    let mut m = model();
+    m.activate_action(PaletteAction::Edit);
+    typing(&mut m, "-changed");
+    m.key(key(KeyCode::Esc));
+    assert!(screen(&mut m, 100, 24).contains("Discard changes?"));
+    m.key(key(KeyCode::Esc));
+    let View::Host(f) = &m.view else {
+        panic!("resume form")
+    };
+    assert_eq!(f.names[0].value, "alpha-changed");
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(m.view, View::List));
+}
+
+#[test]
+fn invalid_host_focuses_first_invalid_field() {
+    let mut m = model();
+    let mut f = HostForm::add("valid".into(), "config".into());
+    f.inputs[1].set("bad address");
+    f.inputs[3].set("0");
+    f.focus = 8;
+    m.open_view(View::Host(Box::new(f)));
+    m.key(ctrl('s'));
+    let View::Host(f) = &m.view else {
+        panic!("host form")
+    };
+    assert_eq!(f.focus, 1);
+    let output = screen(&mut m, 100, 30);
+    assert!(output.contains("invalid hostname"));
+}
+
+#[test]
+fn ctrl_a_edits_alias_and_alt_a_adds_alias() {
+    let mut f = HostForm::edit(model().all[0].clone());
+    f.key(ctrl('a'));
+    assert_eq!(f.names.len(), 1);
+    assert_eq!(f.names[0].cursor, 0);
+    f.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT));
+    assert_eq!(f.names.len(), 2);
+}
+
+#[test]
+fn baselines_ignore_navigation_and_recognize_reverted_values() {
+    let mut host = HostForm::edit(model().all[0].clone());
+    assert!(!host.dirty());
+    host.key(ctrl('a'));
+    host.key(key(KeyCode::Tab));
+    host.key(ctrl('j'));
+    host.scroll = 100;
+    assert!(!host.dirty());
+    host.inputs[1].set("changed");
+    assert!(host.dirty());
+    host.inputs[1].set("a.example");
+    assert!(!host.dirty());
+    host.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT));
+    assert!(host.dirty());
+    host.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT));
+    assert!(!host.dirty());
+    let mut forward = ForwardForm::new("alpha".into(), None);
+    forward.focus = 4;
+    forward.inputs[4].cursor = 0;
+    forward.scroll = 50;
+    assert!(!forward.dirty());
+    forward.kind = 2;
+    assert!(forward.dirty());
+    forward.kind = 0;
+    forward.inputs[2].set("changed");
+    assert!(forward.dirty());
+    forward.inputs[2].set("localhost");
+    assert!(!forward.dirty());
+    let add = HostForm::add("seeded".into(), "config".into());
+    assert!(!add.dirty(), "seed and placeholders are the baseline");
+}
+
+#[test]
+fn clean_host_and_forward_cancel_without_confirmation() {
+    for forward in [false, true] {
+        let mut m = model();
+        m.open_view(View::Help);
+        m.scroll = 7;
+        m.open_view(if forward {
+            View::Forward(ForwardForm::new("alpha".into(), None))
+        } else {
+            View::Host(Box::new(HostForm::edit(m.all[0].clone())))
+        });
+        m.key(key(KeyCode::Tab));
+        m.key(key(KeyCode::Esc));
+        assert!(!m.discard);
+        assert!(matches!(m.view, View::Help));
+        assert_eq!(m.scroll, 7);
+        assert_eq!(m.parents.len(), 1);
+    }
+}
+
+#[test]
+fn forward_dirty_cancel_resume_preserves_every_form_value_and_parent() {
+    let mut m = model();
+    m.open_view(View::Info(m.all[0].clone()));
+    m.scroll = 3;
+    let mut form = ForwardForm::new("alpha".into(), None);
+    form.kind = 2;
+    form.focus = 1;
+    form.inputs[1].set("1080");
+    form.inputs[1].cursor = 2;
+    form.scroll = 5;
+    m.open_view(View::Forward(form));
+    m.key(ctrl('c'));
+    assert!(m.discard);
+    let depth = m.parents.len();
+    m.key(key(KeyCode::Char('x')));
+    m.key(ctrl('s'));
+    assert!(m.discard, "confirmation blocks editing/submission");
+    m.key(key(KeyCode::Esc));
+    let View::Forward(form) = &m.view else {
+        panic!("forward form")
+    };
+    assert_eq!(form.kind, 2);
+    assert_eq!(form.focus, 1);
+    assert_eq!(form.inputs[1].value, "1080");
+    assert_eq!(form.inputs[1].cursor, 2);
+    assert_eq!(form.scroll, 5);
+    assert_eq!(m.parents.len(), depth);
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(m.view, View::Info(_)));
+    assert_eq!(m.scroll, 3);
+}
+
+#[test]
+fn host_validation_attaches_each_error_and_focuses_its_field() {
+    use forms::FormField;
+    for (field, invalid) in [
+        (0, "bad name"),
+        (1, "bad address"),
+        (3, "65536"),
+        (4, "/path/to/ssho-nonexistent-identity"),
+        (2, "bad\nuser"),
+        (5, "bad\njump"),
+        (6, "bad\ncommand"),
+        (7, "-o X=bad\0value"),
+        (8, "bad\ntag"),
+        (9, "bad\ncommand"),
+        (10, "bad\ntty"),
+    ] {
+        let mut form = HostForm::add("valid".into(), "config".into());
+        form.inputs[1].set("valid.example");
+        form.inputs[field].set(invalid);
+        form.tab = 1;
+        form.focus = 10;
+        assert!(!form.validate(), "field {field}");
+        assert_eq!(form.focus, field);
+        assert!(!form.name_focus);
+        assert_eq!(form.tab, usize::from([7, 9, 10].contains(&field)));
+        assert_eq!(form.errors[0].field, FormField::Input(field));
+        let error = form.errors[0].message.clone();
+        let mut m = model();
+        m.open_view(View::Host(Box::new(form)));
+        let text = screen(&mut m, 120, 60);
+        assert!(text.contains(&error), "field {field}: {text}");
+    }
+    let mut form = HostForm::edit(Host {
+        aliases: vec!["alpha".into(), "bad name".into()],
+        ..model().all[0].clone()
+    });
+    assert!(!form.validate());
+    assert!(form.name_focus);
+    assert_eq!(form.focus, 1);
+    assert_eq!(form.errors[0].field, FormField::Name(1));
+}
+
+#[test]
+fn forward_validation_attaches_and_focuses_each_active_field() {
+    use forms::FormField;
+    for kind in 0..3 {
+        for (field, value) in [(1, "0"), (2, "bad host"), (3, "70000"), (4, "bad bind")] {
+            if kind == 2 && [2, 3].contains(&field) {
+                continue;
+            }
+            let mut f = ForwardForm::new("alpha".into(), None);
+            f.kind = kind;
+            f.inputs[1].set("8080");
+            f.inputs[3].set("80");
+            f.inputs[field].set(value);
+            assert!(!f.validate());
+            assert_eq!(f.focus, field);
+            assert_eq!(f.errors[0].field, FormField::Input(field));
+            let error = f.errors[0].message.clone();
+            let mut m = model();
+            m.open_view(View::Forward(f));
+            assert!(screen(&mut m, 120, 40).contains(&error));
+        }
+    }
+}
+
+#[test]
+fn compact_fields_have_two_lines_and_errors_stay_beside_their_field() {
+    let mut m = model();
+    let mut f = HostForm::add("valid".into(), "config".into());
+    f.inputs[1].set("bad address");
+    f.inputs[3].set("70000");
+    f.validate();
+    m.open_view(View::Host(Box::new(f)));
+    let text = screen(&mut m, 100, 26);
+    let rows: Vec<_> = text.lines().collect();
+    let name = rows.iter().position(|s| s.contains("Host Name *")).unwrap();
+    let address = rows
+        .iter()
+        .position(|s| s.contains("Hostname/IP *"))
+        .unwrap();
+    assert_eq!(address, name + 2);
+    assert!(rows[address + 2].contains("invalid hostname"));
+    let port = rows.iter().position(|s| s.trim() == "Port").unwrap();
+    assert!(rows[port + 2].contains("port must"));
+}
+
+#[test]
+fn unicode_caret_stays_on_focused_input_after_wrapped_errors() {
+    use ratatui::backend::Backend;
+    for (w, h) in [(12, 10), (30, 12), (80, 24), (4, 4)] {
+        let mut m = model();
+        let mut f = HostForm::edit(Host {
+            aliases: vec!["bad alias 界".repeat(8)],
+            ..m.all[0].clone()
+        });
+        f.inputs[1].set("界e\u{301}👩‍💻.example");
+        f.validate();
+        f.name_focus = false;
+        f.focus = 1;
+        f.inputs[1].cursor = 0;
+        m.open_view(View::Host(Box::new(f)));
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .backend_mut()
+            .set_cursor_position((w - 1, h - 1))
+            .unwrap();
+        terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+        let position = terminal.backend_mut().get_cursor_position().unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[position].symbol(),
+            "界",
+            "{w}x{h}"
+        );
+    }
+}
+
+#[test]
+fn input_viewport_measures_emoji_and_combining_graphemes() {
+    let input = Input::new("界e\u{301}👩‍💻Z");
+    assert_eq!(input.viewport(true, 20), ("界e\u{301}👩‍💻Z".into(), Some(6)));
+    assert_eq!(input.viewport(true, 4), ("👩‍💻Z".into(), Some(3)));
+    assert_eq!(
+        Input::new("e\u{301}👩‍💻").viewport(false, 2),
+        ("e\u{301}".into(), None)
+    );
+}
+
+#[test]
+fn host_confirmation_resume_preserves_advanced_tab_cursor_errors_and_parents() {
+    let mut m = model();
+    m.open_view(View::Info(m.all[0].clone()));
+    m.scroll = 8;
+    let mut form = HostForm::edit(m.all[0].clone());
+    form.inputs[3].set("0");
+    form.validate();
+    form.tab = 1;
+    form.name_focus = false;
+    form.focus = 9;
+    form.inputs[9].set("echo 界e\u{301}");
+    form.inputs[9].cursor = 3;
+    form.scroll = 9;
+    let before = format!("{form:?}");
+    m.open_view(View::Host(Box::new(form)));
+    let parents = format!("{:?}", m.parents);
+    m.key(key(KeyCode::Esc));
+    assert!(m.discard);
+    m.key(ctrl('c'));
+    let View::Host(form) = &m.view else {
+        panic!("host form")
+    };
+    assert_eq!(format!("{form:?}"), before);
+    assert_eq!(format!("{:?}", m.parents), parents);
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(m.view, View::Info(_)));
+    assert_eq!(m.scroll, 8);
+}
+
+#[test]
+fn ctrl_a_and_ctrl_d_remain_ordinary_text_editing_in_every_field() {
+    let mut host = HostForm::edit(model().all[0].clone());
+    host.key(ctrl('a'));
+    host.key(ctrl('d'));
+    assert_eq!(host.names[0].value, "lpha");
+    assert_eq!(host.names.len(), 1);
+    host.name_focus = false;
+    for field in 0..11 {
+        host.focus = field;
+        host.inputs[field].set("value");
+        host.key(ctrl('a'));
+        assert_eq!(host.inputs[field].cursor, 0);
+        host.key(ctrl('d'));
+        assert_eq!(host.inputs[field].value, "alue");
+        assert_eq!(host.names.len(), 1);
+    }
+    let mut forward = ForwardForm::new("alpha".into(), None);
+    for field in 1..5 {
+        forward.focus = field;
+        forward.inputs[field].set("value");
+        forward.key(ctrl('a'));
+        forward.key(ctrl('d'));
+        assert_eq!(forward.inputs[field].value, "alue");
+        assert_eq!(forward.inputs[field].cursor, 0);
+    }
+}
+
+#[test]
+fn forward_unicode_caret_survives_wrapped_errors_and_tiny_terminals() {
+    use ratatui::backend::Backend;
+    for (w, h) in [(12, 10), (30, 12), (80, 24), (4, 4)] {
+        let mut m = model();
+        let mut f = ForwardForm::new("alpha".into(), None);
+        f.inputs[1].set("70000");
+        f.inputs[2].set("界e\u{301}👩‍💻");
+        f.validate();
+        f.focus = 2;
+        f.inputs[2].cursor = 0;
+        m.open_view(View::Forward(f));
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .backend_mut()
+            .set_cursor_position((w - 1, h - 1))
+            .unwrap();
+        terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+        let position = terminal.backend_mut().get_cursor_position().unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[position].symbol(),
+            "界",
+            "{w}x{h}"
+        );
+    }
+}
+
+#[test]
+fn help_keeps_existing_system_keys_after_form_shortcuts() {
+    let mut m = model();
+    m.open_view(View::Help);
+    let text = screen(&mut m, 120, 40);
+    for shortcut in [
+        "Ctrl+S",
+        "Alt+A/D",
+        "Ctrl+A/E",
+        "Discard:",
+        "q      quit application",
+        "exit view",
+    ] {
+        assert!(text.contains(shortcut), "missing {shortcut}: {text}");
+    }
 }

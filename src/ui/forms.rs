@@ -5,8 +5,9 @@ use crate::{
 };
 use anyhow::{bail, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::{style::Style, text::Span};
 use std::path::PathBuf;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct Input {
@@ -131,29 +132,43 @@ impl Input {
         } else {
             &self.value
         };
-        let chars: Vec<char> = text.chars().collect();
+        let span = Span::raw(text);
+        let graphemes: Vec<_> = span
+            .styled_graphemes(Style::default())
+            .map(|g| g.symbol)
+            .collect();
         let cursor = if self.value.is_empty() {
             0
         } else {
-            self.cursor.min(chars.len())
+            self.cursor
         };
-        let char_width = |c: &char| c.width().unwrap_or(0);
+        // The editor uses character offsets; a cursor inside a grapheme belongs at its
+        // leading cell, never on a combining mark or half of a joined emoji.
+        let mut offset = 0;
+        let mut cursor_grapheme = 0;
+        for grapheme in &graphemes {
+            offset += grapheme.chars().count();
+            if offset > cursor {
+                break;
+            }
+            cursor_grapheme += 1;
+        }
         let mut start = 0;
-        let mut column: usize = chars[..cursor].iter().map(char_width).sum();
+        let mut column: usize = graphemes[..cursor_grapheme].iter().map(|g| g.width()).sum();
         if focused {
-            while column >= width && start < cursor {
-                column -= char_width(&chars[start]);
+            while column >= width && start < cursor_grapheme {
+                column -= graphemes[start].width();
                 start += 1;
             }
         }
         let mut visible = String::new();
         let mut used = 0;
-        for c in &chars[start..] {
-            used += char_width(c);
+        for grapheme in &graphemes[start..] {
+            used += grapheme.width();
             if used > width {
                 break;
             }
-            visible.push(*c);
+            visible.push_str(grapheme);
         }
         (visible, focused.then_some(column as u16))
     }
@@ -163,6 +178,20 @@ pub(super) enum FormEvent {
     None,
     Cancel,
     Submit,
+}
+/// Structured location shared by validation, focus and inline rendering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FormField {
+    Input(usize),
+    Name(usize),
+}
+#[derive(Clone, Debug)]
+pub(super) struct FieldError {
+    pub field: FormField,
+    pub message: String,
+}
+fn input_values(inputs: &[Input]) -> Vec<String> {
+    inputs.iter().map(|i| i.value.clone()).collect()
 }
 #[derive(Clone, Debug)]
 pub(super) struct HostForm {
@@ -176,6 +205,8 @@ pub(super) struct HostForm {
     pub error: String,
     pub scroll: usize,
     pub default_user: String,
+    baseline: (Vec<String>, Vec<String>),
+    pub errors: Vec<FieldError>,
 }
 impl HostForm {
     pub fn add(name: String, target: PathBuf) -> Self {
@@ -212,7 +243,10 @@ impl HostForm {
             inputs[i].limit = [50, 100, 50, 5, 200, 200, 200, 500, 200, 300, 10][i];
         }
         inputs[0].set(&name);
+        let baseline = (input_values(&inputs), vec![]);
         Self {
+            baseline,
+            errors: vec![],
             inputs,
             names: vec![],
             original: None,
@@ -251,7 +285,90 @@ impl HostForm {
         }
         f.original = Some(host);
         f.name_focus = true;
+        f.baseline = (input_values(&f.inputs), input_values(&f.names));
         f
+    }
+    pub fn dirty(&self) -> bool {
+        self.baseline != (input_values(&self.inputs), input_values(&self.names))
+    }
+    pub fn validate(&mut self) -> bool {
+        self.errors = self.validation_errors();
+        self.error.clear();
+        if let Some(error) = self.errors.first() {
+            match error.field {
+                FormField::Name(i) => {
+                    self.name_focus = true;
+                    self.focus = i;
+                }
+                FormField::Input(i) => {
+                    self.name_focus = false;
+                    self.focus = i;
+                    self.tab = usize::from([7, 9, 10].contains(&i));
+                }
+            }
+        }
+        self.errors.is_empty()
+    }
+    fn validation_errors(&self) -> Vec<FieldError> {
+        let mut errors = vec![];
+        // Validate isolated fields against a known-good host so the existing rules
+        // assign their errors structurally, without interpreting their display text.
+        let valid = || Host {
+            name: "host".into(),
+            hostname: "localhost".into(),
+            ..Host::default()
+        };
+        let mut check = |field, host: Host| {
+            if let Err(error) = config::validate_host(&host) {
+                errors.push(FieldError {
+                    field,
+                    message: error.to_string(),
+                });
+            }
+        };
+        if self.original.is_some() {
+            if self.names.is_empty() {
+                check(
+                    FormField::Input(0),
+                    Host {
+                        name: String::new(),
+                        ..valid()
+                    },
+                );
+            }
+            for (i, name) in self.names.iter().enumerate() {
+                check(
+                    FormField::Name(i),
+                    Host {
+                        name: name.value.trim().into(),
+                        ..valid()
+                    },
+                );
+            }
+        }
+        for (i, input) in self.inputs.iter().enumerate() {
+            if i == 0 && self.original.is_some() {
+                continue;
+            }
+            let value = input.value.trim().to_string();
+            let mut host = valid();
+            match i {
+                0 => host.name = value,
+                1 => host.hostname = value,
+                2 => host.user = value,
+                3 => host.port = value,
+                4 => host.identity = value,
+                5 => host.proxy_jump = value,
+                6 => host.proxy_command = value,
+                7 => host.options = config::options_to_config(&value),
+                8 => host.tags = vec![value],
+                9 => host.remote_command = value,
+                10 => host.request_tty = value,
+                _ => unreachable!(),
+            }
+            check(FormField::Input(i), host);
+        }
+        errors
     }
     pub fn fields(&self) -> Vec<usize> {
         if self.tab == 1 {
@@ -277,6 +394,11 @@ impl HostForm {
                     }
                     return FormEvent::None;
                 }
+                _ => {}
+            }
+        }
+        if k.modifiers.contains(KeyModifiers::ALT) {
+            match k.code {
                 KeyCode::Char('a') if self.original.is_some() => {
                     self.names.push(Input::default());
                     self.name_focus = true;
@@ -351,6 +473,9 @@ impl HostForm {
         FormEvent::None
     }
     pub fn host(&self) -> Result<Host> {
+        if let Some(error) = self.validation_errors().first() {
+            bail!("{}", error.message);
+        }
         let value = |i: usize| self.inputs[i].value.trim().to_string();
         let names: Vec<String> = if self.original.is_some() {
             self.names
@@ -414,6 +539,8 @@ pub(super) struct ForwardForm {
     pub host: String,
     pub inputs: Vec<Input>,
     pub kind: usize,
+    baseline: (usize, Vec<String>),
+    pub errors: Vec<FieldError>,
     pub focus: usize,
     pub error: String,
     pub scroll: usize,
@@ -446,7 +573,10 @@ impl ForwardForm {
             inputs[i].placeholder = hint.into();
             inputs[i].limit = [0, 5, 100, 5, 50][i];
         }
+        let baseline = (kind, input_values(&inputs));
         Self {
+            baseline,
+            errors: vec![],
             host,
             inputs,
             kind,
@@ -454,6 +584,50 @@ impl ForwardForm {
             error: String::new(),
             scroll: 0,
         }
+    }
+    pub fn dirty(&self) -> bool {
+        self.baseline != (self.kind, input_values(&self.inputs))
+    }
+    pub fn validate(&mut self) -> bool {
+        self.errors = self.validation_errors();
+        self.error.clear();
+        if let Some(error) = self.errors.first() {
+            if let FormField::Input(i) = error.field {
+                self.focus = i;
+            }
+        }
+        self.errors.is_empty()
+    }
+    fn validation_errors(&self) -> Vec<FieldError> {
+        let mut errors = vec![];
+        for i in self.fields().into_iter().skip(1) {
+            let mut f = Forward {
+                kind: ["local", "remote", "dynamic"][self.kind].into(),
+                local_port: "1".into(),
+                remote_port: "1".into(),
+                remote_host: "localhost".into(),
+                ..Forward::default()
+            };
+            let value = self.inputs[i].value.trim().to_string();
+            match i {
+                1 => f.local_port = value,
+                2 => {
+                    if !value.is_empty() {
+                        f.remote_host = value;
+                    }
+                }
+                3 => f.remote_port = value,
+                4 => f.bind_address = value,
+                _ => unreachable!(),
+            }
+            if let Err(error) = f.validate() {
+                errors.push(FieldError {
+                    field: FormField::Input(i),
+                    message: error.to_string(),
+                });
+            }
+        }
+        errors
     }
     pub fn fields(&self) -> Vec<usize> {
         if self.kind == 2 {
