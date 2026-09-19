@@ -460,3 +460,43 @@ complete -C "ssho -c "(string escape --style=script --no-quoted -- "$SSHM_PREFIX
         );
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn direct_ssh_keeps_streams_codes_and_signals_without_opening_ui() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let bin = f.dir.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let ssh = bin.join("ssh");
+    for (ending, expected) in [("exit 0", 0), ("exit 37", 37), ("kill -TERM $$", 143)] {
+        fs::write(
+            &ssh,
+            format!("#!/bin/sh\nprintf 'remote-out\\n'\nprintf 'remote-err\\n' >&2\n{ending}\n"),
+        )
+        .unwrap();
+        fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_ssho"))
+            .args(["prod", "uptime"])
+            .env("HOME", f.dir.path())
+            .env("XDG_CONFIG_HOME", f.dir.path().join(".config"))
+            .env("PATH", &bin)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(expected));
+        assert_eq!(out.stdout, b"remote-out\n");
+        assert_eq!(out.stderr, b"remote-err\n");
+    }
+    fs::remove_file(&ssh).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ssho"))
+        .args(["prod", "uptime"])
+        .env("HOME", f.dir.path())
+        .env("XDG_CONFIG_HOME", f.dir.path().join(".config"))
+        .env("PATH", bin)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Error executing SSH command"));
+    assert!(!out.stderr.contains(&0x1b));
+}

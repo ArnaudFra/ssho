@@ -8,6 +8,7 @@ from pathlib import Path
 import pty
 import re
 import select
+import signal
 import struct
 import subprocess
 import sys
@@ -28,7 +29,7 @@ class Session:
         self.output = b""
         self.screen = Screen()
         self.mark = 0
-        self.process = subprocess.Popen([str(BINARY), *args], stdin=self.slave, stdout=self.slave, stderr=self.slave, env=env)
+        self.process = subprocess.Popen([str(BINARY), *args], stdin=self.slave, stdout=self.slave, stderr=self.slave, env=env, start_new_session=True, preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
         atexit.register(self.cleanup)
 
     def cleanup(self):
@@ -79,6 +80,16 @@ class Session:
             os.close(self.slave)
 
 
+def interrupt_dispositions(process):
+    # Linux exposes the parent's dispositions without sending a destructive signal.
+    status = Path(f"/proc/{process.pid}/status")
+    if not status.exists():
+        return None
+    fields = dict(line.split(":", 1) for line in status.read_text().splitlines())
+    mask = (1 << (signal.SIGINT - 1)) | (1 << (signal.SIGQUIT - 1))
+    return tuple(int(fields[field].strip(), 16) & mask for field in ("SigCgt", "SigIgn"))
+
+
 def cli(env, *args):
     return subprocess.run([str(BINARY), *args], env=env, capture_output=True, check=True, text=True).stdout
 
@@ -94,21 +105,76 @@ with tempfile.TemporaryDirectory(prefix="ssho-pty-") as directory:
     config = home/".ssh/config"
     config.write_text("# Tags: work\nHost a-server\n HostName a.example.org\n\nHost b-server\n HostName b.example.org\n")
     fake = home/"bin/ssh"
-    fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$SSHM_TEST_ARGS"\nstty -g > "$SSHM_TEST_TERMIOS"\nprintf "SSH_TAKEOVER\\n"\nexit 37\n')
+    fake.write_text(f"#!{sys.executable}\n" + r'''import json, os, signal, sys, termios, time
+from pathlib import Path
+Path(os.environ["SSHM_TEST_ARGS"]).write_text("\n".join(sys.argv[1:]))
+Path(os.environ["SSHM_TEST_TERMIOS"]).write_text(json.dumps(termios.tcgetattr(0), default=lambda value: value.decode("latin1")))
+print("SSH_TAKEOVER", flush=True)
+mode = Path(os.environ["SSHM_TEST_MODE"]).read_text()
+if mode == "wait":
+    time.sleep(30)
+if mode == "signal":
+    os.kill(os.getpid(), signal.SIGTERM)
+sys.exit(int(mode))
+''')
     fake.chmod(0o700)
     env = dict(os.environ, HOME=directory, USERPROFILE=directory, XDG_CONFIG_HOME=str(home/".config"), APPDATA=str(home/".config"), TERM="xterm-256color", PATH=str(home/"bin")+":"+os.environ.get("PATH",""), SSHM_TEST_ARGS=str(home/"ssh-args"), SSHM_TEST_TERMIOS=str(home/"ssh-termios"))
 
+    mode = home/"ssh-mode"
+    mode.write_text("37")
+    env["SSHM_TEST_MODE"] = str(mode)
+
     session = Session(env)
     session.expect("Last Login")
+    browser_modes = termios.tcgetattr(session.slave)
+    browser_signals = interrupt_dispositions(session.process)
     assert b"\x1b[1 q" in session.output, "focused input must select a blinking block cursor"
     assert b"\x1b[?25h" in session.output, "focused search must show the terminal cursor"
     session.send(b"server\x0e\r")
+    session.expect("SSH exit 37: b-server")
+    assert b"SSH_TAKEOVER" in session.output
+    session.expect("Search: > server")
+    assert termios.tcgetattr(session.slave) == browser_modes
+    assert interrupt_dispositions(session.process) == browser_signals
+    # JSON encodes control-character bytes as strings; compare the mode flags here.
+    assert json.loads((home/"ssh-termios").read_text())[:6] == session.original[:6]
+    mode.write_text("0")
+    session.send(b"\r")
+    session.expect("SSH exit 0: b-server")
+    session.expect("Search: > server")
+    assert (home/"ssh-args").read_text().splitlines()[-1] == "b-server"
+    mode.write_text("signal")
+    session.send(b"\r")
+    session.expect("SSH exit 143: b-server")
+    mode.write_text("wait")
+    session.send(b"\r")
     session.expect("SSH_TAKEOVER")
-    session.close(37)
+    assert termios.tcgetattr(session.slave) == session.original
+    if browser_signals is not None:
+        assert interrupt_dispositions(session.process) == (6, 0), "parent must catch SIGINT/SIGQUIT only during SSH"
+    # With setsid + TIOCSCTTY, this delivers a real foreground-group SIGINT.
+    session.send(b"\x03")
+    session.expect("SSH exit 130: b-server")
+    session.expect("Search: > server")
+    assert termios.tcgetattr(session.slave) == browser_modes
+    assert interrupt_dispositions(session.process) == browser_signals
+    session.send(b"\x03")
+    session.close()
+    history = json.loads((home/".config/ssho/sshm_history.json").read_text())
+    assert history["connections"]["b-server"]["connect_count"] == 4
+    mode.write_text("37")
+    missing_env = dict(env, PATH=str(home/"missing-bin"))
+    session = Session(missing_env)
+    session.expect("Last Login")
+    session.send(b"b-server\r")
+    session.expect("Error executing SSH command")
+    session.expect("Search: > b-server")
+    session.send(b"\x03")
+    session.close()
     assert (home/"ssh-args").read_text().splitlines()[-1] == "b-server"
     assert (legacy/"config.json").read_text() == legacy_config
     assert (home/".config/ssho/config.json").exists()
-    print("PASS search selection, migration, SSH takeover, exit code and terminal restore")
+    print("PASS repeated SSH returns, search/selection, exit 0/37/signal, Ctrl+C, missing SSH, history and terminal modes")
 
     session = Session(env)
     session.expect("Last Login")
@@ -204,8 +270,10 @@ with tempfile.TemporaryDirectory(prefix="ssho-pty-") as directory:
     session.send(b"f")
     session.expect("Port Forwarding")
     session.send(b"\x1b[C\x1b[C\t1080\t\x13")
-    session.expect("SSH_TAKEOVER")
-    session.close(37)
+    session.expect("SSH exit 37: b-server")
+    assert b"SSH_TAKEOVER" in session.output
+    session.send(b"\x03")
+    session.close()
     arguments = (home/"ssh-args").read_text().splitlines()
     assert "-D" in arguments and "1080" in arguments[arguments.index("-D")+1], arguments
     history = json.loads((home/".config/ssho/sshm_history.json").read_text())

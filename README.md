@@ -70,6 +70,8 @@ ssho --no-update-check
 
 `info` conserve le schéma JSON `sshm.info.v1`, les valeurs nulles et les codes de sortie : 0 pour un hôte trouvé, 2 pour un hôte absent, 1 pour une erreur de configuration. La recherche CLI propose les formats `table`, `json` et `simple`.
 
+Une connexion ou un tunnel lancé depuis l'interface rend le terminal à SSH, puis revient à la liste avec le résultat (code de sortie ou erreur de lancement). La recherche, le focus, les filtres, la sélection et le défilement sont conservés. L'historique est actualisé sans réordonner la liste affichée ; une nouvelle action de tri ou de recherche utilise les dates actualisées. Ctrl+C pendant SSH interrompt la connexion et revient à la liste ; Ctrl+C dans la liste quitte l'application. Une connexion CLI directe conserve stdout, stderr et le code de sortie SSH (128 + signal si le processus est interrompu), sans ouvrir l'interface.
+
 L'historique enregistre les tentatives de connexion, avec date, compteur et dernier tunnel utilisé. Les modifications SSH sont précédées d'une sauvegarde dans `ssho/backups/`. Les blocs sans rapport, commentaires, options répétées et clés multiples sont conservés lors de l'édition. Les déplacements préparent les deux écritures et restaurent la destination si l'écriture de la source échoue.
 
 ## Navigation au clavier

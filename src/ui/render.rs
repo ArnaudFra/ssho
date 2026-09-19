@@ -140,7 +140,13 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         ])
         .split(area);
     f.render_widget(
-        Paragraph::new("SSHO • F4: details").style(accent()),
+        // Reuse the existing title row so the table's height and offset stay stable.
+        Paragraph::new(if m.connection_result.is_empty() {
+            "SSHO • F4: details"
+        } else {
+            &m.connection_result
+        })
+        .style(accent()),
         chunks[0],
     );
     let mut notices = vec![];
@@ -985,6 +991,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "Navigation & Connection",
         "",
         "Enter  connect (also from search)",
+        "SSH exit returns here with its result",
         "↑↓     select (Ctrl+P/N in search)",
         "i      show host information",
         "/      search hosts",

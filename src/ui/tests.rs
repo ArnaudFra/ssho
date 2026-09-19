@@ -1777,3 +1777,89 @@ fn help_keeps_existing_system_keys_after_form_shortcuts() {
         assert!(text.contains(shortcut), "missing {shortcut}: {text}");
     }
 }
+
+#[test]
+fn ssh_return_preserves_browser_context_and_refreshes_history_without_resorting() {
+    let root = tempfile::tempdir().unwrap();
+    let mut history = History::load(root.path()).unwrap();
+    history.record("alpha", None).unwrap();
+    let mut m = model();
+    m.history = history.connections.clone();
+    m.query.set("a");
+    m.show_hidden = true;
+    m.recent = true;
+    m.filter(true);
+    m.selected = 1;
+    m.offset = 1;
+    m.scroll = 3;
+    m.details.shown = true;
+    m.open_view(View::Forward(ForwardForm::new("beta".into(), None)));
+    history.record("beta", None).unwrap();
+    m.resume_connection("beta", Ok(37), Ok(history));
+    assert_eq!(m.query.value, "a");
+    assert!(m.search_focus && m.show_hidden && m.recent && m.details.shown);
+    assert_eq!(m.visible, vec![0, 1]);
+    assert_eq!((m.selected, m.offset, m.scroll), (1, 1, 3));
+    assert_eq!(m.selected_host().unwrap().name, "beta");
+    assert_eq!(m.history["beta"].connect_count, 1);
+    assert!(matches!(m.view, View::List));
+    assert!(m.parents.is_empty());
+    assert!(screen(&mut m, 120, 40).contains("SSH exit 37: beta"));
+    m.key(key(KeyCode::F(2)));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::List));
+    assert_eq!(
+        m.key(key(KeyCode::Enter)),
+        Action::Connect("beta".into(), None)
+    );
+}
+
+#[test]
+fn ssh_return_displays_success_spawn_error_and_history_refresh_error() {
+    let root = tempfile::tempdir().unwrap();
+    let mut m = model();
+    m.resume_connection("alpha", Ok(0), History::load(root.path()));
+    assert!(screen(&mut m, 80, 24).contains("SSH exit 0: alpha"));
+    m.resume_connection(
+        "alpha",
+        Err(anyhow::anyhow!("SSH unavailable")),
+        History::load(root.path()),
+    );
+    assert!(screen(&mut m, 80, 24).contains("SSH unavailable"));
+    m.resume_connection("alpha", Ok(143), Err(anyhow::anyhow!("broken history")));
+    let rendered = screen(&mut m, 120, 40);
+    assert!(rendered.contains("SSH exit 143: alpha"));
+    assert!(rendered.contains("broken history"));
+    assert_eq!(m.key(ctrl('c')), Action::Quit);
+}
+
+#[test]
+fn ssh_result_does_not_shift_the_viewport_when_selection_is_at_its_bottom() {
+    let root = tempfile::tempdir().unwrap();
+    let mut m = model();
+    m.all = (0..100)
+        .map(|i| Host {
+            name: format!("server-{i:03}"),
+            ..Host::default()
+        })
+        .collect();
+    m.filter(true);
+    m.selected = 70;
+    screen(&mut m, 100, 24);
+    let before = m.offset;
+    m.resume_connection("server-070", Ok(0), History::load(root.path()));
+    let rendered = screen(&mut m, 100, 24);
+    assert!(rendered.contains("SSH exit 0: server-070"));
+    assert_eq!(m.offset, before);
+    m.resume_connection("server-070", Ok(0), Err(anyhow::anyhow!("broken history")));
+    screen(&mut m, 100, 24);
+    assert_eq!(m.offset, before);
+}
+
+#[test]
+fn ssh_result_stays_readable_for_long_aliases_in_compact_terminals() {
+    let root = tempfile::tempdir().unwrap();
+    let mut m = model();
+    m.resume_connection(&"long-alias".repeat(10), Ok(37), History::load(root.path()));
+    assert!(screen(&mut m, 28, 8).contains("exit 37"));
+}

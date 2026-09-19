@@ -83,6 +83,7 @@ struct Model {
     history: BTreeMap<String, ConnectionInfo>,
     statuses: BTreeMap<String, PingResult>,
     error: String,
+    connection_result: String,
     update: Option<UpdateInfo>,
     page: usize,
     scroll: usize,
@@ -117,6 +118,7 @@ impl Model {
             history,
             statuses: BTreeMap::new(),
             error: String::new(),
+            connection_result: String::new(),
             update: None,
             page: 10,
             scroll: 0,
@@ -210,6 +212,26 @@ impl Model {
         }
         self.delete = None;
         self.error.clear();
+    }
+    /// Refresh metadata without rebuilding the browser's visible order or viewport.
+    fn resume_connection(&mut self, name: &str, result: Result<i32>, history: Result<History>) {
+        while !self.parents.is_empty() {
+            self.back();
+        }
+        self.view = View::List;
+        self.delete = None;
+        self.discard = false;
+        self.error.clear();
+        self.connection_result = match result {
+            Ok(code) => format!("SSH exit {code}: {name}"),
+            Err(error) => format!("SSH failed: {error:#} ({name})"),
+        };
+        match history {
+            Ok(history) => self.history = history.connections,
+            Err(error) => self
+                .connection_result
+                .push_str(&format!(" • History: {error:#}")),
+        }
     }
     fn navigate(&mut self, delta: isize) {
         self.selected = self
@@ -552,6 +574,42 @@ impl Drop for TerminalGuard {
         self.restore();
     }
 }
+// A caught handler is reset to the default by exec, unlike SIG_IGN. Thus SSH
+// still receives terminal interrupts while its waiting UI parent survives them.
+#[cfg(unix)]
+struct SshSignals(Vec<(libc::c_int, libc::sigaction)>);
+#[cfg(unix)]
+impl SshSignals {
+    fn enter() -> Result<Self> {
+        extern "C" fn interrupted(_: libc::c_int) {}
+        let mut guard = Self(Vec::new());
+        for signal in [libc::SIGINT, libc::SIGQUIT] {
+            // SAFETY: sigaction structures are initialized; the handler does no work,
+            // and each previous disposition is owned/restored by this scoped guard.
+            unsafe {
+                let mut action: libc::sigaction = std::mem::zeroed();
+                let mut previous: libc::sigaction = std::mem::zeroed();
+                action.sa_sigaction = interrupted as *const () as usize;
+                action.sa_flags = libc::SA_RESTART;
+                libc::sigemptyset(&mut action.sa_mask);
+                if libc::sigaction(signal, &action, &mut previous) != 0 {
+                    return Err(io::Error::last_os_error().into());
+                }
+                guard.0.push((signal, previous));
+            }
+        }
+        Ok(guard)
+    }
+}
+#[cfg(unix)]
+impl Drop for SshSignals {
+    fn drop(&mut self) {
+        for (signal, action) in self.0.iter().rev() {
+            // SAFETY: restore the valid dispositions saved by enter.
+            unsafe { libc::sigaction(*signal, action, std::ptr::null_mut()) };
+        }
+    }
+}
 fn start_pings(m: &mut Model, config: &Path) -> Receiver<PingResult> {
     let hosts: Vec<_> = m
         .all
@@ -673,8 +731,17 @@ pub fn run(
             Action::None => Ok(false),
             Action::Quit => return Ok(0),
             Action::Connect(name, forward) => {
+                #[cfg(unix)]
+                let signals = SshSignals::enter()?;
                 guard.restore();
-                return runtime::connect(paths, config, &name, false, &[], forward.as_ref());
+                let result = runtime::connect(paths, config, &name, false, &[], forward.as_ref());
+                guard = TerminalGuard::enter()?;
+                #[cfg(unix)]
+                drop(signals);
+                // The alternate screen is new: invalidate ratatui's previous frame.
+                terminal.clear()?;
+                m.resume_connection(&name, result, History::load(&paths.root));
+                Ok(false)
             }
             Action::Ping => {
                 ping = Some(start_pings(&mut m, config));
