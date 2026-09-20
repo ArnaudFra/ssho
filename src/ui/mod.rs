@@ -65,6 +65,7 @@ enum Action {
     Delete(Host),
     MoveTo(Host, PathBuf),
     Ping,
+    Reload,
 }
 struct Model {
     all: Vec<Host>,
@@ -316,6 +317,9 @@ impl Model {
                 }
             }
             View::Info(h) => {
+                if k.code == KeyCode::F(5) {
+                    return Action::Reload;
+                }
                 if matches!(k.code, KeyCode::Char('e') | KeyCode::Enter) {
                     let view = View::Host(Box::new(HostForm::edit(h.clone())));
                     self.open_view(view);
@@ -400,6 +404,9 @@ impl Model {
         if k.code == KeyCode::F(2) {
             self.open_view(View::Actions { selected: 0 });
             return Action::None;
+        }
+        if k.code == KeyCode::F(5) {
+            return Action::Reload;
         }
         if k.code == KeyCode::F(4) {
             return self.activate_action(PaletteAction::Details);
@@ -502,6 +509,7 @@ impl Model {
                 }
             }
             PaletteAction::Test => return Action::Ping,
+            PaletteAction::Reload => return Action::Reload,
             PaletteAction::Details => self.details.shown = !self.details.shown,
             PaletteAction::Help => {
                 self.open_view(View::Help);
@@ -638,6 +646,34 @@ fn start_inspection(
     }
     inspector.inspect(hosts, config.to_path_buf(), probe)
 }
+/// Load completely before changing the browser or discarding its diagnostic generation.
+fn reload_hosts(
+    inspector: &runtime::effective::Inspector,
+    m: &mut Model,
+    config: &Path,
+) -> Result<Receiver<runtime::effective::Inspection>> {
+    let hosts = config::load_hosts_checked(config)?;
+    let info = match &m.view {
+        View::Info(host) => Some(host.clone()),
+        _ => None,
+    };
+    m.replace_hosts(hosts, None);
+    if let Some(info) = info {
+        if let Some(host) = m
+            .all
+            .iter()
+            .find(|host| host.name == info.name && host.source_file == info.source_file)
+        {
+            m.view = View::Info(host.clone());
+        } else {
+            m.view = View::List;
+            m.parents.clear();
+            m.scroll = 0;
+        }
+    }
+    m.error.clear();
+    Ok(start_inspection(inspector, m, config, false))
+}
 fn select_files(m: &mut Model, config: &Path, host: Option<Host>, seed: String) -> Result<()> {
     let mut files = config::config_files(config)?;
     if let Some(h) = &host {
@@ -754,6 +790,10 @@ pub fn run(
                 inspection = start_inspection(&inspector, &mut m, config, true);
                 Ok(false)
             }
+            Action::Reload => reload_hosts(&inspector, &mut m, config).map(|receiver| {
+                inspection = receiver;
+                false
+            }),
             Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
             Action::Move(host) => {
                 select_files(&mut m, config, Some(host), String::new()).map(|_| false)
@@ -781,7 +821,7 @@ pub fn run(
                 View::Host(f) => f.error = e.to_string(),
                 View::Forward(f) => f.error = e.to_string(),
                 _ => {
-                    m.error = e.to_string();
+                    m.error = format!("{e:#}");
                     m.delete = None;
                 }
             },

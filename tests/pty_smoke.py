@@ -292,6 +292,49 @@ sys.exit(int(mode))
     assert history["connections"]["b-server"]["port_forwarding"]["type"] == "dynamic"
     print("PASS Include file move and saved SOCKS forwarding")
 
+    # Manual refresh resolves effective values again with ping disabled and keeps
+    # search/caret/selection, including when invoked inside the read-only Info view.
+    reload_root = home/".ssh/reload-config"
+    reload_parts = home/".ssh/reload-parts"
+    reload_parts.mkdir()
+    reload_keep = reload_parts/"keep"
+    reload_removed = reload_parts/"removed"
+    reload_keep.write_text("Host reload-keep\n HostName 127.0.0.1\n User before-user\n Port 2208\n")
+    reload_removed.write_text("Host reload-removed\n HostName 127.0.0.3\n")
+    reload_root.write_text(f"Include {reload_parts}/*\nHost reload-root\n HostName 127.0.0.4\n")
+    session = Session(env, ["-c", str(reload_root)])
+    session.expect("Last Attempt")
+    session.send(b"reload-keep")
+    reload_keep.write_text("Host reload-keep\n HostName 127.0.0.2\n User after-user\n Port 2210\n")
+    reload_removed.unlink()
+    (reload_parts/"added").write_text("Host reload-added\n HostName 127.0.0.5\n")
+    session.send(b"\x1b[15~")  # F5 from focused search
+    session.expect("Search: > reload-keep")
+    session.send(b"\ti")
+    session.expect("SSH Host Information: reload-keep")
+    session.expect("after-user")
+    session.expect("Port: 2210")
+    reload_keep.write_text("Host reload-keep\n HostName 127.0.0.6\n User newest-user\n Port 2211\n")
+    session.send(b"\x1b[15~")
+    session.expect("newest-user")
+    session.expect("Port: 2211")
+    reload_root.unlink()
+    session.send(b"\x1b[15~")
+    session.expect("No such file")
+    session.expect("newest-user")
+    reload_root.write_text(f"Include {reload_parts}/*\nHost reload-root\n HostName 127.0.0.4\n")
+    reload_keep.unlink()
+    session.send(b"\x1b[15~")
+    session.expect("No matching hosts")
+    session.expect("Search (/ or Tab to focus): reload-keep")
+    assert "SSH Host Information" not in session.screen.text()
+    session.send(b"\t\x1b")  # Focus search, clear the retained query.
+    session.expect("reload-added")
+    assert "reload-removed" not in session.screen.text()
+    session.send(b"\x03")
+    session.close()
+    print("PASS F5 external Include add/edit/remove, preserved search, Info refresh/removal, read failure and fresh native values")
+
     # The initial empty-list flow must return to the browser after successful creation.
     empty = home/"empty-config"
     empty.write_text("")

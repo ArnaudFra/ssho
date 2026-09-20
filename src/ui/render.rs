@@ -441,10 +441,10 @@ fn ellipsize(text: &str, width: usize) -> String {
 fn list_footer(width: u16, search_focus: bool) -> Vec<Line<'static>> {
     let lines: Vec<&str> = if width >= 105 {
         if search_focus {
-            vec!["F2: actions • ↑/↓: select • Enter: connect • Tab: table • Esc: clear/unfocus"]
+            vec!["F2: actions • F5: reload • ↑/↓: select • Enter: connect • Tab: table • Esc: clear/unfocus"]
         } else {
             vec![
-                "F2: actions • ↑/↓: navigate • Enter: connect • Tab: search • i: info • h: help • q: quit",
+                "F2: actions • F5: reload • ↑/↓: navigate • Enter: connect • Tab: search • i: info • h: help • q: quit",
                 "a: add • e: edit • d: delete • m: move • f: tunnel • p: test • s: sort • n/r: name/recent • H: hidden",
             ]
         }
@@ -973,7 +973,12 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     let border = block(&title, true);
     let inner = border.inner(area);
     f.render_widget(border, area);
-    let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(4)]).split(inner);
+    let parts = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(3),
+        Constraint::Length(if m.error.is_empty() { 0 } else { 3 }),
+    ])
+    .split(inner);
     let lines = details::content(
         h,
         m.statuses.get(&h.name),
@@ -984,11 +989,19 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     details::render_rows(f, parts[0], lines, &mut m.scroll);
     f.render_widget(
         Paragraph::new(
-            "Actions: ↑/↓/PgUp/PgDn scroll\n  e/Enter - Switch to edit mode\n  q/Esc   - Return to host list",
+            "Actions: ↑/↓/PgUp/PgDn scroll • F5: reload\n  e/Enter - Switch to edit mode\n  q/Esc   - Return to host list",
         )
         .style(Style::default().fg(GRAY)),
         parts[1],
     );
+    if !m.error.is_empty() {
+        f.render_widget(
+            Paragraph::new(format!("Error: {}", m.error))
+                .style(Style::default().fg(Color::Red))
+                .wrap(Wrap { trim: false }),
+            parts[2],
+        );
+    }
 }
 fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     let area = panel(area, 96, 25);
@@ -1007,6 +1020,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "Tab/Shift+Tab switch search / table",
         "F2     actions (also from search)",
         "F4     toggle details (width >=110)",
+        "F5     reload config and Includes",
         "Alt+↑↓ scroll details (Ctrl+PgUp/PgDn)",
         "",
         "Host Management",

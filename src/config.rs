@@ -17,6 +17,12 @@ pub fn load_hosts(path: &Path) -> Result<Vec<Host>> {
     Ok(Parsed::load(path)?.hosts)
 }
 
+/// Reload a complete browser snapshot, rejecting root/read/Include traversal errors.
+/// Includes matching no files remain optional, for literal names as well as globs.
+pub fn load_hosts_checked(path: &Path) -> Result<Vec<Host>> {
+    Ok(Parsed::load_checked(path)?.hosts)
+}
+
 pub fn find_host(path: &Path, name: &str) -> Result<Host> {
     load_hosts(path)?
         .into_iter()
@@ -820,5 +826,72 @@ mod tests {
         assert_eq!(host.options, "SetEnv BAR=y");
         delete_host(&find_host(&path, "a").unwrap(), &app).unwrap();
         assert!(read(&path).contains("# aliases"));
+    }
+}
+
+#[cfg(test)]
+mod checked_load_tests {
+    use super::*;
+
+    #[test]
+    fn checked_load_rejects_read_errors_without_changing_legacy_loaders() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("config");
+        let include = temp.path().join("included");
+        std::fs::write(
+            &root,
+            "Include included\nHost root-host\n HostName 127.0.0.1\n",
+        )
+        .unwrap();
+        std::fs::write(&include, [0xff]).unwrap();
+        assert_eq!(load_hosts(&root).unwrap()[0].name, "root-host");
+        assert_eq!(
+            config_files(&root).unwrap(),
+            [root.clone(), include.clone()]
+        );
+        let error = load_hosts_checked(&root).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        std::fs::remove_file(&include).unwrap();
+        assert_eq!(load_hosts_checked(&root).unwrap()[0].name, "root-host");
+        std::fs::remove_file(&root).unwrap();
+        assert!(load_hosts(&root).unwrap().is_empty());
+        assert_eq!(config_files(&root).unwrap(), std::slice::from_ref(&root));
+        let error = load_hosts_checked(&root).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn checked_load_shares_alias_recursive_include_cycle_and_exclusion_semantics() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("config");
+        let parts = temp.path().join("parts");
+        std::fs::create_dir_all(parts.join("nested")).unwrap();
+        std::fs::write(
+            &root,
+            "Include parts/**/* missing.conf absent/*\nHost root-host\n HostName 127.0.0.1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            parts.join("nested/hosts.conf"),
+            "Include ../../config\nHost first second\n HostName 127.0.0.2\n",
+        )
+        .unwrap();
+        std::fs::write(
+            parts.join("ignored.conf.bak"),
+            "Host ignored\n HostName 127.0.0.3\n",
+        )
+        .unwrap();
+        let hosts = load_hosts_checked(&root).unwrap();
+        assert_eq!(
+            hosts.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(),
+            ["first", "second", "root-host"]
+        );
+        assert_eq!(hosts, load_hosts(&root).unwrap());
     }
 }

@@ -123,19 +123,82 @@ pub(super) fn expand_tilde(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// Preserve glob matching while surfacing I/O failures on every traversed prefix.
+/// The glob crate reports wildcard read_dir failures, but drops metadata errors on
+/// literal components. Checking literal children of each matched prefix covers both.
+fn checked_include_paths(pattern: &Path) -> Result<Vec<PathBuf>> {
+    let mut prefixes: Vec<_> = pattern.ancestors().collect();
+    prefixes.reverse();
+    let mut paths = Vec::<PathBuf>::new();
+    for prefix in prefixes {
+        for parent in &paths {
+            // A wildcard can match a symlink whose target cannot be traversed.
+            // glob silently treats that metadata failure as a non-directory.
+            check_include_metadata(parent)?;
+            if let Some(component) = prefix.components().next_back() {
+                let name = component.as_os_str();
+                if !name.to_string_lossy().contains(['*', '?', '[']) {
+                    check_include_metadata(&parent.join(name))?;
+                }
+            }
+        }
+        // Keep the legacy treatment of invalid patterns as unmatched Includes.
+        let Ok(matches) = glob::glob(&prefix.to_string_lossy()) else {
+            return Ok(vec![]);
+        };
+        paths = matches
+            .map(|entry| {
+                entry.map_err(|error| {
+                    let path = error.path().to_path_buf();
+                    anyhow::Error::new(error.into_error())
+                        .context(format!("expanding SSH Include {}", path.display()))
+                })
+            })
+            .collect::<Result<_>>()?;
+    }
+    Ok(paths)
+}
+
+fn check_include_metadata(path: &Path) -> Result<()> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => {
+            Err(error).with_context(|| format!("expanding SSH Include {}", path.display()))
+        }
+    }
+}
+
 pub(super) struct Parsed {
     pub hosts: Vec<Host>,
     pub files: Vec<PathBuf>,
     seen: HashSet<PathBuf>,
+    strict: bool,
 }
 impl Parsed {
     pub fn load(path: &Path) -> Result<Self> {
+        Self::load_mode(path, false)
+    }
+
+    pub fn load_checked(path: &Path) -> Result<Self> {
+        Self::load_mode(path, true)
+    }
+
+    fn load_mode(path: &Path, strict: bool) -> Result<Self> {
         let mut parsed = Self {
             hosts: vec![],
             files: vec![],
             seen: HashSet::new(),
+            strict,
         };
-        parsed.visit(path)?;
+        parsed.visit(path, true)?;
         Ok(parsed)
     }
 
@@ -149,7 +212,7 @@ impl Parsed {
         }
     }
 
-    fn visit(&mut self, path: &Path) -> Result<()> {
+    fn visit(&mut self, path: &Path, required: bool) -> Result<()> {
         let path = absolute(path)?;
         let identity = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         if !self.seen.insert(identity) {
@@ -158,7 +221,9 @@ impl Parsed {
         self.files.push(path.clone());
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && (!self.strict || !required) => {
+                return Ok(());
+            }
             Err(e) => {
                 return Err(e).with_context(|| format!("reading SSH config {}", path.display()))
             }
@@ -191,16 +256,23 @@ impl Parsed {
                         } else {
                             path.parent().unwrap_or(Path::new(".")).join(pattern)
                         };
-                        if let Ok(paths) = glob::glob(&pattern.to_string_lossy()) {
-                            let mut paths: Vec<_> = paths.filter_map(Result::ok).collect();
-                            paths.sort();
-                            for included in paths {
-                                if included.is_dir() || excluded(&included) {
-                                    continue;
-                                }
-                                // The Go reader deliberately ignores errors in included files.
-                                let _ = self.visit(&included);
+                        let mut paths: Vec<_> = if self.strict {
+                            checked_include_paths(&pattern)?
+                        } else if let Ok(paths) = glob::glob(&pattern.to_string_lossy()) {
+                            paths.filter_map(Result::ok).collect()
+                        } else {
+                            vec![]
+                        };
+                        paths.sort();
+                        for included in paths {
+                            if included.is_dir() || excluded(&included) {
+                                continue;
                             }
+                            let loaded = self.visit(&included, false);
+                            if self.strict {
+                                loaded?;
+                            }
+                            // The legacy Go-compatible reader ignores included-file errors.
                         }
                     }
                 }

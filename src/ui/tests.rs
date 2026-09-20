@@ -1964,3 +1964,421 @@ fn diagnostic_symbols_text_latency_and_failure_are_color_independent() {
         assert!(text.contains("cause-fixture"));
     }
 }
+
+#[test]
+fn manual_reload_key_works_from_search_table_and_info() {
+    let mut m = model();
+    typing(&mut m, "a");
+    assert_eq!(m.key(key(KeyCode::F(5))), Action::Reload);
+    assert_eq!(m.query.value, "a");
+    m.key(key(KeyCode::Tab));
+    assert_eq!(m.key(key(KeyCode::F(5))), Action::Reload);
+    m.key(key(KeyCode::Char('i')));
+    assert!(matches!(m.view, View::Info(_)));
+    assert_eq!(m.key(key(KeyCode::F(5))), Action::Reload);
+}
+
+#[test]
+fn manual_reload_palette_is_available_with_empty_filtered_list_and_retains_caret() {
+    let mut m = model();
+    typing(&mut m, "missing");
+    m.key(key(KeyCode::Left));
+    m.key(key(KeyCode::F(2)));
+    assert!(screen(&mut m, 100, 30).contains("Recharger"));
+    for _ in 0..6 {
+        m.key(key(KeyCode::Down));
+    }
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::Reload);
+    assert!(matches!(m.view, View::List));
+    assert!(m.search_focus);
+    typing(&mut m, "X");
+    assert_eq!(m.query.value, "missinXg");
+}
+
+#[test]
+fn manual_reload_does_not_interrupt_forms_or_confirmations() {
+    let mut m = model();
+    m.search_focus = false;
+    m.key(key(KeyCode::Char('e')));
+    typing(&mut m, "changed");
+    assert_eq!(m.key(key(KeyCode::F(5))), Action::None);
+    let View::Host(form) = &m.view else {
+        panic!("still editing");
+    };
+    assert!(form.dirty());
+    m.key(key(KeyCode::Esc));
+    assert!(m.discard);
+    assert_eq!(m.key(key(KeyCode::F(5))), Action::None);
+    assert!(m.discard);
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Char('f')));
+    typing(&mut m, "123");
+    assert_eq!(m.key(key(KeyCode::F(5))), Action::None);
+    assert!(matches!(m.view, View::Forward(_)));
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Char('d')));
+    assert!(m.delete.is_some());
+    assert_eq!(m.key(key(KeyCode::F(5))), Action::None);
+    assert!(m.delete.is_some());
+}
+
+#[test]
+fn manual_reload_reloads_root_and_include_changes_preserving_browser_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    let includes = temp.path().join("parts");
+    std::fs::create_dir(&includes).unwrap();
+    let retained = includes.join("retained");
+    let removed = includes.join("removed");
+    std::fs::write(
+        &root,
+        "Include parts/*\nHost srv-duplicate\n HostName root-old\n",
+    )
+    .unwrap();
+    std::fs::write(&retained, "Host srv-duplicate\n HostName include-old\n").unwrap();
+    std::fs::write(&removed, "Host srv-removed\n HostName gone\n").unwrap();
+    let mut m = Model::new(
+        config::load_hosts(&root).unwrap(),
+        AppConfig::default(),
+        BTreeMap::new(),
+        true,
+    );
+    typing(&mut m, "srv");
+    m.key(key(KeyCode::Left));
+    m.show_hidden = true;
+    m.recent = true;
+    m.details.shown = true;
+    m.selected = m
+        .visible
+        .iter()
+        .position(|&i| m.all[i].name == "srv-duplicate" && m.all[i].source_file == root)
+        .unwrap();
+    m.offset = m.selected;
+    let inspector = runtime::effective::Inspector::default();
+    std::fs::write(
+        &root,
+        "Include parts/*\nHost srv-duplicate\n HostName root-new\nHost srv-new\n HostName new\n",
+    )
+    .unwrap();
+    std::fs::write(&retained, "Host srv-duplicate\n HostName include-new\n").unwrap();
+    std::fs::remove_file(&removed).unwrap();
+    std::fs::write(includes.join("added"), "Host srv-added\n HostName added\n").unwrap();
+    drop(reload_hosts(&inspector, &mut m, &root).unwrap());
+    assert_eq!(m.all.len(), 4);
+    assert!(!m.all.iter().any(|h| h.name == "srv-removed"));
+    assert!(m.all.iter().any(|h| h.name == "srv-added"));
+    assert!(m.all.iter().any(|h| h.hostname == "include-new"));
+    let selected = m.selected_host().unwrap();
+    assert_eq!(selected.source_file, root);
+    assert_eq!(selected.name, "srv-duplicate");
+    assert_eq!(selected.hostname, "root-new");
+    assert_eq!(m.query.value, "srv");
+    assert!(m.search_focus && m.show_hidden && m.recent && m.details.shown);
+    assert_eq!(m.offset, 1);
+    typing(&mut m, "X");
+    assert_eq!(m.query.value, "srXv");
+    m.query.set("");
+    m.filter(false);
+    m.selected = m.visible.len() - 1;
+    m.offset = m.selected;
+    std::fs::remove_file(&retained).unwrap();
+    std::fs::remove_file(includes.join("added")).unwrap();
+    std::fs::write(&root, "Include parts/*\nHost only\n HostName last\n").unwrap();
+    drop(reload_hosts(&inspector, &mut m, &root).unwrap());
+    assert_eq!(m.all.len(), 1);
+    assert_eq!(m.selected, 0);
+    assert_eq!(m.offset, 0);
+    assert_eq!(m.selected_host().unwrap().name, "only");
+}
+
+#[test]
+fn manual_reload_read_errors_leave_hosts_cache_view_and_selection_intact() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    std::fs::write(&root, "Include parts/*\nHost keep\n HostName old\n").unwrap();
+    let includes = temp.path().join("parts");
+    std::fs::create_dir(&includes).unwrap();
+    let mut m = Model::new(
+        config::load_hosts(&root).unwrap(),
+        AppConfig::default(),
+        BTreeMap::new(),
+        true,
+    );
+    m.effective
+        .insert("keep".into(), Err("previous diagnostic".into()));
+    m.statuses.insert(
+        "keep".into(),
+        PingResult {
+            name: "keep".into(),
+            status: PingStatus::Online,
+            duration: Duration::from_millis(12),
+            error: None,
+        },
+    );
+    m.open_view(View::Info(m.all[0].clone()));
+    let before = m.all.clone();
+    let inspector = runtime::effective::Inspector::default();
+    std::fs::remove_file(&root).unwrap();
+    let error = reload_hosts(&inspector, &mut m, &root).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert!(format!("{error:#}").contains(&root.display().to_string()));
+    m.error = format!("{error:#}");
+    let rendered = screen(&mut m, 120, 40);
+    assert!(rendered.contains("Error: reading SSH config"));
+    assert!(rendered.contains(&root.display().to_string()));
+    assert_eq!(m.all, before);
+    assert_eq!(m.selected_host().unwrap().name, "keep");
+    assert!(matches!(m.view, View::Info(_)));
+    assert_eq!(
+        m.effective["keep"].as_ref().unwrap_err(),
+        "previous diagnostic"
+    );
+    assert_eq!(m.statuses["keep"].status, PingStatus::Online);
+    std::fs::write(&root, "Include parts/*\nHost changed\n HostName new\n").unwrap();
+    std::fs::write(includes.join("unreadable"), [0xff]).unwrap();
+    let error = reload_hosts(&inspector, &mut m, &root).unwrap_err();
+    assert!(format!("{error:#}").contains("unreadable"));
+    assert_eq!(m.all, before);
+    assert_eq!(
+        m.effective["keep"].as_ref().unwrap_err(),
+        "previous diagnostic"
+    );
+}
+
+#[test]
+fn manual_reload_refreshes_info_or_returns_to_list_when_identity_is_removed() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    std::fs::write(&root, "Host keep\n HostName old\n").unwrap();
+    let mut m = Model::new(
+        config::load_hosts(&root).unwrap(),
+        AppConfig::default(),
+        BTreeMap::new(),
+        false,
+    );
+    m.open_view(View::Info(m.all[0].clone()));
+    m.error = "previous failure".into();
+    let inspector = runtime::effective::Inspector::default();
+    std::fs::write(&root, "Host keep\n HostName changed\n").unwrap();
+    drop(reload_hosts(&inspector, &mut m, &root).unwrap());
+    let View::Info(host) = &m.view else {
+        panic!("keep info open");
+    };
+    assert_eq!(host.hostname, "changed");
+    assert!(screen(&mut m, 120, 40).contains("changed"));
+    assert!(m.error.is_empty());
+    std::fs::write(&root, "Host other\n HostName changed\n").unwrap();
+    drop(reload_hosts(&inspector, &mut m, &root).unwrap());
+    assert!(matches!(m.view, View::List));
+    assert!(m.parents.is_empty());
+    assert_eq!(m.selected_host().unwrap().name, "other");
+}
+
+#[test]
+fn manual_reload_refreshes_effective_cache_without_ping() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    std::fs::write(
+        &root,
+        "Host fixture\n HostName 127.0.0.1\n User old-user\n Port 2201\n",
+    )
+    .unwrap();
+    let mut m = Model::new(
+        config::load_hosts(&root).unwrap(),
+        AppConfig {
+            ping_on_start: false,
+            ..AppConfig::default()
+        },
+        BTreeMap::new(),
+        false,
+    );
+    let inspector = runtime::effective::Inspector::default();
+    let mut receiver = start_inspection(&inspector, &mut m, &root, false);
+    for result in &receiver {
+        m.effective.insert(result.name, result.effective);
+    }
+    assert_eq!(m.effective["fixture"].as_ref().unwrap().user, "old-user");
+    m.statuses.get_mut("fixture").unwrap().status = PingStatus::Online;
+    std::fs::write(
+        &root,
+        "Host fixture\n HostName 127.0.0.2\n User new-user\n Port 2202\n",
+    )
+    .unwrap();
+    receiver = reload_hosts(&inspector, &mut m, &root).unwrap();
+    assert!(m.effective.is_empty());
+    assert_eq!(m.statuses["fixture"].status, PingStatus::Unknown);
+    for result in receiver {
+        assert!(result.ping.is_none());
+        m.effective.insert(result.name, result.effective);
+    }
+    let effective = m.effective["fixture"].as_ref().unwrap();
+    assert_eq!(effective.user, "new-user");
+    assert_eq!(effective.hostname, "127.0.0.2");
+    assert_eq!(effective.port, "2202");
+    assert_eq!(m.all[0].user, "new-user");
+}
+
+#[cfg(unix)]
+#[test]
+fn manual_reload_old_native_generation_cannot_overwrite_new_cache() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    let ready = temp.path().join("ready");
+    let release = temp.path().join("release");
+    let finished = temp.path().join("finished");
+    // Block a real old ssh -G after it has read the old values. The new generation
+    // can finish on another worker while this one still owns its old sender.
+    std::fs::write(&root, format!(
+        "Host fixture\n HostName 127.0.0.1\n User old-user\n Port 2201\nMatch exec \"touch {}; while test ! -e {}; do sleep 0.02; done; touch {}\"\n",
+        ready.display(), release.display(), finished.display()
+    )).unwrap();
+    let mut m = Model::new(
+        config::load_hosts(&root).unwrap(),
+        AppConfig::default(),
+        BTreeMap::new(),
+        false,
+    );
+    let inspector = runtime::effective::Inspector::default();
+    let mut receiver = start_inspection(&inspector, &mut m, &root, false);
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !ready.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "old native resolver did not reach barrier"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        receiver.try_recv().is_err(),
+        "old generation is still blocked"
+    );
+    std::fs::write(
+        &root,
+        "Host fixture\n HostName 127.0.0.2\n User new-user\n Port 2202\n",
+    )
+    .unwrap();
+    receiver = reload_hosts(&inspector, &mut m, &root).unwrap();
+    let fresh = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(fresh.effective.as_ref().unwrap().user, "new-user");
+    m.effective.insert(fresh.name, fresh.effective);
+    std::fs::write(&release, "").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !finished.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "old native resolver did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    for result in receiver {
+        m.effective.insert(result.name, result.effective);
+    }
+    let effective = m.effective["fixture"].as_ref().unwrap();
+    assert_eq!(effective.user, "new-user");
+    assert_eq!(effective.hostname, "127.0.0.2");
+    assert_eq!(effective.port, "2202");
+}
+
+#[cfg(unix)]
+#[test]
+fn manual_reload_unreadable_include_directory_preserves_previous_snapshot() {
+    use std::os::unix::fs::PermissionsExt;
+    struct RestorePermissions(PathBuf, std::fs::Permissions);
+    impl Drop for RestorePermissions {
+        fn drop(&mut self) {
+            std::fs::set_permissions(&self.0, self.1.clone()).unwrap();
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    let parts = temp.path().join("parts");
+    std::fs::create_dir_all(parts.join("nested")).unwrap();
+    std::os::unix::fs::symlink(parts.join("nested"), temp.path().join("alias-dir")).unwrap();
+    std::fs::write(
+        &root,
+        "Include parts/*\nHost root-host\n HostName root.example\n",
+    )
+    .unwrap();
+    std::fs::write(
+        parts.join("hosts"),
+        "Host included-host\n HostName include.example\n",
+    )
+    .unwrap();
+    let mut m = Model::new(
+        config::load_hosts(&root).unwrap(),
+        AppConfig::default(),
+        BTreeMap::new(),
+        false,
+    );
+    let hosts = m.all.clone();
+    m.effective
+        .insert("included-host".into(), Err("previous diagnostic".into()));
+    let _restore = RestorePermissions(
+        parts.clone(),
+        std::fs::metadata(&parts).unwrap().permissions(),
+    );
+    std::fs::set_permissions(&parts, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&parts).is_ok() {
+        // Elevated identities can bypass mode bits; don't claim permission coverage there.
+        eprintln!("permission regression unavailable: current identity bypasses mode 000");
+        return;
+    }
+    let traversal = glob::glob(&format!("{}/*", parts.display()))
+        .unwrap()
+        .find_map(Result::err)
+        .expect("fixture must produce an actual glob traversal error");
+    assert_eq!(
+        traversal.error().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    let inspector = runtime::effective::Inspector::default();
+    // glob reports the first traversal error but silently drops metadata failures
+    // on literal components. Strict discovery must surface every permission error.
+    for pattern in ["parts/*", "parts/hosts", "*/hosts", "alias*/*"] {
+        std::fs::write(
+            &root,
+            format!("Include {pattern}\nHost root-host\n HostName root.example\n"),
+        )
+        .unwrap();
+        let legacy = config::load_hosts(&root).unwrap();
+        assert_eq!(
+            legacy.len(),
+            1,
+            "legacy parser still ignores Include failures"
+        );
+        assert_eq!(legacy[0].name, "root-host");
+        let error = reload_hosts(&inspector, &mut m, &root).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        let cause = format!("{error:#}");
+        assert!(cause.starts_with("expanding SSH Include"));
+        assert!(cause.contains(&temp.path().display().to_string()));
+        assert_eq!(m.all, hosts);
+        assert_eq!(
+            m.effective["included-host"].as_ref().unwrap_err(),
+            "previous diagnostic"
+        );
+    }
+}
+
+#[test]
+fn manual_reload_allows_unmatched_literal_and_wildcard_includes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    std::fs::write(
+        &root,
+        "Include missing.conf absent/*.conf\nHost keep\n HostName 127.0.0.1\n",
+    )
+    .unwrap();
+    let mut m = model();
+    let inspector = runtime::effective::Inspector::default();
+    drop(reload_hosts(&inspector, &mut m, &root).unwrap());
+    assert_eq!(m.all.len(), 1);
+    assert_eq!(m.all[0].name, "keep");
+}
