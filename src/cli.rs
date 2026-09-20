@@ -175,20 +175,21 @@ pub fn info_response(path: &std::path::Path, name: &str) -> (serde_json::Value, 
             exit,
         )
     };
-    let host = match crate::config::find_host(path, name) {
-        Ok(h) => h,
-        Err(error) => {
-            let mut message = format!("{error:#}");
-            let missing = message.to_lowercase().contains("not found");
-            if missing {
-                message = format!("host '{name}' not found");
-            }
-            return failure(
-                if missing { "NOT_FOUND" } else { "CONFIG_ERROR" },
-                message,
-                if missing { 2 } else { 1 },
-            );
-        }
+    let hosts = match crate::config::load_hosts(path) {
+        Ok(hosts) => hosts,
+        Err(error) => return failure("CONFIG_ERROR", format!("{error:#}"), 1),
+    };
+    let Some(host) = hosts.into_iter().find(|host| host.name == name) else {
+        return failure("NOT_FOUND", format!("host '{name}' not found"), 2);
+    };
+    let resolution = crate::runtime::effective::resolve(path, name);
+    let (effective, resolution_status, exit) = match resolution {
+        Ok(value) => (json!(value), json!({"status":"resolved", "error":null}), 0),
+        Err(error) => (
+            Value::Null,
+            json!({"status":"error", "error":format!("{error:#}")}),
+            1,
+        ),
     };
     let optional = |s: &str| {
         if s.trim().is_empty() {
@@ -216,13 +217,23 @@ pub fn info_response(path: &std::path::Path, name: &str) -> (serde_json::Value, 
     } else {
         json!(host.tags)
     };
+    let declared = json!({"hostname":optional(&host.hostname),"user":optional(&host.user),"port":port,
+        "identity_file":optional(&host.identity),"extra_identities":host.extra_identities,
+        "proxy_jump":optional(&host.proxy_jump),"proxy_command":optional(&host.proxy_command),
+        "remote_command":optional(&host.remote_command),"request_tty":optional(&host.request_tty)});
+    let target = if effective.is_null() {
+        json!({"host":name,"hostname":optional(&host.hostname),"user":optional(&host.user),"port":port})
+    } else {
+        json!({"host":name,"hostname":effective["hostname"],"user":effective["user"],"port":effective["port"].as_str().and_then(|p| p.parse::<u16>().ok())})
+    };
     (
-        json!({"schema":"sshm.info.v1","ok":true,"hostname":name,"error":null,"result":{
-            "canonical_name":host.name,"target":{"host":name,"hostname":optional(&host.hostname),"user":optional(&host.user),"port":port},
+        json!({"schema":"sshm.info.v1","ok":exit == 0,"hostname":name,"error":if exit == 0 { Value::Null } else { json!({"code":"RESOLUTION_ERROR","message":resolution_status["error"],"details":null}) },"result":{
+            "canonical_name":host.name,"target":target,
+            "effective":effective,"resolution":resolution_status,"declared":declared,
             "identity_file":optional(&host.identity),"proxy_jump":optional(&host.proxy_jump),"proxy_command":optional(&host.proxy_command),"options":optional(&host.options),"tags":tags,
             "remote_command":optional(&host.remote_command),"request_tty":optional(&host.request_tty),"source":{"file":host.source_file,"line":host.line_number}
         }}),
-        0,
+        exit,
     )
 }
 pub fn filter_search(
@@ -614,7 +625,7 @@ pub fn help(command: Option<&str>) -> String {
         Some("completion") => "ssho completion bash|zsh|fish|powershell",
         _ => "ssho [host] [command...]",
     };
-    format!("SSH Organizer - A modern SSH connection manager\n\nssho is a modern SSH manager for your terminal, implemented in Rust.\n\nUsage:\n  {usage}\n\nCommands:\n  add [hostname]       Add a host using an interactive form\n  edit <host>          Edit a host and its aliases\n  move <host>          Move a host to another included configuration\n  search [query]       Search by name, hostname or tags\n  info <host>          Print machine-readable JSON (--pretty to indent)\n  completion <shell>   Generate Bash, Zsh, Fish or PowerShell completion\n  help [command]       Show help\n\nOptions:\n  -c, --config <file>   SSH configuration file (default: ~/.ssh/config)\n  -t, --tty             Force a pseudo-TTY for the remote command\n  -s, --search          Focus search at startup\n      --no-update-check  Disable automatic update checking\n  -h, --help            Show help\n  -v, --version         Show version\n\nSearch options:\n  -f, --format <format>  table, json or simple (default: table)\n      --tags            Search tags only\n      --names           Search names only\n\nExamples:\n  ssho\n  ssho prod-server uptime\n  ssho -t prod-server sudo systemctl restart nginx\n  ssho search --tags work --format json\n\nApplication data: ~/.config/ssho/ (respects XDG_CONFIG_HOME).\n")
+    format!("SSH Organizer - A modern SSH connection manager\n\nssho is a modern SSH manager for your terminal, implemented in Rust.\n\nUsage:\n  {usage}\n\nCommands:\n  add [hostname]       Add a host using an interactive form\n  edit <host>          Edit a host and its aliases\n  move <host>          Move a host to another included configuration\n  search [query]       Search by name, hostname or tags\n  info <host>          Print effective SSH JSON (--pretty to indent)\n  completion <shell>   Generate Bash, Zsh, Fish or PowerShell completion\n  help [command]       Show help\n\nOptions:\n  -c, --config <file>   SSH configuration file (default: ~/.ssh/config)\n  -t, --tty             Force a pseudo-TTY for the remote command\n  -s, --search          Focus search at startup\n      --no-update-check  Disable automatic update checking\n  -h, --help            Show help\n  -v, --version         Show version\n\nSearch options:\n  -f, --format <format>  table, json or simple (default: table)\n      --tags            Search tags only\n      --names           Search names only\n\nExamples:\n  ssho\n  ssho prod-server uptime\n  ssho -t prod-server sudo systemctl restart nginx\n  ssho search --tags work --format json\n\nApplication data: ~/.config/ssho/ (respects XDG_CONFIG_HOME).\n")
 }
 
 pub fn completion_script(shell: &str) -> Result<&'static str> {

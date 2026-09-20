@@ -112,7 +112,7 @@ fn layout_columns_order_and_small_sizes() {
     let n = s.find("Name").unwrap();
     assert!(n < s.find("Hostname").unwrap());
     assert!(s.find("Hostname").unwrap() < s.find("Tags").unwrap());
-    assert!(s.find("Tags").unwrap() < s.find("Last Login").unwrap());
+    assert!(s.find("Tags").unwrap() < s.find("Last Attempt").unwrap());
     assert!(s.contains("SSHO"));
     assert!(s.contains("#work"));
     for (w, h) in [(60, 15), (24, 8), (1, 1)] {
@@ -291,6 +291,7 @@ fn sorting_history_and_table_shortcuts() {
             last_connect: Utc::now(),
             connect_count: 2,
             port_forwarding: None,
+            ..ConnectionInfo::default()
         },
     );
     m.key(key(KeyCode::Tab));
@@ -645,6 +646,7 @@ fn palette_tunnel_and_test_reuse_existing_actions() {
                 local_port: "1080".into(),
                 ..Forward::default()
             }),
+            ..ConnectionInfo::default()
         },
     );
     m.key(key(KeyCode::F(2)));
@@ -809,7 +811,7 @@ fn adaptive_list_truncates_unicode_in_rendered_columns() {
         let output = screen(&mut m, width, height);
         assert_eq!(output.contains("Hostname"), columns >= 2, "{output}");
         assert_eq!(output.contains("Tags"), columns >= 3, "{output}");
-        assert_eq!(output.contains("Last Login"), columns >= 4, "{output}");
+        assert_eq!(output.contains("Last Attempt"), columns >= 4, "{output}");
     }
 }
 
@@ -1037,7 +1039,7 @@ fn details_narrow_view_hides_temporarily_and_offers_info_hint() {
     assert!(output.contains("i: info"));
     assert!(output.contains("Tab: table"));
     assert!(
-        output.contains("Last Login"),
+        output.contains("Last Attempt"),
         "narrow mode must restore full list width"
     );
     for (w, h) in [(80, 18), (28, 8), (1, 1)] {
@@ -1118,7 +1120,7 @@ fn details_split_preserves_list_row_capacity_and_high_contrast_selection() {
         assert!(output.contains(text), "missing {text}: {output}");
     }
     assert!(
-        !output.contains("Last Login"),
+        !output.contains("Last Attempt"),
         "columns must use the list pane width"
     );
     assert!(terminal
@@ -1203,6 +1205,7 @@ fn navigation_sort_and_visibility_preserve_selected_secondary_alias() {
             last_connect: Utc::now(),
             connect_count: 1,
             port_forwarding: None,
+            ..ConnectionInfo::default()
         },
     );
     for code in ['r', 'n', 's', 'H', 'H'] {
@@ -1862,4 +1865,102 @@ fn ssh_result_stays_readable_for_long_aliases_in_compact_terminals() {
     let mut m = model();
     m.resume_connection(&"long-alias".repeat(10), Ok(37), History::load(root.path()));
     assert!(screen(&mut m, 28, 8).contains("exit 37"));
+}
+
+#[test]
+fn effective_details_are_shared_pending_errors_and_raw_edits_remain_distinct() {
+    let mut m = model();
+    m.key(key(KeyCode::F(4)));
+    assert!(screen(&mut m, 170, 50).contains("Pending"));
+    let value = runtime::effective::EffectiveConfig::parse("hostname resolved.example\nuser inherited-user\nport 2207\nidentityfile /effective/key-one\nidentityfile /effective/key-two\nproxyjump bastion\nremotecommand uptime\nrequesttty force\n").unwrap();
+    let raw = m.all[0].clone();
+    m.effective.insert(raw.name.clone(), Ok(value));
+    let pane = screen(&mut m, 170, 50);
+    for expected in [
+        "Resolved via ssh -G",
+        "resolved.example",
+        "inherited-user",
+        "Port: 2207",
+        "/effective/key-one",
+        "/effective/key-two",
+        "ProxyJump: bastion",
+        "RemoteCommand: uptime",
+        "RequestTTY: force",
+        "Declared source",
+        "? Unknown",
+    ] {
+        assert!(pane.contains(expected), "missing {expected}: {pane}");
+    }
+    m.open_view(View::Info(raw.clone()));
+    let info = screen(&mut m, 170, 50);
+    assert!(info.contains("inherited-user"));
+    assert!(info.contains("RemoteCommand: uptime"));
+    assert_eq!(m.all[0], raw);
+    m.effective
+        .insert(raw.name.clone(), Err("resolver-fixture-failure".into()));
+    let info = screen(&mut m, 170, 50);
+    assert!(info.contains("resolver-fixture-failure"));
+    assert!(info.contains("showing declared values"));
+}
+
+#[test]
+fn inspection_refresh_clears_cache_and_resolves_all_aliases_without_ping() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config");
+    std::fs::write(
+        &path,
+        "Host first second\n HostName 127.0.0.1\nHost *\n User inherited\n",
+    )
+    .unwrap();
+    let mut m = Model::new(
+        config::load_hosts(&path).unwrap(),
+        AppConfig {
+            ping_on_start: false,
+            ..AppConfig::default()
+        },
+        BTreeMap::new(),
+        false,
+    );
+    let raw = m.all.clone();
+    let inspector = runtime::effective::Inspector::default();
+    let inspection = start_inspection(&inspector, &mut m, &path, false);
+    for result in inspection {
+        assert!(result.ping.is_none());
+        m.effective.insert(result.name, result.effective);
+    }
+    assert_eq!(m.effective.len(), 2);
+    assert!(m
+        .effective
+        .values()
+        .all(|r| r.as_ref().unwrap().user == "inherited"));
+    assert_eq!(m.all, raw);
+    let inspection = start_inspection(&inspector, &mut m, &path, false);
+    assert!(m.effective.is_empty());
+    drop(inspection);
+}
+
+#[test]
+fn diagnostic_symbols_text_latency_and_failure_are_color_independent() {
+    for status in [
+        PingStatus::Unknown,
+        PingStatus::Connecting,
+        PingStatus::Online,
+        PingStatus::Offline,
+    ] {
+        let host = Host::default();
+        let result = PingResult {
+            name: String::new(),
+            status,
+            duration: Duration::from_millis(123),
+            error: Some("cause-fixture".into()),
+        };
+        let text = details::content(&host, Some(&result), None, None)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains(status.label()));
+        assert!(text.contains("123 ms"));
+        assert!(text.contains("cause-fixture"));
+    }
 }

@@ -151,7 +151,7 @@ fn fake_ssh(dir: &Path) {
     use std::os::unix::fs::PermissionsExt;
     fs::create_dir_all(dir.join("bin")).unwrap();
     let script = dir.join("bin/ssh");
-    fs::write(&script,"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SSHM_TEST_ARGS\"\nprintf 'remote-output\\n'\nexit 37\n").unwrap();
+    fs::write(&script,"#!/bin/sh\nif [ \"$1\" = -G ]; then exec /usr/bin/ssh \"$@\"; fi\nprintf '%s\\n' \"$@\" > \"$SSHM_TEST_ARGS\"\nprintf 'remote-output\\n'\nexit 37\n").unwrap();
     fs::set_permissions(script, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
@@ -214,6 +214,11 @@ fn direct_ssh_preserves_args_exit_status_and_migrates_once() {
         serde_json::from_slice(&fs::read(f.config_root().join("sshm_history.json")).unwrap())
             .unwrap();
     assert_eq!(history["connections"]["prod"]["connect_count"], 5);
+    assert_eq!(
+        history["connections"]["prod"]["last_result"]["exit_code"],
+        37
+    );
+    assert!(history["connections"]["prod"]["last_successful_completion"].is_null());
     assert_eq!(
         history["connections"]["prod"]["port_forwarding"]["local_port"],
         "1080"
@@ -472,7 +477,7 @@ fn direct_ssh_keeps_streams_codes_and_signals_without_opening_ui() {
     for (ending, expected) in [("exit 0", 0), ("exit 37", 37), ("kill -TERM $$", 143)] {
         fs::write(
             &ssh,
-            format!("#!/bin/sh\nprintf 'remote-out\\n'\nprintf 'remote-err\\n' >&2\n{ending}\n"),
+            format!("#!/bin/sh\nif [ \"$1\" = -G ]; then exec /usr/bin/ssh \"$@\"; fi\nprintf 'remote-out\\n'\nprintf 'remote-err\\n' >&2\n{ending}\n"),
         )
         .unwrap();
         fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
@@ -486,6 +491,14 @@ fn direct_ssh_keeps_streams_codes_and_signals_without_opening_ui() {
         assert_eq!(out.status.code(), Some(expected));
         assert_eq!(out.stdout, b"remote-out\n");
         assert_eq!(out.stderr, b"remote-err\n");
+        let history: serde_json::Value =
+            serde_json::from_slice(&fs::read(f.config_root().join("sshm_history.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            history["connections"]["prod"]["last_result"]["exit_code"],
+            expected
+        );
+        assert!(history["connections"]["prod"]["last_successful_completion"].is_string());
     }
     fs::remove_file(&ssh).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_ssho"))
@@ -499,4 +512,94 @@ fn direct_ssh_keeps_streams_codes_and_signals_without_opening_ui() {
     assert!(out.stdout.is_empty());
     assert!(String::from_utf8_lossy(&out.stderr).contains("Error executing SSH command"));
     assert!(!out.stderr.contains(&0x1b));
+    let history: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.config_root().join("sshm_history.json")).unwrap())
+            .unwrap();
+    assert!(history["connections"]["prod"]["last_result"]["exit_code"].is_null());
+    assert!(
+        history["connections"]["prod"]["last_result"]["launch_error"]
+            .as_str()
+            .unwrap()
+            .contains("Error executing SSH")
+    );
+}
+
+#[test]
+fn effective_info_inherits_include_defaults_without_migrating() {
+    let f = Fixture::new();
+    let included = f.dir.path().join("defaults");
+    fs::write(&included, "Host *\n User inherited\n Port 2207\n IdentityFile /tmp/key-one\n IdentityFile /tmp/key-two\n RequestTTY force\n RemoteCommand uptime\n").unwrap();
+    fs::write(
+        f.dir.path().join(".ssh/config"),
+        format!(
+            "Host prod\n HostName 127.0.0.1\nInclude {}\n",
+            included.display()
+        ),
+    )
+    .unwrap();
+    let out = f.run(&["info", "prod"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["result"]["target"]["user"], "inherited");
+    assert_eq!(json["result"]["target"]["port"], 2207);
+    assert_eq!(
+        json["result"]["effective"]["identity_files"],
+        serde_json::json!(["/tmp/key-one", "/tmp/key-two"])
+    );
+    assert_eq!(json["result"]["effective"]["request_tty"], "force");
+    assert!(json["result"]["declared"]["user"].is_null());
+    assert!(!f.config_root().exists());
+}
+
+#[test]
+fn info_missing_resolver_has_explicit_error_without_migrating() {
+    let f = Fixture::new();
+    let out = Command::new(env!("CARGO_BIN_EXE_ssho"))
+        .args([
+            "-c",
+            f.dir.path().join(".ssh/config").to_str().unwrap(),
+            "info",
+            "prod",
+        ])
+        .env("HOME", f.dir.path())
+        .env("PATH", f.dir.path())
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["result"]["resolution"]["status"], "error");
+    assert!(json["result"]["resolution"]["error"]
+        .as_str()
+        .unwrap()
+        .contains("ssh -G"));
+    assert!(json["result"]["effective"].is_null());
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!f.config_root().exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn history_failure_does_not_replace_actual_ssh_exit_code() {
+    let f = Fixture::new();
+    fake_ssh(f.dir.path());
+    fs::create_dir_all(f.config_root()).unwrap();
+    fs::write(f.config_root().join("sshm_history.json"), "invalid JSON").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ssho"))
+        .args(["prod", "uptime"])
+        .env("HOME", f.dir.path())
+        .env("XDG_CONFIG_HOME", f.dir.path().join(".config"))
+        .env("PATH", f.dir.path().join("bin"))
+        .env("SSHM_TEST_ARGS", f.dir.path().join("args"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(37));
+    assert_eq!(out.stdout, b"remote-output\n");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Could not record SSH process result"));
+    assert_eq!(
+        fs::read_to_string(f.config_root().join("sshm_history.json")).unwrap(),
+        "invalid JSON"
+    );
 }

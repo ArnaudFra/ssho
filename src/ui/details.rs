@@ -62,8 +62,22 @@ pub(super) fn narrow_hint(width: u16, search_focus: bool) -> &'static str {
     }
 }
 
-/// Values are the parsed block; no effective SSH configuration is inferred here.
-pub(super) fn content(host: &Host, diagnostic: Option<&PingResult>) -> Vec<Line<'static>> {
+/// Shared by the pane and full Info view. Declared Host remains the edit target.
+pub(super) fn content(
+    declared: &Host,
+    diagnostic: Option<&PingResult>,
+    effective: Option<&std::result::Result<runtime::effective::EffectiveConfig, String>>,
+    history: Option<&ConnectionInfo>,
+) -> Vec<Line<'static>> {
+    let projected = effective
+        .and_then(|result| result.as_ref().ok())
+        .map(|value| value.host(declared));
+    let host = projected.as_ref().unwrap_or(declared);
+    let resolution = match effective {
+        None => "Pending (showing declared values)".into(),
+        Some(Ok(_)) => "Resolved via ssh -G (effective values)".into(),
+        Some(Err(error)) => format!("Error: {error} (showing declared values)"),
+    };
     let optional = |value: &str| {
         if value.is_empty() {
             "Not set".to_string()
@@ -78,21 +92,18 @@ pub(super) fn content(host: &Host, diagnostic: Option<&PingResult>) -> Vec<Line<
     identities.extend(host.extra_identities.iter().cloned());
     let diagnostic = diagnostic
         .map(|result| {
-            let status = match result.status {
-                PingStatus::Unknown => "Unknown",
-                PingStatus::Connecting => "Checking",
-                PingStatus::Online => "Online",
-                PingStatus::Offline => "Offline",
-            };
+            let status = result.status.label();
+            let latency = format!("{} ms", result.duration.as_millis());
             result
                 .error
                 .as_ref()
-                .map(|error| format!("{status}: {error}"))
-                .unwrap_or_else(|| format!("{status} ({} ms)", result.duration.as_millis()))
+                .map(|error| format!("{status} ({latency}): {error}"))
+                .unwrap_or_else(|| format!("{status} ({latency})"))
         })
-        .unwrap_or_else(|| "Not checked".into());
-    let sections = [
+        .unwrap_or_else(|| "? Unknown (not checked)".into());
+    let mut sections = vec![
         ("Host", host.name.clone()),
+        ("Configuration", resolution),
         ("Hostname/IP", optional(&host.hostname)),
         ("User", optional(&host.user)),
         ("Port", optional(&host.port)),
@@ -100,16 +111,53 @@ pub(super) fn content(host: &Host, diagnostic: Option<&PingResult>) -> Vec<Line<
         ("ProxyJump", optional(&host.proxy_jump)),
         ("ProxyCommand", optional(&host.proxy_command)),
         (
-            "Source",
+            "Declared source",
             format!("{}:{}", host.source_file.display(), host.line_number),
         ),
+        (
+            "Declared target",
+            format!(
+                "hostname={} user={} port={}",
+                optional(&declared.hostname),
+                optional(&declared.user),
+                optional(&declared.port)
+            ),
+        ),
         ("Diagnostic", diagnostic),
-        ("SSH Options", optional(&host.options)),
+        ("Declared SSH Options", optional(&declared.options)),
         ("RemoteCommand", optional(&host.remote_command)),
         ("RequestTTY", optional(&host.request_tty)),
         ("Aliases", optional(&host.aliases.join(", "))),
         ("Tags", optional(&host.tags.join(", "))),
     ];
+    if let Some(history) = history {
+        sections.push((
+            "Last attempt",
+            format!(
+                "{} ({} attempts)",
+                history.last_connect, history.connect_count
+            ),
+        ));
+        if let Some(result) = &history.last_result {
+            sections.push((
+                "Process result",
+                format!(
+                    "{}: {}",
+                    result.completed_at,
+                    result
+                        .exit_code
+                        .map(|code| format!("SSH exit {code}"))
+                        .unwrap_or_else(|| result
+                            .launch_error
+                            .clone()
+                            .unwrap_or_else(|| "unknown".into()))
+                ),
+            ));
+        }
+        if let Some(time) = history.last_successful_completion {
+            sections.push(("Last exit 0 completion", time.to_string()));
+        }
+    }
     sections
         .into_iter()
         .flat_map(|(label, value)| {
@@ -191,7 +239,14 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model, area: Rect) {
     }
     let lines = host
         .as_ref()
-        .map(|host| content(host, m.statuses.get(&host.name)))
+        .map(|host| {
+            content(
+                host,
+                m.statuses.get(&host.name),
+                m.effective.get(&host.name),
+                m.history.get(&host.name),
+            )
+        })
         .unwrap_or_else(|| vec![Line::from("No selected host")]);
     m.details.page = usize::from(parts[0].height).max(1);
     m.details.max_scroll = render_rows(f, parts[0], lines, &mut m.details.scroll);

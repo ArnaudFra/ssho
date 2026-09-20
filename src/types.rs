@@ -115,13 +115,25 @@ impl Forward {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ConnectionInfo {
     pub host_name: String,
     pub last_connect: DateTime<Utc>,
     pub connect_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_result: Option<ConnectionResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_successful_completion: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub port_forwarding: Option<Forward>,
+}
+
+/// Process completion is not a claim about authentication or tunnel establishment.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ConnectionResult {
+    pub completed_at: DateTime<Utc>,
+    pub exit_code: Option<i32>,
+    pub launch_error: Option<String>,
 }
 
 #[cfg(test)]

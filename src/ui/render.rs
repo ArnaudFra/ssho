@@ -142,7 +142,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     f.render_widget(
         // Reuse the existing title row so the table's height and offset stay stable.
         Paragraph::new(if m.connection_result.is_empty() {
-            "SSHO • F4: details"
+            "SSHO • F4: details • ? Unknown  ~ Connecting  + Online  ! Offline"
         } else {
             &m.connection_result
         })
@@ -244,9 +244,9 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             "Hostname",
             "Tags",
             if m.recent {
-                "Last Login ↓"
+                "Last Attempt ↓"
             } else {
-                "Last Login"
+                "Last Attempt"
             },
         ]
         .into_iter()
@@ -256,10 +256,10 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     let rows = m.visible.iter().enumerate().map(|(position, &index)| {
         let h = &m.all[index];
         let (status, color) = match m.statuses.get(&h.name).map(|r| &r.status) {
-            Some(PingStatus::Online) => ("●", Color::Green),
-            Some(PingStatus::Offline) => ("●", Color::Red),
-            Some(PingStatus::Connecting) => ("●", Color::Yellow),
-            _ => ("●", GRAY),
+            Some(PingStatus::Online) => ("+", Color::Green),
+            Some(PingStatus::Offline) => ("!", Color::Red),
+            Some(PingStatus::Connecting) => ("~", Color::Yellow),
+            _ => ("?", GRAY),
         };
         let name = Cell::from(Line::from(vec![
             Span::styled(
@@ -286,7 +286,11 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         let cells = vec![
             name,
             Cell::from(ellipsize(
-                &h.hostname,
+                m.effective
+                    .get(&h.name)
+                    .and_then(|result| result.as_ref().ok())
+                    .map(|value| value.hostname.as_str())
+                    .unwrap_or(&h.hostname),
                 widths.get(1).copied().unwrap_or(0) as usize,
             )),
             Cell::from(ellipsize(
@@ -970,7 +974,12 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     let inner = border.inner(area);
     f.render_widget(border, area);
     let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(4)]).split(inner);
-    let lines = details::content(h, m.statuses.get(&h.name));
+    let lines = details::content(
+        h,
+        m.statuses.get(&h.name),
+        m.effective.get(&h.name),
+        m.history.get(&h.name),
+    );
     m.page = usize::from(parts[0].height).max(1);
     details::render_rows(f, parts[0], lines, &mut m.scroll);
     f.render_widget(

@@ -66,6 +66,17 @@ with tempfile.TemporaryDirectory(prefix="ssho-reference-") as directory:
         for args in commands:
             expected = result(reference, config, args, env)
             actual = result(rust, config, args, env)
+            if args[0] == "info" and actual[0] == 0:
+                # Effective resolution intentionally changes targets; retain strict declared parity.
+                payload = actual[1]["result"]
+                effective = payload.pop("effective")
+                resolution = payload.pop("resolution")
+                declared = payload.pop("declared")
+                assert resolution == {"status": "resolved", "error": None}
+                assert payload["target"]["hostname"] == effective["hostname"]
+                assert payload["target"]["user"] == effective["user"]
+                assert payload["target"]["port"] == int(effective["port"])
+                payload["target"].update({key: declared[key] for key in ("hostname", "user", "port")})
             assert actual == expected, f"{origin} {args}\nexpected: {expected!r}\nactual: {actual!r}\nfixture:\n{text}"
             checks += 1
 

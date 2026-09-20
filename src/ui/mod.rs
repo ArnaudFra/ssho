@@ -82,6 +82,7 @@ struct Model {
     preferences: AppConfig,
     history: BTreeMap<String, ConnectionInfo>,
     statuses: BTreeMap<String, PingResult>,
+    effective: BTreeMap<String, std::result::Result<runtime::effective::EffectiveConfig, String>>,
     error: String,
     connection_result: String,
     update: Option<UpdateInfo>,
@@ -117,6 +118,7 @@ impl Model {
             preferences,
             history,
             statuses: BTreeMap::new(),
+            effective: BTreeMap::new(),
             error: String::new(),
             connection_result: String::new(),
             update: None,
@@ -610,25 +612,31 @@ impl Drop for SshSignals {
         }
     }
 }
-fn start_pings(m: &mut Model, config: &Path) -> Receiver<PingResult> {
-    let hosts: Vec<_> = m
-        .all
-        .iter()
-        .filter(|h| m.show_hidden || !h.hidden())
-        .cloned()
-        .collect();
+fn start_inspection(
+    inspector: &runtime::effective::Inspector,
+    m: &mut Model,
+    config: &Path,
+    probe: bool,
+) -> Receiver<runtime::effective::Inspection> {
+    m.effective.clear();
+    m.statuses.clear();
+    let hosts = m.all.clone();
     for h in &hosts {
         m.statuses.insert(
             h.name.clone(),
             PingResult {
                 name: h.name.clone(),
-                status: PingStatus::Connecting,
+                status: if probe {
+                    PingStatus::Connecting
+                } else {
+                    PingStatus::Unknown
+                },
                 duration: Duration::ZERO,
                 error: None,
             },
         );
     }
-    runtime::check_hosts(hosts, config.to_path_buf())
+    inspector.inspect(hosts, config.to_path_buf(), probe)
 }
 fn select_files(m: &mut Model, config: &Path, host: Option<Host>, seed: String) -> Result<()> {
     let mut files = config::config_files(config)?;
@@ -684,11 +692,9 @@ pub fn run(
             String::new(),
         )?,
     }
-    let mut ping = if !standalone && m.preferences.ping_on_start {
-        Some(start_pings(&mut m, config))
-    } else {
-        None
-    };
+    let probe = !standalone && m.preferences.ping_on_start;
+    let inspector = runtime::effective::Inspector::default();
+    let mut inspection = start_inspection(&inspector, &mut m, config, probe);
     let updates = if !standalone && m.preferences.check_for_updates && !no_update_check {
         Some(version::check_updates())
     } else {
@@ -699,10 +705,11 @@ pub fn run(
         Terminal::new(CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;
     loop {
-        if let Some(rx) = &ping {
-            while let Ok(result) = rx.try_recv() {
-                m.statuses.insert(result.name.clone(), result);
+        while let Ok(result) = inspection.try_recv() {
+            if let Some(ping) = result.ping {
+                m.statuses.insert(result.name.clone(), ping);
             }
+            m.effective.insert(result.name, result.effective);
         }
         if let Some(rx) = &updates {
             while let Ok(update) = rx.try_recv() {
@@ -744,7 +751,7 @@ pub fn run(
                 Ok(false)
             }
             Action::Ping => {
-                ping = Some(start_pings(&mut m, config));
+                inspection = start_inspection(&inspector, &mut m, config, true);
                 Ok(false)
             }
             Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
@@ -767,6 +774,7 @@ pub fn run(
                     return Ok(0);
                 }
                 m.complete_mutation(config::load_hosts(config)?, &completed_action);
+                inspection = start_inspection(&inspector, &mut m, config, false);
             }
             Ok(false) => {}
             Err(e) => match &mut m.view {
