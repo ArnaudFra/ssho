@@ -318,6 +318,7 @@ impl AppConfig {
 }
 
 mod history;
+pub mod metadata;
 pub use history::History;
 
 fn merge_value(target: &mut Value, incoming: Value) {

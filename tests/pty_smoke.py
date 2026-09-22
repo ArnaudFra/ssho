@@ -335,18 +335,84 @@ sys.exit(int(mode))
     session.close()
     print("PASS F5 external Include add/edit/remove, preserved search, Info refresh/removal, read failure and fresh native values")
 
-    # The initial empty-list flow must return to the browser after successful creation.
-    empty = home/"empty-config"
-    empty.write_text("")
-    session = Session(env,["-c",str(empty)])
-    session.expect("Would you like to add")
-    session.send(b"y\n")
-    session.expect("Add SSH Host Configuration")
-    session.send(b"first\tfirst.example.org\x13")
+    # App metadata is independent of SSH documents and survives UI restarts.
+    notes_root = home/"notes-config"
+    notes_root.write_text("Host note-a\n HostName 127.0.0.1\nHost note-b\n HostName 127.0.0.2\n")
+    notes_before = notes_root.read_bytes()
+    session = Session(env,["-c",str(notes_root)])
     session.expect("Last Attempt")
-    session.send(b"\tq")
+    session.send(b"\t\x1b[B*")
+    session.send(b"N")
+    session.expect("Personal note")
+    session.expect("Host: note-b")
+    session.send(b"Saved note\rsecond line\x13")
+    session.expect("Last Attempt")
+    session.send(b"i")
+    session.expect("Personal note: Saved note")
+    session.expect("second line")
+    session.send(b"\x1b")
+    session.send(b"\x1bOQ" + b"\x1b[B"*9 + b"\r")
+    session.expect("favorites only")
+    assert "note-a" not in session.screen.text()
+    session.send(b"*")
+    session.expect("No favorite matches")
+    session.send(b"\x1bOQ" + b"\x1b[B"*9 + b"\r")
+    session.expect("note-a")
+    session.send(b"q")
     session.close()
-    print("PASS first host creation returns to browser")
+    metadata_file = home/".config/ssho/metadata.json"
+    metadata = json.loads(metadata_file.read_text())
+    entry = metadata["configs"][str(notes_root.resolve())]["hosts"]["note-b"]
+    assert entry == {"favorite":False,"note":"Saved note\nsecond line"}, entry
+    session = Session(env,["-c",str(notes_root)])
+    session.expect("Last Attempt")
+    session.send(b"note-b\tN")
+    session.expect("Saved note")
+    session.send(b" draft\x1b")
+    session.expect("Discard changes?")
+    assert b"\x1b[?25l" in session.output[session.mark:], "note discard modal must hide native caret"
+    session.send(b"\x1b")
+    session.expect("draft")
+    assert b"\x1b[?25h" in session.output[session.mark:], "resuming note must restore native caret"
+    committed = metadata_file.read_bytes()
+    metadata_file.unlink()
+    metadata_file.mkdir()
+    session.send(b"\x13")
+    session.expect("Error:")
+    session.expect("draft")
+    metadata_file.rmdir()
+    metadata_file.write_bytes(committed)
+    session.send(b"\x13")
+    session.expect("Last Attempt")
+    session.send(b"q")
+    session.close()
+    assert notes_root.read_bytes() == notes_before
+    assert json.loads(metadata_file.read_text())["configs"][str(notes_root.resolve())]["hosts"]["note-b"]["note"].endswith(" draft")
+    print("PASS favorite ordering/filter empty recovery, persistent multiline notes, discard caret and failed-save draft; SSH config untouched")
+
+    # Both empty existing and absent roots return to the browser after creation.
+    for missing in (False, True):
+        empty = home/("missing-config" if missing else "empty-config")
+        if missing:
+            assert not empty.exists()
+        else:
+            empty.write_text("")
+        session = Session(env,["-c",str(empty)])
+        session.expect("Would you like to add")
+        session.send(b"y\n")
+        session.expect("Add SSH Host Configuration")
+        session.send(b"first\tfirst.example.org\x13")
+        session.expect("Last Attempt")
+        session.send(b"\tq")
+        session.close()
+    standalone_missing = home/"standalone-missing-config"
+    assert not standalone_missing.exists()
+    session = Session(env,["-c",str(standalone_missing),"add"])
+    session.expect("Add SSH Host Configuration")
+    session.send(b"standalone\tstandalone.example.org\x13")
+    session.close()
+    assert "Host standalone" in standalone_missing.read_text()
+    print("PASS first host creation from empty/missing roots returns to browser; standalone Add accepts missing root")
 
     cancelled = home/"empty-cancel-config"
     cancelled.write_text("")

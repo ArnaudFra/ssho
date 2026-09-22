@@ -8,10 +8,13 @@ pub(super) enum PaletteAction {
     Help,
     Details,
     Reload,
+    Favorite,
+    Note,
+    FavoritesOnly,
 }
 
 impl PaletteAction {
-    pub(super) const ALL: [Self; 7] = [
+    pub(super) const ALL: [Self; 10] = [
         Self::Add,
         Self::Edit,
         Self::Tunnel,
@@ -19,6 +22,9 @@ impl PaletteAction {
         Self::Help,
         Self::Details,
         Self::Reload,
+        Self::Favorite,
+        Self::Note,
+        Self::FavoritesOnly,
     ];
 
     pub(super) fn label(self) -> &'static str {
@@ -30,10 +36,17 @@ impl PaletteAction {
             Self::Help => "Aide",
             Self::Details => "Détails",
             Self::Reload => "Recharger",
+            Self::Favorite => "Favori *",
+            Self::Note => "Note N",
+            Self::FavoritesOnly => "Favoris seuls",
         }
     }
 
     pub(super) fn enabled(self, has_host: bool) -> bool {
-        has_host || matches!(self, Self::Add | Self::Help | Self::Details | Self::Reload)
+        has_host
+            || matches!(
+                self,
+                Self::Add | Self::Help | Self::Details | Self::Reload | Self::FavoritesOnly
+            )
     }
 }

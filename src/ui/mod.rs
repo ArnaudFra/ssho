@@ -2,13 +2,17 @@
 mod actions;
 mod details;
 mod forms;
+mod notes;
 mod render;
 #[cfg(test)]
 mod tests;
 use crate::{
     config,
     runtime::{self, PingResult, PingStatus},
-    storage::{AppConfig, AppPaths, History},
+    storage::{
+        metadata::{HostMetadata, Metadata},
+        AppConfig, AppPaths, History,
+    },
     types::{ConnectionInfo, Forward, Host},
     version::{self, UpdateInfo},
 };
@@ -45,6 +49,7 @@ enum View {
     },
     Host(Box<HostForm>),
     Info(Host),
+    Note(notes::Editor),
     Help,
     Forward(ForwardForm),
     Files {
@@ -66,6 +71,8 @@ enum Action {
     MoveTo(Host, PathBuf),
     Ping,
     Reload,
+    Favorite(Host),
+    SaveNote(String, String),
 }
 struct Model {
     all: Vec<Host>,
@@ -76,6 +83,8 @@ struct Model {
     search_focus: bool,
     show_hidden: bool,
     recent: bool,
+    favorites_only: bool,
+    metadata: BTreeMap<String, HostMetadata>,
     delete: Option<Host>,
     discard: bool,
     view: View,
@@ -112,6 +121,8 @@ impl Model {
             search_focus,
             show_hidden: false,
             recent: false,
+            favorites_only: false,
+            metadata: BTreeMap::new(),
             delete: None,
             discard: false,
             view: View::List,
@@ -129,6 +140,15 @@ impl Model {
         };
         m.filter(false);
         m
+    }
+    fn is_favorite(&self, name: &str) -> bool {
+        self.metadata.get(name).is_some_and(|entry| entry.favorite)
+    }
+    fn note(&self, name: &str) -> &str {
+        self.metadata
+            .get(name)
+            .map(|entry| entry.note.as_str())
+            .unwrap_or("")
     }
     fn selected_host(&self) -> Option<Host> {
         self.visible
@@ -148,22 +168,33 @@ impl Model {
             .all
             .iter()
             .enumerate()
-            .filter(|(_, h)| (self.show_hidden || !h.hidden()) && h.matches(&self.query.value))
+            .filter(|(_, h)| {
+                (self.show_hidden || !h.hidden())
+                    && h.matches(&self.query.value)
+                    && (!self.favorites_only || self.is_favorite(&h.name))
+            })
             .map(|(i, _)| i)
             .collect();
+        let metadata = &self.metadata;
         self.visible.sort_by(|&a, &b| {
             let a = &self.all[a];
             let b = &self.all[b];
             let names = || a.name.to_lowercase().cmp(&b.name.to_lowercase());
-            if self.recent {
-                self.history
-                    .get(&b.name)
-                    .map(|h| h.last_connect)
-                    .cmp(&self.history.get(&a.name).map(|h| h.last_connect))
-                    .then_with(names)
-            } else {
-                names()
-            }
+            let favorites = metadata
+                .get(&b.name)
+                .is_some_and(|entry| entry.favorite)
+                .cmp(&metadata.get(&a.name).is_some_and(|entry| entry.favorite));
+            favorites.then_with(|| {
+                if self.recent {
+                    self.history
+                        .get(&b.name)
+                        .map(|h| h.last_connect)
+                        .cmp(&self.history.get(&a.name).map(|h| h.last_connect))
+                        .then_with(names)
+                } else {
+                    names()
+                }
+            })
         });
         self.selected = identity
             .and_then(|host| {
@@ -186,6 +217,9 @@ impl Model {
             }
             if host.hidden() {
                 self.show_hidden = true;
+            }
+            if self.favorites_only && !self.is_favorite(&host.name) {
+                self.favorites_only = false;
             }
         }
         self.all = all;
@@ -272,6 +306,22 @@ impl Model {
             return Action::None;
         }
         match &mut self.view {
+            View::Note(editor) => {
+                return match editor.key(k) {
+                    FormEvent::Cancel => {
+                        if editor.dirty() {
+                            self.discard = true;
+                        } else {
+                            self.back();
+                        }
+                        Action::None
+                    }
+                    FormEvent::Submit => {
+                        Action::SaveNote(editor.host.clone(), editor.input.value.clone())
+                    }
+                    FormEvent::None => Action::None,
+                };
+            }
             View::Host(f) => {
                 return match f.key(k) {
                     FormEvent::Cancel => {
@@ -455,6 +505,8 @@ impl Model {
             KeyCode::PageUp => self.navigate(-(self.page as isize)),
             KeyCode::Home => self.selected = 0,
             KeyCode::End => self.selected = self.visible.len().saturating_sub(1),
+            KeyCode::Char('*') => return self.activate_action(PaletteAction::Favorite),
+            KeyCode::Char('N') => return self.activate_action(PaletteAction::Note),
             KeyCode::Char('a') => return self.activate_action(PaletteAction::Add),
             KeyCode::Char('e') => return self.activate_action(PaletteAction::Edit),
             KeyCode::Char('i') => {
@@ -493,6 +545,23 @@ impl Model {
     }
     fn activate_action(&mut self, action: PaletteAction) -> Action {
         match action {
+            PaletteAction::Favorite => {
+                if let Some(host) = self.selected_host() {
+                    return Action::Favorite(host);
+                }
+            }
+            PaletteAction::Note => {
+                if let Some(host) = self.selected_host() {
+                    self.open_view(View::Note(notes::Editor::new(
+                        host.name.clone(),
+                        self.note(&host.name),
+                    )));
+                }
+            }
+            PaletteAction::FavoritesOnly => {
+                self.favorites_only = !self.favorites_only;
+                self.filter(false);
+            }
             PaletteAction::Add => return Action::Add(String::new()),
             PaletteAction::Edit => {
                 if let Some(host) = self.selected_host() {
@@ -527,6 +596,40 @@ impl Model {
             _ => {}
         }
     }
+}
+/// SSH writes have already committed: always refresh to the saved host, even if
+/// the separate metadata migration fails. Originals remain available for recovery.
+fn complete_saved_mutation(
+    m: &mut Model,
+    all: Vec<Host>,
+    action: &Action,
+    metadata: &mut Metadata,
+) {
+    let migration = if let Action::Save(Some(original), replacement, _) = action {
+        metadata.rename_hosts(original, replacement)
+    } else {
+        Ok(())
+    };
+    m.metadata = metadata.hosts().clone();
+    m.complete_mutation(all, action);
+    if let Err(error) = migration {
+        m.error = format!("SSH saved; metadata rename failed: {error:#}");
+    }
+}
+/// Commit storage first; only successful writes reorder favorites or close the draft.
+fn apply_metadata_action(m: &mut Model, metadata: &mut Metadata, action: &Action) -> Result<()> {
+    match action {
+        Action::Favorite(host) => metadata.set_favorite(&host.name, !m.is_favorite(&host.name))?,
+        Action::SaveNote(name, note) => metadata.set_note(name, note)?,
+        _ => return Ok(()),
+    }
+    m.metadata = metadata.hosts().clone();
+    m.filter(false);
+    if matches!(action, Action::SaveNote(..)) {
+        m.back();
+    }
+    m.error.clear();
+    Ok(())
 }
 fn key_name(k: KeyEvent) -> String {
     let base = match k.code {
@@ -708,6 +811,7 @@ pub fn run(
     let preferences = AppConfig::load(&paths.root)?;
     let history = History::load(&paths.root)?;
     let hosts = config::load_hosts(config)?;
+    let mut metadata = Metadata::load(&paths.root, config)?;
     let standalone = !matches!(initial, InitialView::List);
     let mut m = Model::new(
         hosts,
@@ -715,6 +819,8 @@ pub fn run(
         history.connections.clone(),
         force_search,
     );
+    m.metadata = metadata.hosts().clone();
+    m.filter(false);
     match initial {
         InitialView::List => {}
         InitialView::Add(seed) => select_files(&mut m, config, None, seed)?,
@@ -771,6 +877,9 @@ pub fn run(
         }
         let completed_action = action.clone();
         let operation: Result<bool> = match action {
+            Action::Favorite(_) | Action::SaveNote(..) => {
+                apply_metadata_action(&mut m, &mut metadata, &action).map(|_| false)
+            }
             Action::None => Ok(false),
             Action::Quit => return Ok(0),
             Action::Connect(name, forward) => {
@@ -811,15 +920,28 @@ pub fn run(
         match operation {
             Ok(true) => {
                 if standalone {
+                    if let Action::Save(Some(original), replacement, _) = &completed_action {
+                        metadata
+                            .rename_hosts(original, replacement)
+                            .map_err(|error| {
+                                anyhow::anyhow!("SSH saved; metadata rename failed: {error:#}")
+                            })?;
+                    }
                     return Ok(0);
                 }
-                m.complete_mutation(config::load_hosts(config)?, &completed_action);
+                complete_saved_mutation(
+                    &mut m,
+                    config::load_hosts(config)?,
+                    &completed_action,
+                    &mut metadata,
+                );
                 inspection = start_inspection(&inspector, &mut m, config, false);
             }
             Ok(false) => {}
             Err(e) => match &mut m.view {
                 View::Host(f) => f.error = e.to_string(),
                 View::Forward(f) => f.error = e.to_string(),
+                View::Note(editor) => editor.error = format!("{e:#}"),
                 _ => {
                     m.error = format!("{e:#}");
                     m.delete = None;

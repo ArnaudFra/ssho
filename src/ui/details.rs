@@ -68,6 +68,7 @@ pub(super) fn content(
     diagnostic: Option<&PingResult>,
     effective: Option<&std::result::Result<runtime::effective::EffectiveConfig, String>>,
     history: Option<&ConnectionInfo>,
+    note: &str,
 ) -> Vec<Line<'static>> {
     let projected = effective
         .and_then(|result| result.as_ref().ok())
@@ -103,6 +104,7 @@ pub(super) fn content(
         .unwrap_or_else(|| "? Unknown (not checked)".into());
     let mut sections = vec![
         ("Host", host.name.clone()),
+        ("Personal note", optional(note)),
         ("Configuration", resolution),
         ("Hostname/IP", optional(&host.hostname)),
         ("User", optional(&host.user)),
@@ -245,6 +247,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model, area: Rect) {
                 m.statuses.get(&host.name),
                 m.effective.get(&host.name),
                 m.history.get(&host.name),
+                m.note(&host.name),
             )
         })
         .unwrap_or_else(|| vec![Line::from("No selected host")]);

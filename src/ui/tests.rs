@@ -1,6 +1,7 @@
 use super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{backend::TestBackend, Terminal};
+use std::fs;
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -1954,7 +1955,7 @@ fn diagnostic_symbols_text_latency_and_failure_are_color_independent() {
             duration: Duration::from_millis(123),
             error: Some("cause-fixture".into()),
         };
-        let text = details::content(&host, Some(&result), None, None)
+        let text = details::content(&host, Some(&result), None, None, "")
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
@@ -2381,4 +2382,364 @@ fn manual_reload_allows_unmatched_literal_and_wildcard_includes() {
     drop(reload_hosts(&inspector, &mut m, &root).unwrap());
     assert_eq!(m.all.len(), 1);
     assert_eq!(m.all[0].name, "keep");
+}
+
+#[test]
+fn favorites_notes_shortcuts_and_discard_are_available_without_ssh_edits() {
+    let mut m = model();
+    m.search_focus = false;
+    assert_ne!(m.key(key(KeyCode::Char('*'))), Action::None);
+    m.key(key(KeyCode::Char('N')));
+    assert!(!matches!(m.view, View::List));
+    typing(&mut m, "personal note");
+    m.key(key(KeyCode::Esc));
+    assert!(m.discard);
+    m.key(key(KeyCode::Esc));
+    assert!(!m.discard);
+    assert_ne!(m.key(ctrl('s')), Action::None);
+}
+
+#[test]
+fn favorites_commit_before_reordering_preserve_identity_and_filter_empty_palette() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut storage = Metadata::load(temp.path(), &temp.path().join("config")).unwrap();
+    let mut m = model();
+    m.search_focus = false;
+    m.selected = 1;
+    let beta = m.selected_host().unwrap();
+    let action = m.key(key(KeyCode::Char('*')));
+    assert!(!m.is_favorite("beta"));
+    apply_metadata_action(&mut m, &mut storage, &action).unwrap();
+    assert!(m.is_favorite("beta"));
+    assert_eq!(m.selected_host(), Some(beta));
+    assert_eq!(m.visible[0], 1);
+    m.recent = true;
+    m.filter(false);
+    assert_eq!(m.visible[0], 1);
+    m.activate_action(PaletteAction::FavoritesOnly);
+    assert_eq!(m.visible.len(), 1);
+    let action = m.key(key(KeyCode::Char('*')));
+    apply_metadata_action(&mut m, &mut storage, &action).unwrap();
+    assert!(m.visible.is_empty());
+    m.key(key(KeyCode::F(2)));
+    for _ in 0..9 {
+        m.key(key(KeyCode::Down));
+    }
+    assert!(screen(&mut m, 80, 24).contains("Favoris seuls"));
+    m.key(key(KeyCode::Enter));
+    assert!(!m.favorites_only);
+    assert_eq!(m.visible.len(), 2);
+    // A failed favorite write leaves authoritative storage/model/selection intact.
+    fs::remove_file(temp.path().join("metadata.json")).unwrap();
+    fs::create_dir(temp.path().join("metadata.json")).unwrap();
+    let selected = m.selected_host();
+    let action = m.key(key(KeyCode::Char('*')));
+    assert!(apply_metadata_action(&mut m, &mut storage, &action).is_err());
+    assert_eq!(m.selected_host(), selected);
+    assert!(!m.is_favorite(&selected.unwrap().name));
+}
+
+#[test]
+fn notes_cancel_failed_save_success_and_shared_details() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config");
+    fs::write(&config, "Host alpha\n HostName a.example\n").unwrap();
+    let before = fs::read(&config).unwrap();
+    let mut storage = Metadata::load(temp.path(), &config).unwrap();
+    let mut m = model();
+    m.search_focus = false;
+    m.key(key(KeyCode::Char('N')));
+    typing(&mut m, "discard me");
+    m.key(key(KeyCode::Esc));
+    assert!(m.discard);
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(m.view, View::List));
+    assert!(!temp.path().join("metadata.json").exists());
+    m.key(key(KeyCode::Char('N')));
+    typing(&mut m, "personal 界");
+    m.key(key(KeyCode::Enter));
+    typing(&mut m, "second line");
+    let action = m.key(ctrl('s'));
+    fs::create_dir(temp.path().join("metadata.json")).unwrap();
+    assert!(apply_metadata_action(&mut m, &mut storage, &action).is_err());
+    assert!(matches!(&m.view,View::Note(editor) if editor.input.value=="personal 界\nsecond line"));
+    assert_eq!(m.note("alpha"), "");
+    fs::remove_dir(temp.path().join("metadata.json")).unwrap();
+    apply_metadata_action(&mut m, &mut storage, &action).unwrap();
+    assert!(matches!(m.view, View::List));
+    assert_eq!(
+        Metadata::load(temp.path(), &config).unwrap().hosts()["alpha"].note,
+        "personal 界\nsecond line"
+    );
+    m.key(key(KeyCode::Char('i')));
+    assert!(screen(&mut m, 100, 30).contains("Personal note: personal 界"));
+    m.key(key(KeyCode::Esc));
+    m.details.shown = true;
+    assert!(screen(&mut m, 120, 30).contains("Personal note: personal 界"));
+    assert_eq!(fs::read(config).unwrap(), before);
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+}
+
+#[test]
+fn notes_vertical_navigation_and_line_home_end() {
+    let mut editor = notes::Editor::new("alpha".into(), "first\nsecond");
+    editor.key(key(KeyCode::Up));
+    assert_eq!(editor.input.cursor, 5);
+    editor.key(key(KeyCode::Home));
+    assert_eq!(editor.input.cursor, 0);
+    editor.key(key(KeyCode::Down));
+    assert_eq!(editor.input.cursor, 6);
+    editor.key(key(KeyCode::End));
+    assert_eq!(editor.input.cursor, 12);
+}
+
+#[test]
+fn notes_rename_committed_ssh_refreshes_ui_on_metadata_collision() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config");
+    fs::write(&config, "Host old\n HostName a.example\n").unwrap();
+    let mut storage = Metadata::load(temp.path(), &config).unwrap();
+    storage.set_note("old", "recover me").unwrap();
+    storage.set_note("new", "keep me").unwrap();
+    let old = config::find_host(&config, "old").unwrap();
+    let mut replacement = old.clone();
+    replacement.name = "new".into();
+    replacement.aliases.clear();
+    let mut m = Model::new(
+        vec![old.clone()],
+        AppConfig::default(),
+        BTreeMap::new(),
+        false,
+    );
+    m.view = View::Host(Box::new(HostForm::edit(old.clone())));
+    let action = Action::Save(
+        Some(old.clone()),
+        Box::new(replacement.clone()),
+        config.clone(),
+    );
+    config::update_host(&old, &replacement, temp.path()).unwrap();
+    complete_saved_mutation(
+        &mut m,
+        config::load_hosts(&config).unwrap(),
+        &action,
+        &mut storage,
+    );
+    assert!(matches!(m.view, View::List));
+    assert_eq!(m.selected_host().unwrap().name, "new");
+    assert!(m.error.contains("SSH saved; metadata rename failed"));
+    assert!(m.error.contains("occupied"));
+    assert_eq!(storage.hosts()["old"].note, "recover me");
+    assert_eq!(storage.hosts()["new"].note, "keep me");
+}
+
+#[test]
+fn notes_ui_rename_transfers_ordinary_and_secondary_alias_metadata() {
+    for secondary in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        fs::write(
+            &config,
+            if secondary {
+                "Host primary old\n HostName a.example\n"
+            } else {
+                "Host old\n HostName a.example\n"
+            },
+        )
+        .unwrap();
+        let mut storage = Metadata::load(temp.path(), &config).unwrap();
+        storage.set_note("old", "personal note").unwrap();
+        storage.set_favorite("old", true).unwrap();
+        if secondary {
+            storage.set_note("primary", "other note").unwrap();
+        }
+        let old = config::find_host(&config, "old").unwrap();
+        let mut form = HostForm::edit(old.clone());
+        form.names[usize::from(secondary)].set("renamed");
+        let replacement = form.host().unwrap();
+        let mut m = Model::new(
+            config::load_hosts(&config).unwrap(),
+            AppConfig::default(),
+            BTreeMap::new(),
+            false,
+        );
+        m.metadata = storage.hosts().clone();
+        m.filter(false);
+        let action = Action::Save(
+            Some(old.clone()),
+            Box::new(replacement.clone()),
+            config.clone(),
+        );
+        config::update_host(&old, &replacement, temp.path()).unwrap();
+        complete_saved_mutation(
+            &mut m,
+            config::load_hosts(&config).unwrap(),
+            &action,
+            &mut storage,
+        );
+        assert!(m.error.is_empty());
+        assert_eq!(storage.hosts()["renamed"].note, "personal note");
+        assert!(storage.hosts()["renamed"].favorite);
+        assert!(!storage.hosts().contains_key("old"));
+        assert_eq!(m.all[m.visible[0]].name, "renamed");
+        assert_eq!(m.selected_host().unwrap().name, replacement.name);
+        if secondary {
+            assert_eq!(storage.hosts()["primary"].note, "other note");
+        }
+    }
+}
+
+#[test]
+fn notes_editor_draws_unicode_and_long_lines_at_compact_sizes() {
+    use ratatui::backend::Backend;
+    let mut m = model();
+    m.search_focus = false;
+    m.key(key(KeyCode::Char('N')));
+    typing(&mut m, "界e\u{301}👩‍💻".repeat(15).as_str());
+    m.key(key(KeyCode::Enter));
+    typing(&mut m, "tail");
+    for (w, h) in [(100, 30), (40, 10), (10, 5), (1, 1)] {
+        screen(&mut m, w, h);
+    }
+    let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+    terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+    assert!(cursor.x < 40 && cursor.y < 10);
+    m.key(key(KeyCode::Up));
+    terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    let cursor = terminal.backend_mut().get_cursor_position().unwrap();
+    assert!(cursor.x < 40 && cursor.y < 10);
+}
+
+#[test]
+fn favorites_preferred_add_from_palette_reveals_real_save_even_when_filter_empty() {
+    for existing_favorite in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        fs::write(&config, "Host existing\n HostName existing.example\n").unwrap();
+        let mut metadata = Metadata::load(temp.path(), &config).unwrap();
+        if existing_favorite {
+            metadata.set_favorite("existing", true).unwrap();
+        }
+        let mut m = Model::new(
+            config::load_hosts(&config).unwrap(),
+            AppConfig::default(),
+            BTreeMap::new(),
+            false,
+        );
+        m.metadata = metadata.hosts().clone();
+        m.activate_action(PaletteAction::FavoritesOnly);
+        assert_eq!(m.visible.len(), usize::from(existing_favorite));
+        m.key(key(KeyCode::F(2)));
+        let Action::Add(seed) = m.key(key(KeyCode::Enter)) else {
+            panic!("F2 Add must work without a selected host");
+        };
+        select_files(&mut m, &config, None, seed).unwrap();
+        typing(&mut m, "new-host");
+        m.key(key(KeyCode::Tab));
+        typing(&mut m, "new.example");
+        let action = m.key(ctrl('s'));
+        let Action::Save(None, host, target) = &action else {
+            panic!("new host form must submit");
+        };
+        config::add_host(host, target, temp.path()).unwrap();
+        complete_saved_mutation(
+            &mut m,
+            config::load_hosts(&config).unwrap(),
+            &action,
+            &mut metadata,
+        );
+        assert!(
+            !m.favorites_only,
+            "a nonfavorite save must disable its incompatible filter"
+        );
+        assert_eq!(m.selected_host().unwrap().name, "new-host");
+        assert!(m.visible.iter().any(|&i| m.all[i].name == "new-host"));
+        assert!(!m.is_favorite("new-host"));
+        assert_eq!(
+            config::find_host(&config, "new-host").unwrap().hostname,
+            "new.example"
+        );
+    }
+}
+
+#[test]
+fn favorites_preferred_mutations_preserve_compatible_filter_and_reload() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config");
+    fs::write(
+        &config,
+        "Host favorite\n HostName favorite.example\nHost ordinary\n HostName ordinary.example\n",
+    )
+    .unwrap();
+    let mut metadata = Metadata::load(temp.path(), &config).unwrap();
+    metadata.set_favorite("favorite", true).unwrap();
+    let hosts = config::load_hosts(&config).unwrap();
+    let favorite = hosts
+        .iter()
+        .find(|host| host.name == "favorite")
+        .unwrap()
+        .clone();
+    let ordinary = hosts
+        .iter()
+        .find(|host| host.name == "ordinary")
+        .unwrap()
+        .clone();
+    let mut m = Model::new(hosts.clone(), AppConfig::default(), BTreeMap::new(), false);
+    m.metadata = metadata.hosts().clone();
+    m.activate_action(PaletteAction::FavoritesOnly);
+    let action = Action::Save(
+        Some(favorite.clone()),
+        Box::new(favorite.clone()),
+        config.clone(),
+    );
+    complete_saved_mutation(&mut m, hosts.clone(), &action, &mut metadata);
+    assert!(
+        m.favorites_only,
+        "a compatible save must retain favorites-only"
+    );
+    assert_eq!(m.selected_host().unwrap().name, "favorite");
+    let inspector = runtime::effective::Inspector::default();
+    let _receiver = reload_hosts(&inspector, &mut m, &config).unwrap();
+    assert!(m.favorites_only, "ordinary reload must preserve filtering");
+    assert_eq!(m.visible.len(), 1);
+    let target = temp.path().join("moved");
+    let moved = Host {
+        source_file: target.clone(),
+        ..favorite.clone()
+    };
+    m.complete_mutation(
+        vec![moved.clone(), ordinary.clone()],
+        &Action::MoveTo(favorite, target),
+    );
+    assert!(
+        m.favorites_only,
+        "a compatible move must retain favorites-only"
+    );
+    assert_eq!(m.selected_host(), Some(moved));
+    // A preferred nonfavorite result needs the same visibility guarantee for moves.
+    let target = temp.path().join("ordinary-moved");
+    let moved = Host {
+        source_file: target.clone(),
+        ..ordinary.clone()
+    };
+    m.complete_mutation(vec![moved.clone()], &Action::MoveTo(ordinary, target));
+    assert!(!m.favorites_only);
+    assert_eq!(m.selected_host(), Some(moved));
+}
+
+#[test]
+fn notes_control_a_e_match_line_local_home_end_without_changing_multiline_text() {
+    let value = "first\nsecond\nthird";
+    let mut editor = notes::Editor::new("alpha".into(), value);
+    editor.input.cursor = 9;
+    assert_eq!(editor.key(ctrl('a')), FormEvent::None);
+    assert_eq!(editor.input.cursor, 6, "Ctrl+A must start the current line");
+    editor.key(ctrl('e'));
+    assert_eq!(editor.input.cursor, 12, "Ctrl+E must end the current line");
+    editor.key(key(KeyCode::Home));
+    assert_eq!(editor.input.cursor, 6);
+    editor.key(key(KeyCode::End));
+    assert_eq!(editor.input.cursor, 12);
+    assert_eq!(editor.input.value, value);
+    assert!(!editor.dirty());
 }

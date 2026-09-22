@@ -62,6 +62,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
             list(f, m, area);
             actions(f, m, area);
         }
+        View::Note(_) => note_editor(f, m, area),
         View::Host(_) => host_form(f, m, area),
         View::Forward(_) => forward_form(f, m, area),
         View::Info(_) => info(f, m, area),
@@ -103,7 +104,8 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     let area = if area.height >= 12 { inset(area) } else { area };
     let notice_count = u16::from(!m.error.is_empty())
         + u16::from(m.update.as_ref().is_some_and(|u| u.available))
-        + u16::from(m.show_hidden);
+        + u16::from(m.show_hidden)
+        + u16::from(m.favorites_only);
     let notice_height = if area.height < 12 {
         notice_count.min(1)
     } else {
@@ -170,6 +172,12 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             Style::default().fg(Color::Yellow),
         ));
     }
+    if m.favorites_only {
+        notices.push(Line::styled(
+            "[favorites only — F2: Favoris seuls to show all]",
+            Style::default().fg(Color::Yellow),
+        ));
+    }
     if notice_height < notice_count {
         let mut badges = vec![];
         if m.update.as_ref().is_some_and(|u| u.available) {
@@ -177,6 +185,9 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         }
         if m.show_hidden {
             badges.push("Hidden");
+        }
+        if m.favorites_only {
+            badges.push("Favorites (F2)");
         }
         let suffix = format!(" • {}", badges.join(" • "));
         let mut spans = vec![];
@@ -263,14 +274,21 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         };
         let name = Cell::from(Line::from(vec![
             Span::styled(
-                format!("{status} "),
+                format!(
+                    "{status}{} ",
+                    if m.metadata.get(&h.name).is_some_and(|entry| entry.favorite) {
+                        "*"
+                    } else {
+                        " "
+                    }
+                ),
                 Style::default().fg(if position == m.selected {
                     Color::Black
                 } else {
                     color
                 }),
             ),
-            Span::raw(ellipsize(&h.name, widths[0].saturating_sub(2) as usize)),
+            Span::raw(ellipsize(&h.name, widths[0].saturating_sub(3) as usize)),
         ]));
         let tags = h
             .tags
@@ -334,7 +352,11 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             Paragraph::new(if m.all.is_empty() {
                 "No SSH hosts found. Press F2 to add a host."
             } else {
-                "No matching hosts."
+                if m.favorites_only {
+                    "No favorite matches. F2: Favoris seuls to show all."
+                } else {
+                    "No matching hosts."
+                }
             })
             .style(Style::default().fg(GRAY)),
             empty,
@@ -445,7 +467,7 @@ fn list_footer(width: u16, search_focus: bool) -> Vec<Line<'static>> {
         } else {
             vec![
                 "F2: actions • F5: reload • ↑/↓: navigate • Enter: connect • Tab: search • i: info • h: help • q: quit",
-                "a: add • e: edit • d: delete • m: move • f: tunnel • p: test • s: sort • n/r: name/recent • H: hidden",
+                "*: favorite • N: note • a: add • e: edit • d: del • m: move • f: tunnel • p: test • s: sort • H: hidden",
             ]
         }
     } else if width >= 65 {
@@ -466,7 +488,7 @@ fn actions(f: &mut Frame, m: &Model, area: Rect) {
     let View::Actions { selected } = m.view else {
         return;
     };
-    let area = panel(area, 62, 12);
+    let area = panel(area, 62, 16);
     f.render_widget(Clear, area);
     let border = block("Actions", true);
     let inner = border.inner(area);
@@ -500,7 +522,7 @@ fn actions(f: &mut Frame, m: &Model, area: Rect) {
     });
     let mut state = TableState::default().with_selected(Some(selected));
     f.render_stateful_widget(
-        Table::new(rows, [Constraint::Length(12), Constraint::Min(0)])
+        Table::new(rows, [Constraint::Length(14), Constraint::Min(0)])
             .highlight_symbol("▶ ")
             .row_highlight_style(
                 Style::default()
@@ -984,6 +1006,7 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
         m.statuses.get(&h.name),
         m.effective.get(&h.name),
         m.history.get(&h.name),
+        m.note(&h.name),
     );
     m.page = usize::from(parts[0].height).max(1);
     details::render_rows(f, parts[0], lines, &mut m.scroll);
@@ -1004,7 +1027,7 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     }
 }
 fn help(f: &mut Frame, m: &mut Model, area: Rect) {
-    let area = panel(area, 96, 25);
+    let area = panel(area, 96, 28);
     let border = block("SSHO - Commands", true);
     let inner = border.inner(area);
     f.render_widget(border, area);
@@ -1033,6 +1056,9 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     let right = [
         "Advanced Features",
         "",
+        "*      toggle favorite (pinned first)",
+        "N      edit personal note",
+        "F2     Favoris seuls: favorites filter",
         "p      ping all hosts",
         "H      toggle hidden hosts visibility",
         "f      setup port forwarding",
@@ -1078,4 +1104,68 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         Paragraph::new("Press ESC, h, q or Enter to close").style(Style::default().fg(GRAY)),
         parts[1],
     );
+}
+
+fn note_editor(f: &mut Frame, m: &mut Model, area: Rect) {
+    let View::Note(editor) = &m.view else {
+        return;
+    };
+    let area = inset(area);
+    let border = block("Personal note", true);
+    let inner = border.inner(area);
+    f.render_widget(border, area);
+    let parts = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(if inner.height >= 5 { 3 } else { 1 }),
+    ])
+    .split(inner);
+    f.render_widget(
+        Paragraph::new(format!("Host: {}", editor.host)).style(accent()),
+        parts[0],
+    );
+    let before: String = editor
+        .input
+        .value
+        .chars()
+        .take(editor.input.cursor)
+        .collect();
+    let cursor_row = before.chars().filter(|&c| c == '\n').count();
+    let cursor_col = before.rsplit('\n').next().unwrap_or("").chars().count();
+    let offset = cursor_row.saturating_sub(parts[1].height.saturating_sub(1) as usize);
+    let mut lines = vec![];
+    for (row, text) in editor
+        .input
+        .value
+        .split('\n')
+        .enumerate()
+        .skip(offset)
+        .take(parts[1].height as usize)
+    {
+        let mut input = Input::new(text);
+        let focused = row == cursor_row;
+        if focused {
+            input.cursor = cursor_col;
+        }
+        lines.push(Line::from(input_span(
+            &input,
+            focused,
+            parts[1].width as usize,
+        )));
+        if focused {
+            input_cursor(f, &input, parts[1], 0, row - offset);
+        }
+    }
+    f.render_widget(Paragraph::new(lines), parts[1]);
+    let mut footer = vec![];
+    if !editor.error.is_empty() {
+        footer.push(Line::styled(
+            format!("Error: {}", editor.error),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    footer.push(Line::from(
+        "Ctrl+S: save • Esc/Ctrl+C: cancel • Enter: newline",
+    ));
+    f.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), parts[2]);
 }
