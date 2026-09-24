@@ -23,6 +23,7 @@ ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 libz-sys = { version = "1", features = ["static"] }
 tempfile = "3"
 unicode-width = "0.2"
+unicode-segmentation = "1.13"
 
 [profile.release]
 lto = "thin"

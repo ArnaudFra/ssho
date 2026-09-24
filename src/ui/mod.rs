@@ -4,6 +4,7 @@ mod details;
 mod forms;
 mod notes;
 mod render;
+mod search;
 #[cfg(test)]
 mod tests;
 use crate::{
@@ -21,7 +22,10 @@ use anyhow::Result;
 use chrono::Utc;
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers,
+    },
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -74,12 +78,21 @@ enum Action {
     Favorite(Host),
     SaveNote(String, String),
 }
+struct PendingPreferred {
+    host: Host,
+    query: String,
+    // Compatibility-only snapshot across repeated saves, never a resolved UI value.
+    provisional: Option<runtime::effective::EffectiveConfig>,
+}
 struct Model {
     all: Vec<Host>,
     visible: Vec<usize>,
     selected: usize,
     offset: usize,
     query: Input,
+    search: std::result::Result<search::Query, String>,
+    // Keep the saved identity visible until its fresh effective values settle the query.
+    pending_preferred: Option<PendingPreferred>,
     search_focus: bool,
     show_hidden: bool,
     recent: bool,
@@ -114,10 +127,12 @@ impl Model {
             selected: 0,
             offset: 0,
             query: Input {
-                placeholder: "Search hosts or tags...".into(),
-                limit: 50,
+                placeholder: "Search words, tag:, user:, file:, is:...".into(),
+                limit: 1024,
                 ..Input::default()
             },
+            search: Ok(search::Query::default()),
+            pending_preferred: None,
             search_focus,
             show_hidden: false,
             recent: false,
@@ -160,21 +175,46 @@ impl Model {
         let fallback = if reset { 0 } else { self.selected };
         if reset {
             self.offset = 0;
+            self.pending_preferred = None;
         }
         self.refilter(identity.as_ref(), fallback);
     }
-    fn refilter(&mut self, identity: Option<&Host>, fallback: usize) {
-        self.visible = self
-            .all
+    fn matching_indices(&self) -> Vec<usize> {
+        self.all
             .iter()
             .enumerate()
             .filter(|(_, h)| {
                 (self.show_hidden || !h.hidden())
-                    && h.matches(&self.query.value)
+                    && self.matches_search(h)
                     && (!self.favorites_only || self.is_favorite(&h.name))
             })
             .map(|(i, _)| i)
-            .collect();
+            .collect()
+    }
+    fn matches_search(&self, host: &Host) -> bool {
+        if self.pending_preferred.as_ref().is_some_and(|pending| {
+            pending.host.name == host.name
+                && pending.host.source_file == host.source_file
+                && pending.query == self.query.value
+        }) {
+            return true;
+        }
+        self.search.as_ref().is_ok_and(|query| {
+            query.matches(
+                host,
+                self.effective.get(&host.name).and_then(|r| r.as_ref().ok()),
+                self.note(&host.name),
+                self.is_favorite(&host.name),
+                self.statuses
+                    .get(&host.name)
+                    .map(|r| r.status)
+                    .unwrap_or_default(),
+            )
+        })
+    }
+    fn refilter(&mut self, identity: Option<&Host>, fallback: usize) {
+        self.search = search::Query::parse(&self.query.value);
+        self.visible = self.matching_indices();
         let metadata = &self.metadata;
         self.visible.sort_by(|&a, &b| {
             let a = &self.all[a];
@@ -211,9 +251,64 @@ impl Model {
     fn replace_hosts(&mut self, all: Vec<Host>, preferred: Option<Host>) {
         let identity = preferred.clone().or_else(|| self.selected_host());
         let fallback = self.selected;
+        let pending = self.pending_preferred.take();
+        // Old resolved values are only a provisional compatibility input. Even explicit
+        // edits may be masked by earlier Host/Match/global values; await fresh ssh -G.
+        let provisional = preferred.as_ref().and_then(|host| {
+            let previous = self.all.iter().find(|old| old.name == host.name)?;
+            let effective = self
+                .effective
+                .get(&host.name)
+                .and_then(|result| result.as_ref().ok())
+                .cloned()
+                .or_else(|| {
+                    pending
+                        .as_ref()
+                        .filter(|pending| {
+                            pending.query == self.query.value
+                                && pending.host.name == previous.name
+                                && pending.host.source_file == previous.source_file
+                        })
+                        .and_then(|pending| pending.provisional.clone())
+                })?;
+            Some(effective)
+        });
+        // Never present the previous resolution as the saved declaration's cache.
+        let changed: Vec<_> = all
+            .iter()
+            .filter(|host| !self.all.contains(host))
+            .map(|host| host.name.clone())
+            .collect();
+        for name in changed {
+            self.effective.remove(&name);
+            self.statuses.remove(&name);
+        }
+        self.search = search::Query::parse(&self.query.value);
         if let Some(host) = &preferred {
-            if !host.matches(&self.query.value) {
+            let compatible = self.search.as_ref().is_ok_and(|query| {
+                // Either the saved declaration or the previous native projection may
+                // win. Only the new resolution can decide which values actually apply.
+                [provisional.as_ref(), None].into_iter().any(|effective| {
+                    query.matches(
+                        host,
+                        effective,
+                        self.note(&host.name),
+                        self.is_favorite(&host.name),
+                        self.statuses
+                            .get(&host.name)
+                            .map(|result| result.status)
+                            .unwrap_or_default(),
+                    )
+                })
+            });
+            if !compatible {
                 self.query.set("");
+            } else if !self.query.value.is_empty() {
+                self.pending_preferred = Some(PendingPreferred {
+                    host: host.clone(),
+                    query: self.query.value.clone(),
+                    provisional,
+                });
             }
             if host.hidden() {
                 self.show_hidden = true;
@@ -224,6 +319,36 @@ impl Model {
         }
         self.all = all;
         self.refilter(identity.as_ref(), fallback);
+    }
+    /// Diagnostics may change membership, but must not silently apply new history sorting.
+    fn refresh_search_membership(&mut self) {
+        let next = self.matching_indices();
+        let mut previous = self.visible.clone();
+        previous.sort_unstable();
+        if next != previous {
+            self.filter(false);
+        }
+    }
+    fn apply_inspection(&mut self, result: runtime::effective::Inspection) {
+        if let Some(ping) = result.ping {
+            self.statuses.insert(result.name.clone(), ping);
+        }
+        let settles_preferred = self
+            .pending_preferred
+            .as_ref()
+            .is_some_and(|pending| pending.host.name == result.name);
+        self.effective.insert(result.name, result.effective);
+        if settles_preferred {
+            let pending = self.pending_preferred.take().unwrap();
+            // Typed queries cancel this preference in filter(true). Fresh failures
+            // use the normal declared fallback; neither path retains stale data.
+            if pending.query == self.query.value && !self.matches_search(&pending.host) {
+                self.query.set("");
+                self.filter(false);
+                return;
+            }
+        }
+        self.refresh_search_membership();
     }
     fn complete_mutation(&mut self, all: Vec<Host>, action: &Action) {
         let preferred = match action {
@@ -290,6 +415,44 @@ impl Model {
         self.preferences
             .key_bindings
             .should_quit_on_key(&key_name(k))
+    }
+    /// Pasted data only edits a focused input; it never enters command dispatch.
+    fn paste(&mut self, text: &str) {
+        if self.discard || self.delete.is_some() {
+            return;
+        }
+        let multiline = matches!(self.view, View::Note(_));
+        let input = match &mut self.view {
+            View::List if self.search_focus => &mut self.query,
+            View::Note(editor) => &mut editor.input,
+            View::Host(form) => {
+                if form.name_focus {
+                    &mut form.names[form.focus]
+                } else {
+                    &mut form.inputs[form.focus]
+                }
+            }
+            View::Forward(form) if form.focus != 0 => &mut form.inputs[form.focus],
+            _ => return,
+        };
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        for c in normalized.chars() {
+            let c = if c.is_whitespace() {
+                if multiline && c == '\n' {
+                    '\n'
+                } else {
+                    ' '
+                }
+            } else if c.is_control() {
+                continue;
+            } else {
+                c
+            };
+            input.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        if matches!(self.view, View::List) {
+            self.filter(true);
+        }
     }
     fn key(&mut self, k: KeyEvent) -> Action {
         if matches!(k.kind, KeyEventKind::Release) {
@@ -661,6 +824,7 @@ impl TerminalGuard {
         if let Err(e) = execute!(
             io::stdout(),
             EnterAlternateScreen,
+            EnableBracketedPaste,
             cursor::SetCursorStyle::BlinkingBlock,
             cursor::Hide
         ) {
@@ -674,6 +838,7 @@ impl TerminalGuard {
             let _ = terminal::disable_raw_mode();
             let _ = execute!(
                 io::stdout(),
+                DisableBracketedPaste,
                 LeaveAlternateScreen,
                 cursor::SetCursorStyle::DefaultUserShape,
                 cursor::Show
@@ -747,6 +912,7 @@ fn start_inspection(
             },
         );
     }
+    m.refresh_search_membership();
     inspector.inspect(hosts, config.to_path_buf(), probe)
 }
 /// Load completely before changing the browser or discarding its diagnostic generation.
@@ -848,10 +1014,7 @@ pub fn run(
     terminal.clear()?;
     loop {
         while let Ok(result) = inspection.try_recv() {
-            if let Some(ping) = result.ping {
-                m.statuses.insert(result.name.clone(), ping);
-            }
-            m.effective.insert(result.name, result.effective);
+            m.apply_inspection(result);
         }
         if let Some(rx) = &updates {
             while let Ok(update) = rx.try_recv() {
@@ -865,9 +1028,7 @@ pub fn run(
         let action = match event::read()? {
             Event::Key(k) => m.key(k),
             Event::Paste(text) => {
-                for c in text.chars().filter(|c| !c.is_control()) {
-                    m.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-                }
+                m.paste(&text);
                 Action::None
             }
             _ => Action::None,

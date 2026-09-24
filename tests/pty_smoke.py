@@ -390,6 +390,69 @@ sys.exit(int(mode))
     assert json.loads(metadata_file.read_text())["configs"][str(notes_root.resolve())]["hosts"]["note-b"]["note"].endswith(" draft")
     print("PASS favorite ordering/filter empty recovery, persistent multiline notes, discard caret and failed-save draft; SSH config untouched")
 
+    # Combines inherited effective values, notes, favorite and status filters.
+    mode.write_text("37")
+    search_root = home/"advanced search config"
+    search_root.write_text("Host *\n User inherited-user\n# Tags: prod\nHost search-a\n HostName 127.0.0.1\n Port 1\nHost search-b\n HostName 127.0.0.2\n Port 1\n")
+    session = Session(env, ["-c", str(search_root)])
+    session.expect("Last Attempt")
+    session.send(b"search-a\t*N")
+    session.expect("Personal note")
+    assert b"\x1b[?2004h" in session.output, "UI must enable bracketed paste"
+    session.send(b"\x1b[200~" + 'Release café 東京\nqae'.encode() + b"\x1b[201~")
+    session.expect("qae")
+    session.send(b"\x13")
+    session.expect("Last Attempt")
+    session.send(b"\t\x1b")  # Focus search and clear old query.
+    expression = 'tag:prod AND user:inherited-user ET "café 東京" is:favorite is:unknown'
+    session.send(b"\x1b[200~" + expression.replace(" AND ", "\nAND ").encode() + b"\x1b[201~")
+    session.expect("Hosts: 1/2")
+    session.send(b"\r")
+    session.expect("SSH exit 37: search-a")
+    session.expect(expression)
+    assert b"\x1b[?2004l" in session.output, "SSH takeover must disable bracketed paste"
+    assert session.output.count(b"\x1b[?2004h") >= 2, "UI return must enable bracketed paste again"
+    assert (home/"ssh-args").read_text().splitlines()[-1] == "search-a"
+    session.send(b"\x1b[15~")
+    session.expect("Hosts: 1/2")
+    session.expect(expression)
+    # A real unrelated form edit must keep inherited user + effective address filters.
+    session.send(b"\x1b")
+    inherited_expression = "user:inherited-user AND 127.0.0.1"
+    session.send(inherited_expression.encode() + b"\te")
+    session.expect("Edit SSH Host")
+    # General fields: name -> hostname -> user -> port. Port is unrelated to query.
+    session.send(b"\t\t\t\x152\x13")
+    session.expect("Last Attempt")
+    session.expect(inherited_expression)
+    session.expect("Hosts: 1/2")
+    assert json.loads(cli(env, "-c", str(search_root), "info", "search-a"))["result"]["target"]["port"] == 2
+    before_paste = session.output.count(b"SSH_TAKEOVER")
+    session.send(b"\x1b[200~qae\n\r\x1b[201~")
+    session.expect("Last Attempt")
+    assert session.process.poll() is None
+    assert session.output.count(b"SSH_TAKEOVER") == before_paste
+    session.send(b"\t\x1b")
+    session.send(b"is:unknown\tp")  # Start real probes to disposable loopback closed ports.
+    session.expect("No matching hosts")
+    session.send(b"\t\x1b")
+    session.send(b"is:offline")
+    session.expect("Hosts: 2/2")
+    session.expect("Offline")
+    session.send(b"\x1b")
+    session.send(b"alpha AND ET beta")
+    session.expect("conjunction")
+    session.send(b"\x1b")
+    session.send(b'user:inherited-user file:"advanced search config"')
+    session.expect("Hosts: 2/2")
+    session.send(b"\x03")
+    session.close()
+
+    assert b"\x1b[?2004l" in session.output[session.mark:], "UI exit must disable bracketed paste"
+    saved_note = json.loads(metadata_file.read_text())["configs"][str(search_root.resolve())]["hosts"]["search-a"]["note"]
+    assert saved_note == "Release café 東京\nqae", saved_note
+    print("PASS advanced filters, effective user, notes/status transitions, AND/ET, SSH/F5 query preservation and safe bracketed paste passed")
+
     # Both empty existing and absent roots return to the browser after creation.
     for missing in (False, True):
         empty = home/("missing-config" if missing else "empty-config")

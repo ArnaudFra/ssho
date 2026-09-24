@@ -279,8 +279,8 @@ fn emacs_cursor_keys_and_limits() {
     t.key(key(KeyCode::Char('X')));
     assert_eq!(t.value, "bXd");
     let mut m = model();
-    typing(&mut m, &"x".repeat(60));
-    assert_eq!(m.query.value.len(), 50);
+    typing(&mut m, &"x".repeat(1030));
+    assert_eq!(m.query.value.len(), 1024);
 }
 #[test]
 fn sorting_history_and_table_shortcuts() {
@@ -2742,4 +2742,743 @@ fn notes_control_a_e_match_line_local_home_end_without_changing_multiline_text()
     assert_eq!(editor.input.cursor, 12);
     assert_eq!(editor.input.value, value);
     assert!(!editor.dirty());
+}
+
+#[test]
+fn advanced_search_fields_phrases_notes_and_unknown_prefix() {
+    let mut m = model();
+    m.all[0].source_file = PathBuf::from("/tmp/Team Hosts/config");
+    m.metadata.insert(
+        "alpha".into(),
+        HostMetadata {
+            favorite: true,
+            note: "Release café 東京 ticket:42".into(),
+        },
+    );
+    for query in [
+        "tag:WORK user:DEPLOY file:\"Team Hosts\" is:favorite",
+        "\"Release café\" 東京",
+        "ticket:42",
+        "is:unknown alpha",
+    ] {
+        m.query.set(query);
+        m.filter(true);
+        assert_eq!(
+            m.selected_host().map(|h| h.name),
+            Some("alpha".into()),
+            "{query}"
+        );
+    }
+    for query in ["tag:other", "user:root", "is:online", "\"café Release\""] {
+        m.query.set(query);
+        m.filter(true);
+        assert!(m.visible.is_empty(), "{query}");
+    }
+}
+
+#[test]
+fn advanced_search_errors_are_actionable_and_recover_without_losing_other_errors() {
+    let mut m = model();
+    m.error = "reload failure".into();
+    for (query, expected) in [
+        ("is:maybe", "online"),
+        ("tag:", "value"),
+        ("\"unfinished", "quote"),
+    ] {
+        m.query.set(query);
+        m.filter(true);
+        assert!(m.visible.is_empty());
+        assert!(screen(&mut m, 110, 20).contains(expected), "{query}");
+    }
+    m.query.set("alpha");
+    m.filter(true);
+    assert_eq!(m.visible.len(), 1);
+    assert_eq!(m.error, "reload failure");
+}
+
+#[test]
+fn advanced_search_preferred_host_retains_compatible_expression_and_long_query() {
+    let mut m = model();
+    let query = "tag:work user:deploy alpha a.example tag:work user:deploy";
+    typing(&mut m, query);
+    assert_eq!(m.query.value, query);
+    let preferred = m.all[0].clone();
+    m.replace_hosts(m.all.clone(), Some(preferred));
+    assert_eq!(m.query.value, query);
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+}
+
+#[test]
+fn advanced_search_resolved_user_and_address_override_declared_values() {
+    let mut m = model();
+    m.effective.insert(
+        "alpha".into(),
+        Ok(runtime::effective::EffectiveConfig::parse(
+            "hostname resolved.example\nuser inherited\nport 22\n",
+        )
+        .unwrap()),
+    );
+    m.query.set("user:inherited resolved.example");
+    m.filter(true);
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    m.query.set("deploy");
+    m.filter(true);
+    assert!(m.visible.is_empty());
+}
+
+#[test]
+fn advanced_search_selected_status_survives_compact_connection_title() {
+    let mut m = model();
+    m.connection_result = "SSH exit 0: alpha".into();
+    let text = screen(&mut m, 40, 8);
+    assert!(text.contains("Unknown"), "{text}");
+    assert!(text.contains("alpha"), "{text}");
+}
+
+#[test]
+fn advanced_search_explicit_and_et_and_literal_quoted_connectors() {
+    let mut m = model();
+    for query in [
+        "tag:work AND user:deploy",
+        "tag:work et user:deploy",
+        "alpha AnD tag:work ET deploy",
+    ] {
+        m.query.set(query);
+        m.filter(true);
+        assert_eq!(
+            m.selected_host().map(|h| h.name),
+            Some("alpha".into()),
+            "{query}"
+        );
+    }
+    m.metadata.insert(
+        "alpha".into(),
+        HostMetadata {
+            favorite: false,
+            note: "AND ET".into(),
+        },
+    );
+    for query in ["alpha \"AND\"", "alpha \"ET\""] {
+        m.query.set(query);
+        m.filter(true);
+        assert_eq!(m.visible.len(), 1);
+    }
+    m.query.set("tag:and");
+    m.filter(true);
+    assert!(m.visible.is_empty());
+    for query in ["AND alpha", "alpha ET", "alpha AND ET deploy"] {
+        m.query.set(query);
+        m.filter(true);
+        assert!(
+            m.search.as_ref().unwrap_err().contains("conjunction"),
+            "{query}"
+        );
+    }
+}
+
+#[test]
+fn advanced_search_unicode_highlights_preserve_graphemes_and_selected_markers() {
+    let q = search::Query::parse("i 東京 ς").unwrap();
+    assert_eq!(q.ranges("İ東京 ΟΣ", search::Field::Any), vec![0..8, 11..13]);
+    let q = search::Query::parse("e").unwrap();
+    assert_eq!(q.ranges("e\u{301}cho", search::Field::Any), vec![0..3]);
+    let q = search::Query::parse("tag:work user:deploy is:favorite").unwrap();
+    assert!(q
+        .ranges("work deploy favorite", search::Field::Any)
+        .is_empty());
+    assert_eq!(q.ranges("#work", search::Field::Tag), vec![1..5]);
+    let mut m = model();
+    m.all[0].name = "İ東京".into();
+    m.metadata.insert(
+        "İ東京".into(),
+        HostMetadata {
+            favorite: true,
+            note: String::new(),
+        },
+    );
+    m.query.set("i 東京");
+    m.filter(true);
+    let mut terminal = Terminal::new(TestBackend::new(100, 15)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut m)).unwrap();
+    let cells = terminal.backend().buffer().content();
+    for symbol in ["İ", "東", "京"] {
+        let cell = cells
+            .iter()
+            .find(|cell| {
+                cell.symbol() == symbol && cell.bg == ratatui::style::Color::Rgb(0, 173, 216)
+            })
+            .unwrap();
+        assert_eq!(cell.fg, ratatui::style::Color::Black);
+        assert!(cell.modifier.contains(ratatui::style::Modifier::UNDERLINED));
+    }
+    let marker = cells
+        .iter()
+        .find(|cell| cell.symbol() == "*" && cell.bg == ratatui::style::Color::Rgb(0, 173, 216))
+        .unwrap();
+    assert_eq!(marker.fg, ratatui::style::Color::Black);
+    assert!(!marker
+        .modifier
+        .contains(ratatui::style::Modifier::UNDERLINED));
+}
+
+fn inspection(name: &str, user: &str, status: PingStatus) -> runtime::effective::Inspection {
+    runtime::effective::Inspection {
+        name: name.into(),
+        effective: Ok(runtime::effective::EffectiveConfig::parse(&format!(
+            "hostname {name}.resolved\nuser {user}\nport 22\n"
+        ))
+        .unwrap()),
+        ping: Some(PingResult {
+            name: name.into(),
+            status,
+            duration: Duration::ZERO,
+            error: None,
+        }),
+    }
+}
+
+#[test]
+fn advanced_search_async_membership_preserves_identity_and_unchanged_recent_order() {
+    let mut m = model();
+    m.query.set("user:inherited is:online");
+    m.filter(true);
+    assert!(m.visible.is_empty());
+    m.apply_inspection(inspection("beta", "inherited", PingStatus::Online));
+    assert_eq!(m.selected_host().unwrap().name, "beta");
+    m.apply_inspection(inspection("alpha", "inherited", PingStatus::Online));
+    assert_eq!(m.selected_host().unwrap().name, "beta");
+    m.offset = 1;
+    m.recent = true;
+    // Simulate the history update after SSH without applying a new sort.
+    m.visible = vec![1, 0];
+    m.selected = 1;
+    m.apply_inspection(inspection("alpha", "inherited", PingStatus::Online));
+    assert_eq!(m.visible, vec![1, 0]);
+    assert_eq!((m.selected, m.offset), (1, 1));
+    m.apply_inspection(inspection("beta", "inherited", PingStatus::Offline));
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    assert_eq!((m.selected, m.offset), (0, 0));
+    m.apply_inspection(inspection("alpha", "changed", PingStatus::Online));
+    assert!(m.visible.is_empty());
+}
+
+#[test]
+fn advanced_search_preferred_edit_drops_stale_effective_cache_before_matching() {
+    let mut m = model();
+    m.apply_inspection(inspection("alpha", "old-user", PingStatus::Unknown));
+    m.query.set("user:new-user");
+    m.filter(true);
+    let mut saved = m.all[0].clone();
+    saved.user = "new-user".into();
+    let mut hosts = m.all.clone();
+    hosts[0] = saved.clone();
+    m.replace_hosts(hosts, Some(saved));
+    assert_eq!(m.query.value, "user:new-user");
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+}
+
+#[test]
+fn advanced_search_probe_reset_reevaluates_connecting_and_unknown_filters() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config");
+    fs::write(&config, "Host alpha\n HostName 127.0.0.1\n Port 1\n").unwrap();
+    let mut m = model();
+    m.all.truncate(1);
+    m.query.set("is:connecting");
+    m.filter(true);
+    let inspector = runtime::effective::Inspector::default();
+    drop(start_inspection(&inspector, &mut m, &config, true));
+    assert_eq!(m.visible.len(), 1);
+    drop(start_inspection(&inspector, &mut m, &config, false));
+    assert!(m.visible.is_empty());
+    m.query.set("is:unknown");
+    m.filter(true);
+    assert_eq!(m.visible.len(), 1);
+}
+
+#[test]
+fn advanced_search_paste_is_text_only_and_preserves_note_lines() {
+    let mut m = model();
+    m.paste("tag:work\r\nAND user:deploy\n");
+    assert_eq!(m.query.value, "tag:work AND user:deploy ");
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    m.search_focus = false;
+    m.paste("qae\n");
+    assert!(matches!(m.view, View::List));
+    assert_eq!(m.query.value, "tag:work AND user:deploy ");
+    m.open_view(View::Note(notes::Editor::new("alpha".into(), "")));
+    m.paste("qae\r\nline two\n\u{13}\u{1b}");
+    let View::Note(editor) = &m.view else {
+        panic!()
+    };
+    assert_eq!(editor.input.value, "qae\nline two\n");
+    m.discard = true;
+    m.paste("\nignored");
+    let View::Note(editor) = &m.view else {
+        panic!()
+    };
+    assert_eq!(editor.input.value, "qae\nline two\n");
+    m.discard = false;
+    m.view = View::Host(Box::new(HostForm::add(
+        String::new(),
+        PathBuf::from("unused"),
+    )));
+    m.paste("server\nuser\tq");
+    let View::Host(form) = &m.view else { panic!() };
+    assert_eq!(form.inputs[0].value, "server user q");
+    assert_eq!(form.focus, 0);
+    m.view = View::Actions { selected: 0 };
+    m.paste("\nq");
+    assert!(matches!(m.view, View::Actions { selected: 0 }));
+}
+
+#[test]
+fn advanced_search_details_highlight_user_file_and_multiline_notes() {
+    let mut m = model();
+    m.all[0].source_file = PathBuf::from("team/config");
+    m.metadata.insert(
+        "alpha".into(),
+        HostMetadata {
+            favorite: false,
+            note: "Release\ncafé".into(),
+        },
+    );
+    m.query.set("user:deploy file:team café");
+    m.filter(true);
+    m.view = View::Info(m.selected_host().unwrap());
+    let mut terminal = Terminal::new(TestBackend::new(100, 32)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut m)).unwrap();
+    let highlighted: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .filter(|cell| cell.modifier.contains(ratatui::style::Modifier::UNDERLINED))
+        .map(|cell| cell.symbol())
+        .collect();
+    for expected in ["café", "deploy", "team"] {
+        assert!(highlighted.contains(expected), "{highlighted}");
+    }
+}
+
+#[test]
+fn advanced_search_saved_unrelated_edit_preserves_native_inherited_query_until_resolved() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config");
+    fs::write(&path, "Host *\n User inherited\n HostName inherited.example\nHost target\n HostName declared.example\n").unwrap();
+    let mut m = Model::new(
+        config::load_hosts(&path).unwrap(),
+        AppConfig::default(),
+        BTreeMap::new(),
+        false,
+    );
+    let inspector = runtime::effective::Inspector::default();
+    for result in start_inspection(&inspector, &mut m, &path, false) {
+        m.apply_inspection(result);
+    }
+    let query = "user:inherited AND inherited.example";
+    m.query.set(query);
+    m.filter(true);
+    let original = m.selected_host().unwrap();
+    assert!(original.user.is_empty());
+    let mut saved = original.clone();
+    saved.tags.push("new-tag".into());
+    config::update_host(&original, &saved, &temp.path().join("app")).unwrap();
+    m.complete_mutation(
+        config::load_hosts(&path).unwrap(),
+        &Action::Save(Some(original), Box::new(saved), path.clone()),
+    );
+    assert_eq!(
+        m.query.value, query,
+        "unrelated edit cannot erase an inherited filter"
+    );
+    assert_eq!(m.selected_host().unwrap().name, "target");
+    let receiver = start_inspection(&inspector, &mut m, &path, false);
+    assert_eq!(m.query.value, query);
+    assert_eq!(
+        m.selected_host().unwrap().name,
+        "target",
+        "keep saved selection while pending"
+    );
+    assert!(
+        m.effective.is_empty(),
+        "never expose stale values as freshly resolved"
+    );
+    for result in receiver {
+        m.apply_inspection(result);
+    }
+    assert_eq!(m.query.value, query);
+    assert_eq!(m.selected_host().unwrap().name, "target");
+    assert_eq!(m.effective["target"].as_ref().unwrap().user, "inherited");
+}
+
+#[test]
+fn advanced_search_saved_move_settles_against_fresh_native_inheritance() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    let source = temp.path().join("first");
+    let target = temp.path().join("last");
+    fs::write(
+        &source,
+        "Host target\n User old-user\n HostName old.example\n",
+    )
+    .unwrap();
+    fs::write(&target, "").unwrap();
+    fs::write(
+        &root,
+        format!(
+            "Include {}\nHost *\n User middle-user\n HostName middle.example\nInclude {}\n",
+            source.display(),
+            target.display()
+        ),
+    )
+    .unwrap();
+    let mut m = Model::new(
+        config::load_hosts(&root).unwrap(),
+        AppConfig::default(),
+        BTreeMap::new(),
+        false,
+    );
+    let inspector = runtime::effective::Inspector::default();
+    for result in start_inspection(&inspector, &mut m, &root, false) {
+        m.apply_inspection(result);
+    }
+    m.query.set("user:old-user AND old.example");
+    m.filter(true);
+    let original = m.selected_host().unwrap();
+    config::move_host(&original, &target, &temp.path().join("app")).unwrap();
+    m.complete_mutation(
+        config::load_hosts(&root).unwrap(),
+        &Action::MoveTo(original, target.clone()),
+    );
+    assert_eq!(m.query.value, "user:old-user AND old.example");
+    let receiver = start_inspection(&inspector, &mut m, &root, false);
+    assert_eq!(m.selected_host().unwrap().source_file, target);
+    for result in receiver {
+        m.apply_inspection(result);
+    }
+    assert_eq!(m.effective["target"].as_ref().unwrap().user, "middle-user");
+    assert!(
+        m.query.value.is_empty(),
+        "fresh incompatibility must reveal the saved host"
+    );
+    assert_eq!(m.selected_host().unwrap().source_file, target);
+}
+
+#[test]
+fn advanced_search_saved_explicit_target_changes_wait_for_fresh_incompatibility() {
+    let mut m = model();
+    m.apply_inspection(inspection("alpha", "old-user", PingStatus::Unknown));
+    m.query.set("user:old-user AND alpha.resolved");
+    m.filter(true);
+    let original = m.selected_host().unwrap();
+    let mut saved = original.clone();
+    saved.user = "new-user".into();
+    saved.hostname = "new.example".into();
+    let mut hosts = m.all.clone();
+    hosts[0] = saved.clone();
+    m.complete_mutation(
+        hosts,
+        &Action::Save(Some(original), Box::new(saved), PathBuf::new()),
+    );
+    assert_eq!(m.query.value, "user:old-user AND alpha.resolved");
+    assert!(m.pending_preferred.is_some());
+    assert_eq!(m.selected_host().unwrap().user, "new-user");
+    assert_eq!(m.selected_host().unwrap().hostname, "new.example");
+    assert!(!m.effective.contains_key("alpha"));
+    let mut fresh = inspection("alpha", "new-user", PingStatus::Unknown);
+    fresh.effective.as_mut().unwrap().hostname = "new.example".into();
+    m.apply_inspection(fresh);
+    assert!(m.query.value.is_empty());
+    assert!(m.pending_preferred.is_none());
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+}
+
+#[test]
+fn advanced_search_saved_pending_resolution_cannot_clear_new_query_or_resort_unchanged_list() {
+    let mut m = model();
+    m.apply_inspection(inspection("alpha", "inherited", PingStatus::Unknown));
+    m.query.set("user:inherited");
+    m.filter(true);
+    let mut saved = m.all[0].clone();
+    saved.tags.push("edited".into());
+    let mut hosts = m.all.clone();
+    hosts[0] = saved.clone();
+    m.replace_hosts(hosts, Some(saved));
+    assert!(m.pending_preferred.is_some());
+    m.query.set("beta");
+    m.filter(true);
+    m.apply_inspection(inspection("alpha", "changed", PingStatus::Unknown));
+    assert_eq!(m.query.value, "beta");
+    assert_eq!(m.selected_host().unwrap().name, "beta");
+    m.query.set("example");
+    m.filter(true);
+    m.effective.clear();
+    let saved = m.all[0].clone();
+    m.replace_hosts(m.all.clone(), Some(saved));
+    m.visible = vec![1, 0];
+    m.selected = 1;
+    m.offset = 1;
+    m.recent = true;
+    let mut fresh = inspection("alpha", "deploy", PingStatus::Unknown);
+    fresh.effective.as_mut().unwrap().hostname = "a.example".into();
+    m.apply_inspection(fresh);
+    assert!(m.pending_preferred.is_none());
+    assert_eq!(m.visible, vec![1, 0]);
+    assert_eq!((m.selected, m.offset), (1, 1));
+    assert_eq!(m.query.value, "example");
+}
+
+#[test]
+fn advanced_search_saved_pending_resolution_error_settles_with_declared_fallback() {
+    let mut m = model();
+    m.apply_inspection(inspection("alpha", "inherited", PingStatus::Unknown));
+    m.query.set("user:inherited");
+    m.filter(true);
+    let mut saved = m.all[0].clone();
+    saved.tags.push("edited".into());
+    let mut hosts = m.all.clone();
+    hosts[0] = saved.clone();
+    m.replace_hosts(hosts, Some(saved));
+    m.apply_inspection(runtime::effective::Inspection {
+        name: "alpha".into(),
+        effective: Err("resolver failed".into()),
+        ping: None,
+    });
+    assert!(m.pending_preferred.is_none());
+    assert!(m.query.value.is_empty());
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    assert!(m.effective["alpha"].is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn advanced_search_saved_pending_reload_cancels_preference_and_excludes_old_generation() {
+    for removed in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("config");
+        let ready = temp.path().join("ready");
+        let release = temp.path().join("release");
+        let finished = temp.path().join("finished");
+        fs::write(&root, format!(
+            "Host fixture\n HostName old.example\n User old-user\nMatch exec \"touch {}; while test ! -e {}; do sleep 0.02; done; touch {}\"\n",
+            ready.display(), release.display(), finished.display()
+        )).unwrap();
+        let mut m = Model::new(
+            config::load_hosts(&root).unwrap(),
+            AppConfig::default(),
+            BTreeMap::new(),
+            false,
+        );
+        m.query.set("user:old-user");
+        m.filter(true);
+        let inspector = runtime::effective::Inspector::default();
+        let mut receiver = start_inspection(&inspector, &mut m, &root, false);
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !ready.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "old native generation must reach barrier"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(receiver.try_recv().is_err());
+        let original = m.selected_host().unwrap();
+        let mut saved = original.clone();
+        saved.tags.push("edited".into());
+        config::update_host(&original, &saved, &temp.path().join("app")).unwrap();
+        m.complete_mutation(
+            config::load_hosts(&root).unwrap(),
+            &Action::Save(Some(original), Box::new(saved), root.clone()),
+        );
+        assert!(m.pending_preferred.is_some());
+        receiver = start_inspection(&inspector, &mut m, &root, false);
+        assert_eq!(m.query.value, "user:old-user");
+        assert!(receiver.try_recv().is_err());
+        let fresh_name = if removed { "replacement" } else { "fixture" };
+        fs::write(
+            &root,
+            format!("Host {fresh_name}\n HostName new.example\n User new-user\n"),
+        )
+        .unwrap();
+        receiver = reload_hosts(&inspector, &mut m, &root).unwrap();
+        assert!(
+            m.pending_preferred.is_none(),
+            "F5 cancels the old save preference, including a missing alias"
+        );
+        assert_eq!(
+            m.query.value, "user:old-user",
+            "reload must not clear a user's query"
+        );
+        m.query.set("user:new-user");
+        m.filter(true);
+        m.apply_inspection(receiver.recv_timeout(Duration::from_secs(3)).unwrap());
+        fs::write(&release, "").unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !finished.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "old generation must finish"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        for result in receiver {
+            m.apply_inspection(result);
+        }
+        assert_eq!(m.query.value, "user:new-user");
+        assert_eq!(m.selected_host().unwrap().name, fresh_name);
+        assert_eq!(m.effective[fresh_name].as_ref().unwrap().user, "new-user");
+        if removed {
+            assert!(!m.effective.contains_key("fixture"));
+        }
+    }
+}
+
+#[test]
+fn advanced_search_two_real_saves_keep_inherited_intent_until_latest_resolution() {
+    for (change_user, change_hostname) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let direct_second_edit = change_user || change_hostname;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config");
+        fs::write(
+            &path,
+            "Host target\nHost *\n User inherited\n HostName inherited.example\n",
+        )
+        .unwrap();
+        let mut m = Model::new(
+            config::load_hosts(&path).unwrap(),
+            AppConfig::default(),
+            BTreeMap::new(),
+            false,
+        );
+        let inspector = runtime::effective::Inspector::default();
+        let mut receiver = start_inspection(&inspector, &mut m, &path, false);
+        for result in &receiver {
+            m.apply_inspection(result);
+        }
+        let query = "user:inherited AND inherited.example";
+        m.query.set(query);
+        m.filter(true);
+        for edit in 0..2 {
+            let original = m.selected_host().unwrap();
+            let mut saved = original.clone();
+            saved.tags.push(format!("edit-{edit}"));
+            if edit == 1 && change_user {
+                saved.user = "new-user".into();
+            }
+            if edit == 1 && change_hostname {
+                saved.hostname = "new.example".into();
+            }
+            config::update_host(&original, &saved, &temp.path().join("app")).unwrap();
+            m.complete_mutation(
+                config::load_hosts(&path).unwrap(),
+                &Action::Save(Some(original), Box::new(saved), path.clone()),
+            );
+            let expected = query;
+            assert_eq!(
+                m.query.value, expected,
+                "edit {edit}, direct={direct_second_edit}"
+            );
+            assert_eq!(m.selected_host().unwrap().name, "target");
+            // Replace the receiver without delivering any result from the first save.
+            receiver = start_inspection(&inspector, &mut m, &path, false);
+            assert!(
+                m.effective.is_empty(),
+                "compatibility snapshot must never become resolved cache"
+            );
+            assert_eq!(m.query.value, expected);
+            assert_eq!(m.selected_host().unwrap().name, "target");
+        }
+        for result in receiver {
+            m.apply_inspection(result);
+        }
+        assert!(m.pending_preferred.is_none());
+        let effective = m.effective["target"].as_ref().unwrap();
+        if direct_second_edit {
+            assert!(m.query.value.is_empty());
+            assert_eq!(
+                effective.user,
+                if change_user { "new-user" } else { "inherited" }
+            );
+            assert_eq!(
+                effective.hostname,
+                if change_hostname {
+                    "new.example"
+                } else {
+                    "inherited.example"
+                }
+            );
+        } else {
+            assert_eq!(m.query.value, query);
+            assert_eq!(effective.user, "inherited");
+            assert_eq!(effective.hostname, "inherited.example");
+        }
+        assert_eq!(m.selected_host().unwrap().tags, ["edit-0", "edit-1"]);
+    }
+}
+
+#[test]
+fn advanced_search_repeated_save_snapshot_is_cancelled_by_typing_or_reload() {
+    for reload in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config");
+        fs::write(
+            &path,
+            "Host target\nHost *\n User inherited\n HostName inherited.example\n",
+        )
+        .unwrap();
+        let mut m = Model::new(
+            config::load_hosts(&path).unwrap(),
+            AppConfig::default(),
+            BTreeMap::new(),
+            false,
+        );
+        let inspector = runtime::effective::Inspector::default();
+        let mut receiver = start_inspection(&inspector, &mut m, &path, false);
+        for result in &receiver {
+            m.apply_inspection(result);
+        }
+        let original_query = "user:inherited AND inherited.example";
+        m.query.set(original_query);
+        m.filter(true);
+        for edit in 0..2 {
+            let original = m.selected_host().unwrap();
+            let mut saved = original.clone();
+            saved.tags.push(format!("edit-{edit}"));
+            config::update_host(&original, &saved, &temp.path().join("app")).unwrap();
+            m.complete_mutation(
+                config::load_hosts(&path).unwrap(),
+                &Action::Save(Some(original), Box::new(saved), path.clone()),
+            );
+            receiver = start_inspection(&inspector, &mut m, &path, false);
+        }
+        assert!(m.pending_preferred.as_ref().unwrap().provisional.is_some());
+        if reload {
+            fs::write(
+                &path,
+                "Host replacement\n User changed\n HostName changed.example\n",
+            )
+            .unwrap();
+            receiver = reload_hosts(&inspector, &mut m, &path).unwrap();
+            assert!(m.pending_preferred.is_none());
+            assert_eq!(m.query.value, original_query);
+            for result in receiver {
+                m.apply_inspection(result);
+            }
+            assert_eq!(m.query.value, original_query);
+            assert!(!m.effective.contains_key("target"));
+        } else {
+            m.query.set("user:other");
+            m.filter(true);
+            assert!(m.pending_preferred.is_none());
+            for result in receiver {
+                m.apply_inspection(result);
+            }
+            assert_eq!(m.query.value, "user:other");
+        }
+        assert!(m.pending_preferred.is_none());
+        assert!(m.visible.is_empty());
+    }
 }

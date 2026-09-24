@@ -102,7 +102,9 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     }
     let viewport_width = area.width;
     let area = if area.height >= 12 { inset(area) } else { area };
-    let notice_count = u16::from(!m.error.is_empty())
+    let search_error = m.search.as_ref().err();
+    let notice_count = u16::from(search_error.is_some())
+        + u16::from(!m.error.is_empty())
         + u16::from(m.update.as_ref().is_some_and(|u| u.available))
         + u16::from(m.show_hidden)
         + u16::from(m.favorites_only);
@@ -141,17 +143,33 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             Constraint::Length(help_height),
         ])
         .split(area);
-    f.render_widget(
-        // Reuse the existing title row so the table's height and offset stay stable.
-        Paragraph::new(if m.connection_result.is_empty() {
-            "SSHO • F4: details • ? Unknown  ~ Connecting  + Online  ! Offline"
-        } else {
-            &m.connection_result
+    // Keep the selected state readable even in a compact viewport or after SSH.
+    let selected_state = m
+        .selected_host()
+        .map(|h| {
+            m.statuses
+                .get(&h.name)
+                .map(|r| r.status)
+                .unwrap_or_default()
+                .label()
         })
-        .style(accent()),
+        .unwrap_or("No selection");
+    let title = if m.connection_result.is_empty() {
+        "SSHO • F4: details"
+    } else {
+        &m.connection_result
+    };
+    f.render_widget(
+        Paragraph::new(format!("{selected_state} • {title}")).style(accent()),
         chunks[0],
     );
     let mut notices = vec![];
+    if let Some(error) = search_error {
+        notices.push(Line::styled(
+            format!("Search: {error}"),
+            Style::default().fg(Color::LightRed),
+        ));
+    }
     if let Some(update) = &m.update {
         if update.available {
             notices.push(Line::styled(
@@ -191,7 +209,12 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         }
         let suffix = format!(" • {}", badges.join(" • "));
         let mut spans = vec![];
-        if !m.error.is_empty() {
+        if let Some(error) = search_error {
+            spans.push(Span::styled(
+                format!("Search: {error}"),
+                Style::default().fg(Color::LightRed),
+            ));
+        } else if !m.error.is_empty() {
             spans.push(Span::styled(
                 ellipsize(
                     &format!("Error: {}", m.error),
@@ -264,6 +287,8 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         .take(widths.len()),
     )
     .style(Style::default().fg(if m.search_focus { GRAY } else { CYAN }));
+    let row_capacity = inner.height.saturating_sub(1) as usize;
+    m.page = row_capacity.max(1);
     let rows = m.visible.iter().enumerate().map(|(position, &index)| {
         let h = &m.all[index];
         let (status, color) = match m.statuses.get(&h.name).map(|r| &r.status) {
@@ -272,24 +297,31 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             Some(PingStatus::Connecting) => ("~", Color::Yellow),
             _ => ("?", GRAY),
         };
-        let name = Cell::from(Line::from(vec![
-            Span::styled(
-                format!(
-                    "{status}{} ",
-                    if m.metadata.get(&h.name).is_some_and(|entry| entry.favorite) {
-                        "*"
-                    } else {
-                        " "
-                    }
-                ),
-                Style::default().fg(if position == m.selected {
-                    Color::Black
+        let mut name_spans = vec![Span::styled(
+            format!(
+                "{status}{} ",
+                if m.metadata.get(&h.name).is_some_and(|entry| entry.favorite) {
+                    "*"
                 } else {
-                    color
-                }),
+                    " "
+                }
             ),
-            Span::raw(ellipsize(&h.name, widths[0].saturating_sub(3) as usize)),
-        ]));
+            Style::default().fg(if position == m.selected {
+                Color::Black
+            } else {
+                color
+            }),
+        )];
+        name_spans.extend(
+            highlight(
+                m,
+                &ellipsize(&h.name, widths[0].saturating_sub(3) as usize),
+                search::Field::Any,
+                position == m.selected,
+            )
+            .spans,
+        );
+        let name = Cell::from(Line::from(name_spans));
         let tags = h
             .tags
             .iter()
@@ -303,17 +335,24 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             .unwrap_or_default();
         let cells = vec![
             name,
-            Cell::from(ellipsize(
-                m.effective
-                    .get(&h.name)
-                    .and_then(|result| result.as_ref().ok())
-                    .map(|value| value.hostname.as_str())
-                    .unwrap_or(&h.hostname),
-                widths.get(1).copied().unwrap_or(0) as usize,
+            Cell::from(highlight(
+                m,
+                &ellipsize(
+                    m.effective
+                        .get(&h.name)
+                        .and_then(|result| result.as_ref().ok())
+                        .map(|value| value.hostname.as_str())
+                        .unwrap_or(&h.hostname),
+                    widths.get(1).copied().unwrap_or(0) as usize,
+                ),
+                search::Field::Any,
+                position == m.selected,
             )),
-            Cell::from(ellipsize(
-                &tags,
-                widths.get(2).copied().unwrap_or(0) as usize,
+            Cell::from(highlight(
+                m,
+                &ellipsize(&tags, widths.get(2).copied().unwrap_or(0) as usize),
+                search::Field::Tag,
+                position == m.selected,
             )),
             Cell::from(ellipsize(
                 &time,
@@ -322,8 +361,6 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         ];
         Row::new(cells.into_iter().take(widths.len()))
     });
-    let row_capacity = inner.height.saturating_sub(1) as usize;
-    m.page = row_capacity.max(1);
     let mut state = TableState::default()
         .with_selected(if m.visible.is_empty() {
             None
@@ -389,6 +426,63 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         Paragraph::new(help).style(Style::default().fg(GRAY)),
         chunks[5],
     );
+}
+
+fn highlight(m: &Model, text: &str, field: search::Field, selected: bool) -> Line<'static> {
+    let ranges = m
+        .search
+        .as_ref()
+        .map(|q| q.ranges(text, field))
+        .unwrap_or_default();
+    let style = Style::default()
+        .fg(if selected {
+            Color::Black
+        } else {
+            Color::Yellow
+        })
+        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+    let mut spans = Vec::new();
+    let mut end = 0;
+    for range in ranges {
+        spans.push(Span::raw(text[end..range.start].to_owned()));
+        spans.push(Span::styled(text[range.clone()].to_owned(), style));
+        end = range.end;
+    }
+    spans.push(Span::raw(text[end..].to_owned()));
+    Line::from(spans)
+}
+
+/// Shared detail text has a styled label followed by value spans; only searchable
+/// values participate, and continuation lines keep the same field (personal notes).
+pub(super) fn highlight_details(m: &Model, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    let mut field = None;
+    lines
+        .into_iter()
+        .map(|mut line| {
+            let has_label = line.spans.len() >= 2;
+            if has_label {
+                field = match line.spans[0].content.as_ref() {
+                    "Host: " | "Hostname/IP: " | "Personal note: " => Some(search::Field::Any),
+                    "User: " => Some(search::Field::User),
+                    "Tags: " => Some(search::Field::Tag),
+                    "Declared source: " => Some(search::Field::File),
+                    _ => None,
+                };
+            }
+            if let Some(field) = field {
+                let mut spans = Vec::new();
+                for (index, span) in line.spans.into_iter().enumerate() {
+                    if has_label && index == 0 {
+                        spans.push(span);
+                    } else {
+                        spans.extend(highlight(m, &span.content, field, false).spans);
+                    }
+                }
+                line.spans = spans;
+            }
+            line
+        })
+        .collect()
 }
 
 fn list_status(
@@ -1008,6 +1102,7 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
         m.history.get(&h.name),
         m.note(&h.name),
     );
+    let lines = highlight_details(m, lines);
     m.page = usize::from(parts[0].height).max(1);
     details::render_rows(f, parts[0], lines, &mut m.scroll);
     f.render_widget(
@@ -1039,7 +1134,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "SSH exit returns here with its result",
         "↑↓     select (Ctrl+P/N in search)",
         "i      show host information",
-        "/      search hosts",
+        "/      search words/phrases (AND/ET)",
         "Tab/Shift+Tab switch search / table",
         "F2     actions (also from search)",
         "F4     toggle details (width >=110)",
@@ -1052,6 +1147,10 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "e      edit selected host",
         "m      move host to another config",
         "d      delete selected host",
+        "tag:work AND user:deploy",
+        "tag:work ET is:online",
+        "file:\"Team Hosts\" is:favorite",
+        "Quotes: phrases; fields/words use AND",
     ];
     let right = [
         "Advanced Features",
