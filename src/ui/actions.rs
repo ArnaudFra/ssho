@@ -11,10 +11,11 @@ pub(super) enum PaletteAction {
     Favorite,
     Note,
     FavoritesOnly,
+    Duplicate,
 }
 
 impl PaletteAction {
-    pub(super) const ALL: [Self; 10] = [
+    pub(super) const ALL: [Self; 11] = [
         Self::Add,
         Self::Edit,
         Self::Tunnel,
@@ -25,6 +26,7 @@ impl PaletteAction {
         Self::Favorite,
         Self::Note,
         Self::FavoritesOnly,
+        Self::Duplicate,
     ];
 
     pub(super) fn label(self) -> &'static str {
@@ -39,6 +41,7 @@ impl PaletteAction {
             Self::Favorite => "Favori *",
             Self::Note => "Note N",
             Self::FavoritesOnly => "Favoris seuls",
+            Self::Duplicate => "Dupliquer D",
         }
     }
 

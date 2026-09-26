@@ -744,6 +744,8 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
     f.render_widget(
         Paragraph::new(if form.original.is_some() {
             "Edit SSH Host"
+        } else if form.is_duplicate() {
+            "Duplicate SSH Host - enter a NEW name"
         } else {
             "Add SSH Host Configuration"
         })
@@ -829,13 +831,11 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
             focus_y = y;
         }
         if i == 4 {
-            if let Some(h) = &form.original {
-                for identity in &h.extra_identities {
-                    lines.push(Line::styled(
-                        format!("  also: {identity} (read-only, kept on save)"),
-                        Style::default().fg(GRAY),
-                    ));
-                }
+            for identity in form.extra_identities() {
+                lines.push(Line::styled(
+                    format!("  also: {identity} (read-only, kept on save)"),
+                    Style::default().fg(GRAY),
+                ));
             }
         }
         if i == 8 && selected {
@@ -1028,6 +1028,7 @@ fn files(f: &mut Frame, m: &mut Model, area: Rect) {
         files,
         selected,
         host,
+        duplicate,
         ..
     } = &m.view
     else {
@@ -1040,8 +1041,9 @@ fn files(f: &mut Frame, m: &mut Model, area: Rect) {
         Constraint::Length(2),
     ])
     .split(area);
-    let title = host
-        .as_ref()
+    let title = duplicate
+        .as_deref()
+        .or(host.as_ref())
         .map(|h| format!("Select destination config file for host '{}':", h.name))
         .unwrap_or_else(|| "Select config file to add host to:".into());
     f.render_widget(Paragraph::new(title).style(accent()), parts[0]);
@@ -1145,6 +1147,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "",
         "a      add new host",
         "e      edit selected host",
+        "D      duplicate to a new name/config",
         "m      move host to another config",
         "d      delete selected host",
         "tag:work AND user:deploy",

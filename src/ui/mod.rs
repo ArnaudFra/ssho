@@ -61,6 +61,7 @@ enum View {
         selected: usize,
         host: Option<Host>,
         seed: String,
+        duplicate: Option<Box<Host>>,
     },
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -70,6 +71,8 @@ enum Action {
     Connect(String, Option<Forward>),
     Add(String),
     Move(Host),
+    Duplicate(Host),
+    SaveCopy(Box<Host>, PathBuf),
     Save(Option<Host>, Box<Host>, PathBuf),
     Delete(Host),
     MoveTo(Host, PathBuf),
@@ -352,7 +355,7 @@ impl Model {
     }
     fn complete_mutation(&mut self, all: Vec<Host>, action: &Action) {
         let preferred = match action {
-            Action::Save(_, host, _) => Some((**host).clone()),
+            Action::Save(_, host, _) | Action::SaveCopy(host, _) => Some((**host).clone()),
             Action::MoveTo(host, target) => Some(Host {
                 source_file: target.clone(),
                 ..host.clone()
@@ -498,7 +501,11 @@ impl Model {
                     FormEvent::Submit if !f.validate() => Action::None,
                     FormEvent::Submit => match f.host() {
                         Ok(host) => {
-                            Action::Save(f.original.clone(), Box::new(host), f.target.clone())
+                            if f.is_duplicate() {
+                                Action::SaveCopy(Box::new(host), f.target.clone())
+                            } else {
+                                Action::Save(f.original.clone(), Box::new(host), f.target.clone())
+                            }
                         }
                         Err(e) => {
                             f.error = e.to_string();
@@ -564,6 +571,7 @@ impl Model {
                 selected,
                 host,
                 seed,
+                duplicate,
             } => {
                 match k.code {
                     KeyCode::Esc => self.back(),
@@ -578,8 +586,12 @@ impl Model {
                             if let Some(host) = host {
                                 return Action::MoveTo(host.clone(), target.clone());
                             }
-                            let view =
-                                View::Host(Box::new(HostForm::add(seed.clone(), target.clone())));
+                            let form = if let Some(source) = duplicate {
+                                HostForm::duplicate((**source).clone(), target.clone())
+                            } else {
+                                HostForm::add(seed.clone(), target.clone())
+                            };
+                            let view = View::Host(Box::new(form));
                             self.open_view(view);
                         }
                     }
@@ -670,6 +682,7 @@ impl Model {
             KeyCode::End => self.selected = self.visible.len().saturating_sub(1),
             KeyCode::Char('*') => return self.activate_action(PaletteAction::Favorite),
             KeyCode::Char('N') => return self.activate_action(PaletteAction::Note),
+            KeyCode::Char('D') => return self.activate_action(PaletteAction::Duplicate),
             KeyCode::Char('a') => return self.activate_action(PaletteAction::Add),
             KeyCode::Char('e') => return self.activate_action(PaletteAction::Edit),
             KeyCode::Char('i') => {
@@ -726,6 +739,11 @@ impl Model {
                 self.filter(false);
             }
             PaletteAction::Add => return Action::Add(String::new()),
+            PaletteAction::Duplicate => {
+                if let Some(host) = self.selected_host() {
+                    return Action::Duplicate(host);
+                }
+            }
             PaletteAction::Edit => {
                 if let Some(host) = self.selected_host() {
                     self.open_view(View::Host(Box::new(HostForm::edit(host))));
@@ -962,9 +980,47 @@ fn select_files(m: &mut Model, config: &Path, host: Option<Host>, seed: String) 
             selected: 0,
             host,
             seed,
+            duplicate: None,
         });
     }
     Ok(())
+}
+/// Duplication needs the source alias's effective connection target, never add defaults.
+/// Resolution is performed by the existing worker pool; pending/errors leave navigation live.
+fn select_duplicate_files(m: &mut Model, config: &Path, mut source: Host) -> Result<()> {
+    let effective = match m.effective.get(&source.name) {
+        Some(Ok(effective)) => effective,
+        Some(Err(error)) => anyhow::bail!(
+            "Cannot duplicate: source ssh -G failed: {error}. F5 reloads; retry D afterwards."
+        ),
+        None => anyhow::bail!(
+            "Cannot duplicate yet: source ssh -G is pending. Retry D when resolution completes."
+        ),
+    };
+    source.hostname.clone_from(&effective.hostname);
+    source.user.clone_from(&effective.user);
+    source.port.clone_from(&effective.port);
+    let files = config::config_files(config)?;
+    m.open_view(View::Files {
+        files,
+        selected: 0,
+        host: None,
+        seed: String::new(),
+        duplicate: Some(Box::new(source)),
+    });
+    m.error.clear();
+    Ok(())
+}
+/// Recheck the full Include graph immediately before the targeted add operation.
+fn save_copy(config: &Path, host: &Host, target: &Path, app_dir: &Path) -> Result<()> {
+    anyhow::ensure!(
+        !config::load_hosts_checked(config)?
+            .iter()
+            .any(|existing| existing.name.eq_ignore_ascii_case(&host.name)),
+        "host '{}' already exists in SSH configuration (including Includes and hidden hosts)",
+        host.name
+    );
+    config::add_host_preserving_target(host, target, app_dir, config)
 }
 /// Runs the interactive browser or a standalone CLI form. SSH takes over the restored terminal.
 pub fn run(
@@ -1065,6 +1121,10 @@ pub fn run(
                 false
             }),
             Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
+            Action::Duplicate(host) => select_duplicate_files(&mut m, config, host).map(|_| false),
+            Action::SaveCopy(host, target) => {
+                save_copy(config, &host, &target, &paths.root).map(|_| true)
+            }
             Action::Move(host) => {
                 select_files(&mut m, config, Some(host), String::new()).map(|_| false)
             }

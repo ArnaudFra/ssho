@@ -453,6 +453,136 @@ sys.exit(int(mode))
     assert saved_note == "Release café 東京\nqae", saved_note
     print("PASS advanced filters, effective user, notes/status transitions, AND/ET, SSH/F5 query preservation and safe bracketed paste passed")
 
+    # Duplicates a secondary alias, preserving source declaration and native values.
+    duplicate_root = home/"duplicate-config"
+    duplicate_include = home/"duplicate-include"
+    duplicate_key = home/"duplicate-key"
+    duplicate_key.write_text("fixture")
+    duplicate_root.write_text(f"Host *\n User inherited-copy-user\n Port 2207\nInclude {duplicate_include}\n# original bytes and aliases\nHost primary secondary\n HostName original.example\n IdentityFile {duplicate_key}\n IdentityFile /missing/extra-key\n Compression yes\n ServerAliveInterval 17\nHost taken\n HostName taken.example\n")
+    duplicate_include.write_text("# unchanged destination prefix\n# Tags: hidden\nHost secret-copy-name\n HostName hidden.example\n")
+    duplicate_before = duplicate_root.read_bytes()
+    include_before = duplicate_include.read_bytes()
+    def native_duplicate(alias):
+        result = subprocess.run(["/usr/bin/ssh", "-G", "-F", str(duplicate_root), alias], capture_output=True, check=True, text=True)
+        return [line for line in result.stdout.splitlines() if not line.startswith("host ")]
+    native_before = native_duplicate("secondary")
+    session = Session(env, ["-c", str(duplicate_root)])
+    session.expect("Last Attempt")
+    session.send(b"secondary")
+    session.expect("Hosts: 1/4")
+    # The appended palette command works directly from search, preserving its query.
+    session.send(b"\x1bOQ" + b"\x1b[B"*10 + b"\r")
+    session.expect("Select destination config file")
+    session.send(b"\x1b")
+    session.expect("secondary")
+    session.send(b"\tD")
+    session.expect("Select destination config file")
+    session.send(b"\x1b[B\r")
+    session.expect("Duplicate SSH Host")
+    session.expect("/missing/extra-key")
+    session.send(b"\x13")
+    session.expect("host name is required")
+    session.send(b"taken\x13")
+    session.expect("already exists")
+    assert duplicate_root.read_bytes() == duplicate_before
+    assert duplicate_include.read_bytes() == include_before
+    session.send(b"\x15secret-copy-name\x13")
+    session.expect("already exists")
+    session.send(b"\x15fresh-copy\x13")
+    session.expect("Last Attempt")
+    session.send(b"i")
+    session.expect("SSH Host Information: fresh-copy")
+    session.expect("inherited-copy-user")
+    session.expect("2207")
+    assert duplicate_root.read_bytes() == duplicate_before
+    assert duplicate_include.read_bytes().endswith(include_before)
+    assert native_duplicate("fresh-copy") == native_before
+    assert native_duplicate("secondary") == native_before
+    # Same destination file and cancellation both keep the source intact.
+    session.send(b"\x1b")
+    session.expect("Last Attempt")
+    session.send(b"D")
+    session.expect("Select destination config file")
+    session.send(b"\x1b[B\r")
+    session.expect("Duplicate SSH Host")
+    session.send(b"cancelled-copy\x1b")
+    session.expect("Discard")
+    session.send(b"\x1b")
+    session.expect("cancelled-copy")
+    session.send(b"\x1b")
+    session.expect("Discard")
+    session.send(b"\r")
+    session.expect("Select destination config file")
+    session.send(b"\x1b")
+    session.expect("Last Attempt")
+    session.send(b"q")
+    session.close()
+    assert "cancelled-copy" not in duplicate_include.read_text()
+    assert duplicate_root.read_bytes() == duplicate_before
+    print("PASS D/palette secondary-alias duplication, Include/same-file selection, required new name, global/hidden collision, extra keys, inherited native ssh-G values and cancel/discard")
+
+    # Reviewer regression: append-after-fallback would silently change specific/22.
+    fallback_root = home/"copy-trailing-fallback"
+    fallback_text = "# Tags: source-tag\n# source comment\nHost source secondary\n HostName source.example\n User specific\n Port 22\nHost other\n HostName other.example\n User other-user\n Port 2244\nHost *\n User fallback\n Port 2207\n"
+    fallback_root.write_text(fallback_text)
+    def native_fallback(alias):
+        result = subprocess.run(["/usr/bin/ssh", "-G", "-F", str(fallback_root), alias], capture_output=True, check=True, text=True)
+        return [line for line in result.stdout.splitlines() if not line.startswith("host ")]
+    fallback_source = native_fallback("secondary")
+    fallback_other = native_fallback("other")
+    session = Session(env, ["-c", str(fallback_root)])
+    session.expect("Last Attempt")
+    session.send(b"secondary\tD")
+    session.expect("Select destination config file")
+    session.send(b"\r")
+    session.expect("Duplicate SSH Host")
+    session.send(b"specific-copy\x13")
+    session.expect("Last Attempt")
+    session.send(b"i")
+    session.expect("SSH Host Information: specific-copy")
+    session.expect("User: specific")
+    session.expect("Port: 22")
+    assert native_fallback("specific-copy") == fallback_source
+    assert native_fallback("secondary") == fallback_source
+    assert native_fallback("other") == fallback_other
+    assert fallback_root.read_text().endswith(fallback_text)
+    assert "Host specific-copy\n    HostName source.example\n    User specific\n    Port 22\n" in fallback_root.read_text()
+    session.send(b"\x1b")
+    session.expect("Last Attempt")
+    session.send(b"q")
+    session.close()
+
+    # Earlier root defaults make a later Include incompatible: reject before backups.
+    rejected_root = home/"copy-rejected-root"
+    rejected_include = home/"copy-rejected-include"
+    rejected_text = f"Host source secondary\n HostName source.example\n User specific\n Port 22\nHost *\n User fallback\n Port 2207\n Include {rejected_include}\n"
+    rejected_root.write_text(rejected_text)
+    rejected_include.write_text("# target comment\nHost target-existing\n HostName target.example\n")
+    rejected_before = rejected_include.read_bytes()
+    backup_directory = home/".config/ssho/backups"
+    backups_before = {path.name: path.read_bytes() for path in backup_directory.iterdir()} if backup_directory.exists() else {}
+    session = Session(env, ["-c", str(rejected_root)])
+    session.expect("Last Attempt")
+    session.send(b"secondary\tD")
+    session.expect("Select destination config file")
+    session.send(b"\x1b[B\r")
+    session.expect("Duplicate SSH Host")
+    session.send(b"rejected-copy\x13")
+    session.expect("destination precedence")
+    session.expect("choose an earlier destination")
+    assert rejected_root.read_text() == rejected_text
+    assert rejected_include.read_bytes() == rejected_before
+    assert {path.name: path.read_bytes() for path in backup_directory.iterdir()} == backups_before
+    session.send(b"\x1b")
+    session.expect("Discard")
+    session.send(b"\r")
+    session.expect("Select destination config file")
+    session.send(b"\x1b")
+    session.expect("Last Attempt")
+    session.send(b"q")
+    session.close()
+    print("PASS native trailing-fallback insertion preserves specific/22, original tags/aliases/other targets; incompatible Include rejects unchanged with no backups")
+
     # Both empty existing and absent roots return to the browser after creation.
     for missing in (False, True):
         empty = home/("missing-config" if missing else "empty-config")

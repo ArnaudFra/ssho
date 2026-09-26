@@ -198,6 +198,7 @@ pub(super) struct HostForm {
     pub inputs: Vec<Input>,
     pub names: Vec<Input>,
     pub original: Option<Host>,
+    copy_source: Option<Host>,
     pub target: PathBuf,
     pub name_focus: bool,
     pub focus: usize,
@@ -250,6 +251,7 @@ impl HostForm {
             inputs,
             names: vec![],
             original: None,
+            copy_source: None,
             target,
             name_focus: false,
             focus: 0,
@@ -267,6 +269,13 @@ impl HostForm {
             host.aliases.clone()
         };
         f.names = names.iter().map(|n| Input::new(n)).collect();
+        f.prefill(&host);
+        f.original = Some(host);
+        f.name_focus = true;
+        f.baseline = (input_values(&f.inputs), input_values(&f.names));
+        f
+    }
+    fn prefill(&mut self, host: &Host) {
         let values = [
             host.name.clone(),
             host.hostname.clone(),
@@ -281,12 +290,27 @@ impl HostForm {
             host.request_tty.clone(),
         ];
         for (i, value) in values.iter().enumerate() {
-            f.inputs[i].set(value);
+            self.inputs[i].set(value);
         }
-        f.original = Some(host);
-        f.name_focus = true;
-        f.baseline = (input_values(&f.inputs), input_values(&f.names));
-        f
+    }
+    /// A copy is an add form with a separate read-only template, never an edit identity.
+    pub fn duplicate(source: Host, target: PathBuf) -> Self {
+        let mut form = Self::add(String::new(), target.clone());
+        form.prefill(&source);
+        form.copy_source = Some(source);
+        form.inputs[0].set("");
+        form.baseline = (input_values(&form.inputs), vec![]);
+        form
+    }
+    pub fn extra_identities(&self) -> &[String] {
+        self.original
+            .as_ref()
+            .or(self.copy_source.as_ref())
+            .map(|host| host.extra_identities.as_slice())
+            .unwrap_or_default()
+    }
+    pub fn is_duplicate(&self) -> bool {
+        self.copy_source.is_some()
     }
     pub fn dirty(&self) -> bool {
         self.baseline != (input_values(&self.inputs), input_values(&self.names))
@@ -368,6 +392,35 @@ impl HostForm {
             }
             check(FormField::Input(i), host);
         }
+        if let Some(source) = &self.copy_source {
+            let name = self.inputs[0].value.trim();
+            if name.contains(['*', '?', '!', '[', ']'])
+                || name.eq_ignore_ascii_case(&source.name)
+                || source
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(name))
+            {
+                errors.push(FieldError {
+                    field: FormField::Input(0),
+                    message:
+                        "copy requires a new concrete host name, distinct from every source alias"
+                            .into(),
+                });
+            }
+        }
+        // Aliases, General (including tags), then Advanced: match navigation order.
+        errors.sort_by_key(|error| match error.field {
+            FormField::Name(i) => (0, i),
+            FormField::Input(i) => (
+                1,
+                match i {
+                    8 => 7,
+                    7 => 8,
+                    _ => i,
+                },
+            ),
+        });
         errors
     }
     pub fn fields(&self) -> Vec<usize> {
@@ -509,10 +562,10 @@ impl HostForm {
             source_file: self.target.clone(),
             ..Host::default()
         };
-        if host.port.is_empty() {
+        if host.port.is_empty() && !self.is_duplicate() {
             host.port = "22".into();
         }
-        if self.original.is_none() && host.user.is_empty() {
+        if self.original.is_none() && !self.is_duplicate() && host.user.is_empty() {
             host.user = self.default_user.clone();
         }
         if let Some(original) = &self.original {
@@ -523,6 +576,9 @@ impl HostForm {
             host.extra_identities = original.extra_identities.clone();
             host.line_number = original.line_number;
             host.aliases = names.clone();
+        }
+        if let Some(source) = &self.copy_source {
+            host.extra_identities = source.extra_identities.clone();
         }
         for name in names {
             let mut check = host.clone();

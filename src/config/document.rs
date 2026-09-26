@@ -109,6 +109,31 @@ impl Document {
         self.lines.extend(Document::new(text).lines);
     }
 
+    /// Insert at a real scope boundary, retaining the original boundary's comment block.
+    /// Global-prefix directives remain ahead of the addition; OpenSSH preflight decides
+    /// whether they permit the requested target values.
+    pub fn insert_before_first_block(&mut self, text: &str) -> bool {
+        let Some(mut start) = self.lines.iter().position(|text| {
+            split_line(text).is_some_and(|line| {
+                line.keyword.eq_ignore_ascii_case("host")
+                    || line.keyword.eq_ignore_ascii_case("match")
+            })
+        }) else {
+            self.append(text);
+            return false;
+        };
+        while start > 0
+            && (self.lines[start - 1].trim().is_empty()
+                || self.lines[start - 1].trim().starts_with('#'))
+        {
+            start -= 1;
+        }
+        let mut added = Document::new(text).lines;
+        added.push(self.newline.into());
+        self.lines.splice(start..start, added);
+        true
+    }
+
     /// Remove one concrete name; aliases and pattern-only declarations survive.
     pub fn remove(&mut self, block: &Block, name: &str) {
         let remaining: Vec<_> = block
@@ -411,6 +436,14 @@ fn header(patterns: &[String], newline: &str) -> String {
 }
 
 pub(super) fn serialize(host: &Host, newline: &str) -> String {
+    serialize_with_port(host, newline, false)
+}
+
+pub(super) fn serialize_copy(host: &Host, newline: &str) -> String {
+    serialize_with_port(host, newline, true)
+}
+
+fn serialize_with_port(host: &Host, newline: &str, explicit_default_port: bool) -> String {
     let mut lines = Vec::new();
     if !host.tags.is_empty() {
         lines.push(format!("# Tags: {}{}", host.tags.join(", "), newline));
@@ -425,7 +458,7 @@ pub(super) fn serialize(host: &Host, newline: &str) -> String {
     if !host.user.is_empty() {
         lines.push(format!("    User {}{}", quote(&host.user), newline));
     }
-    if !host.port.is_empty() && host.port != "22" {
+    if !host.port.is_empty() && (host.port != "22" || explicit_default_port) {
         lines.push(format!("    Port {}{}", host.port, newline));
     }
     for identity in std::iter::once(&host.identity)

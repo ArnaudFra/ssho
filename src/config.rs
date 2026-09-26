@@ -10,7 +10,7 @@ mod document;
 mod files;
 mod parser;
 use document::Document;
-use files::{Snapshot, WRITE_LOCK};
+use files::{ConfigMirror, Snapshot, WRITE_LOCK};
 use parser::{quote, split_line, Parsed};
 
 pub fn load_hosts(path: &Path) -> Result<Vec<Host>> {
@@ -44,9 +44,54 @@ pub fn add_host(host: &Host, target: &Path, app_dir: &Path) -> Result<()> {
     let mut document = Document::new(snapshot.text()?);
     check_add(&document, host)?;
     document.append(&document::serialize(host, document.newline));
+    publish_add(&snapshot, &document, app_dir)
+}
+
+fn publish_add(snapshot: &Snapshot, document: &Document, app_dir: &Path) -> Result<()> {
     let staged = snapshot.stage(document.text().as_bytes())?;
     snapshot.backup(app_dir)?;
     snapshot.commit(staged)
+}
+
+/// Add a copy at a scope boundary only after native OpenSSH confirms its requested
+/// core connection target. Validation uses private mirrors, before backups/writes.
+pub fn add_host_preserving_target(
+    host: &Host,
+    target: &Path,
+    app_dir: &Path,
+    root: &Path,
+) -> Result<()> {
+    safe_fields(host)?;
+    let _lock = WRITE_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("SSH configuration lock poisoned"))?;
+    let mut mirror = ConfigMirror::new(root)?;
+    anyhow::ensure!(
+        !load_hosts_checked(mirror.root())?
+            .iter()
+            .any(|existing| existing.name.eq_ignore_ascii_case(&host.name)),
+        "host '{}' already exists in SSH configuration (including Includes and hidden hosts)",
+        host.name
+    );
+    let snapshot = mirror.snapshot(target)?;
+    let mut document = Document::new(snapshot.text()?);
+    check_add(&document, host)?;
+    let boundary =
+        document.insert_before_first_block(&document::serialize_copy(host, document.newline));
+    anyhow::ensure!(boundary || snapshot.path == std::fs::canonicalize(root)?, "destination Include has no Host/Match boundary; choose the root file or another destination and retry");
+    let target = snapshot.path.clone();
+    mirror.replace(&target, &document.text())?;
+    let effective = crate::runtime::effective::resolve(mirror.root(), &host.name)
+        .map_err(|error| anyhow::anyhow!("cannot preflight copy destination; choose another destination or fix SSH configuration and retry: {error:#}"))?;
+    anyhow::ensure!(
+        effective.hostname == host.hostname
+            && (host.user.is_empty() || effective.user == host.user)
+            && (host.port.is_empty() || effective.port == host.port),
+        "destination precedence changes the requested copy target (resolved {}@{}:{}); choose an earlier destination, usually the root file, or adjust global/Include defaults and retry",
+        effective.user, effective.hostname, effective.port
+    );
+    mirror.unchanged()?;
+    publish_add(mirror.snapshot(&target)?, &document, app_dir)
 }
 
 /// Nonempty aliases edit the whole declaration; an empty list detaches this
@@ -893,5 +938,375 @@ mod checked_load_tests {
             ["first", "second", "root-host"]
         );
         assert_eq!(hosts, load_hosts(&root).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn copy_preflight_preserves_nested_glob_match_and_missing_include_semantics() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("config");
+        let dir = temp.path().join("include folder");
+        fs::create_dir(&dir).unwrap();
+        let source = dir.join("00-source.conf");
+        let target = dir.join("10-target.conf");
+        fs::write(
+            dir.join(".00-hidden.conf"),
+            "Host *\n User excluded-by-native-glob\n Port 2299\n",
+        )
+        .unwrap();
+        fs::write(
+            &root,
+            format!(
+                "Include {}\nHost *\n User fallback\n Port 2207\n",
+                quote(&dir.join("*.conf").to_string_lossy())
+            ),
+        )
+        .unwrap();
+        fs::write(
+            &source,
+            "Host source secondary\n HostName source.example\n User specific\n Port 22\n",
+        )
+        .unwrap();
+        fs::write(&target, format!("Include {}\n# Tags: other-tag\n# original comment\nHost other\n HostName other.example\n User other-user\n Port 2244\nMatch host other\n Compression yes\n", quote(&temp.path().join("missing-*.conf").to_string_lossy()))).unwrap();
+        let source_before = crate::runtime::effective::resolve(&root, "secondary").unwrap();
+        let other_before = crate::runtime::effective::resolve(&root, "other").unwrap();
+        let mut copy = find_host(&root, "secondary").unwrap();
+        copy.name = "new-copy".into();
+        copy.aliases.clear();
+        copy.tags = vec!["copy-tag".into()];
+        let before_count = load_hosts(&root).unwrap().len();
+        add_host_preserving_target(&copy, &target, &temp.path().join("app"), &root).unwrap();
+        let actual = crate::runtime::effective::resolve(&root, "new-copy").unwrap();
+        assert_eq!(
+            (&actual.hostname, &actual.user, &actual.port),
+            (
+                &source_before.hostname,
+                &source_before.user,
+                &source_before.port
+            )
+        );
+        assert_eq!(
+            crate::runtime::effective::resolve(&root, "secondary").unwrap(),
+            source_before
+        );
+        assert_eq!(
+            crate::runtime::effective::resolve(&root, "other").unwrap(),
+            other_before
+        );
+        assert_eq!(find_host(&root, "other").unwrap().tags, ["other-tag"]);
+        assert_eq!(load_hosts(&root).unwrap().len(), before_count + 1);
+        assert_eq!(find_host(&root, "new-copy").unwrap().aliases, ["new-copy"]);
+    }
+
+    #[test]
+    fn copy_preflight_unsupported_include_rejects_before_backups_or_writes() {
+        for unsupported in ["$UNDEFINED/include", "%d/include", "~nameduser/include"] {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("config");
+            let text =
+                format!("Host original\n HostName original.example\nInclude {unsupported}\n");
+            fs::write(&root, &text).unwrap();
+            let copy = Host {
+                name: "new-copy".into(),
+                hostname: "original.example".into(),
+                user: "specific".into(),
+                port: "22".into(),
+                ..Host::default()
+            };
+            let app = temp.path().join("app");
+            let error = add_host_preserving_target(&copy, &root, &app, &root)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("unsupported") && error.contains("retry"),
+                "{error}"
+            );
+            assert_eq!(fs::read_to_string(&root).unwrap(), text);
+            assert!(!app.exists());
+        }
+    }
+
+    #[test]
+    fn copy_mirror_detects_changed_files_and_glob_membership_before_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("config");
+        let dir = temp.path().join("parts");
+        fs::create_dir(&dir).unwrap();
+        let included = dir.join("a.conf");
+        fs::write(&root, format!("Include {}\n", dir.join("*.conf").display())).unwrap();
+        fs::write(&included, "Host source\n HostName source.example\n").unwrap();
+        let mirror = ConfigMirror::new(&root).unwrap();
+        assert!(mirror.unchanged().is_ok());
+        fs::write(
+            &included,
+            "Host externally-changed\n HostName external.example\n",
+        )
+        .unwrap();
+        assert!(mirror
+            .unchanged()
+            .unwrap_err()
+            .to_string()
+            .contains("changed"));
+        let mirror = ConfigMirror::new(&root).unwrap();
+        fs::write(
+            dir.join("b.conf"),
+            "Host new-external\n HostName new.example\n",
+        )
+        .unwrap();
+        assert!(mirror
+            .unchanged()
+            .unwrap_err()
+            .to_string()
+            .contains("Include expansion changed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_native_home_matches_openssh_expansion() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("empty");
+        fs::write(&root, "").unwrap();
+        let actual = crate::runtime::effective::resolve(&root, "test-alias").unwrap();
+        let home = files::native_home().unwrap();
+        assert!(actual.directives["userknownhostsfile"][0]
+            .starts_with(&home.join(".ssh/known_hosts").to_string_lossy().into_owned()));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn copy_preflight_keeps_native_permission_rejection_before_any_publication() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("config");
+        let target = temp.path().join("included");
+        fs::write(&root, format!("Host source\n HostName source.example\n User specific\n Port 22\nHost new-*\n Include {}\n", target.display())).unwrap();
+        fs::write(&target, "Host other\n HostName other.example\n").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o666)).unwrap();
+        let mut copy = find_host(&root, "source").unwrap();
+        copy.name = "new-copy".into();
+        copy.aliases.clear();
+        assert!(crate::runtime::effective::resolve(&root, "source").is_err());
+        let root_before = fs::read(&root).unwrap();
+        let target_before = fs::read(&target).unwrap();
+        let app = temp.path().join("app");
+        assert!(
+            add_host_preserving_target(&copy, &target, &app, &root).is_err(),
+            "mirror must not hide an original Include permission error"
+        );
+        assert_eq!(fs::read(&root).unwrap(), root_before);
+        assert_eq!(fs::read(&target).unwrap(), target_before);
+        assert!(!app.exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn copy_preflight_access_graph_mutations_are_rejected() {
+        use std::{
+            os::unix::fs::{symlink, PermissionsExt},
+            process::Command,
+        };
+        if std::env::var_os("SSHM_COPY_MUTATION_CHILD").is_some() {
+            let root = PathBuf::from(std::env::var_os("SSHM_COPY_ROOT").unwrap());
+            let target = PathBuf::from(std::env::var_os("SSHM_COPY_TARGET").unwrap());
+            let app = PathBuf::from(std::env::var_os("SSHM_COPY_APP").unwrap());
+            let copy = Host {
+                name: "new-copy".into(),
+                hostname: "source.example".into(),
+                user: "specific".into(),
+                port: "22".into(),
+                ..Host::default()
+            };
+            let result = add_host_preserving_target(&copy, &target, &app, &root);
+            assert!(result.is_err(), "preflight must reject a graph access/metadata mutation instead of publishing: {result:?}");
+            assert!(result.unwrap_err().to_string().contains("changed"));
+            return;
+        }
+        for case in [
+            "root-link",
+            "root-parent",
+            "include-link",
+            "include-alias",
+            "include-parent",
+            "target-alias",
+            "root-mode",
+            "include-mode",
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let dir = temp.path();
+            let old_dir = dir.join("old");
+            let new_dir = dir.join("new");
+            let bin = dir.join("bin");
+            fs::create_dir(&old_dir).unwrap();
+            fs::create_dir(&new_dir).unwrap();
+            fs::create_dir(&bin).unwrap();
+            let declaration = "Host source secondary\n HostName source.example\n User specific\n Port 22\nHost *\n User fallback\n Port 2207\n";
+            let old_file = old_dir.join("config");
+            let new_file = new_dir.join("config");
+            fs::write(&old_file, declaration).unwrap();
+            fs::write(&new_file, "Host *\n User changed-user\n Port 2299\n").unwrap();
+            let root_file = dir.join("root");
+            let selected = dir.join("selected");
+            let root;
+            let target;
+            let access;
+            let replacement;
+            let mutation;
+            match case {
+                "root-link" => {
+                    symlink(&old_file, &selected).unwrap();
+                    root = selected.clone();
+                    target = root.clone();
+                    access = selected.clone();
+                    replacement = new_file.clone();
+                    mutation = "link";
+                }
+                "root-parent" => {
+                    symlink(&old_dir, &selected).unwrap();
+                    root = selected.join("config");
+                    target = root.clone();
+                    access = selected.clone();
+                    replacement = new_dir.clone();
+                    mutation = "link";
+                }
+                "include-link" | "include-alias" | "include-parent" => {
+                    fs::write(&old_file, "Host never-matching\n HostName never.example\n").unwrap();
+                    if case != "include-parent" {
+                        symlink(&old_file, &selected).unwrap();
+                        replacement = new_file.clone();
+                    } else {
+                        symlink(&old_dir, &selected).unwrap();
+                        replacement = new_dir.clone();
+                    }
+                    let include = if case != "include-parent" {
+                        selected.clone()
+                    } else {
+                        selected.join("config")
+                    };
+                    let earlier_alias = if case == "include-alias" {
+                        format!("Include {}\n", old_file.display())
+                    } else {
+                        String::new()
+                    };
+                    fs::write(
+                        &root_file,
+                        format!(
+                            "{earlier_alias}Include {}\n{declaration}",
+                            include.display()
+                        ),
+                    )
+                    .unwrap();
+                    root = root_file.clone();
+                    target = root.clone();
+                    access = selected.clone();
+                    mutation = "link";
+                }
+                "target-alias" => {
+                    fs::write(
+                        &root_file,
+                        format!("Include {}\n{declaration}", old_file.display()),
+                    )
+                    .unwrap();
+                    fs::write(&old_file, "Host never-matching\n HostName never.example\n").unwrap();
+                    symlink(&old_file, &selected).unwrap();
+                    root = root_file.clone();
+                    target = selected.clone();
+                    access = selected.clone();
+                    replacement = new_file.clone();
+                    mutation = "link";
+                }
+                "root-mode" => {
+                    root = old_file.clone();
+                    target = root.clone();
+                    access = root.clone();
+                    replacement = new_file.clone();
+                    mutation = "mode";
+                }
+                "include-mode" => {
+                    fs::write(&old_file, "Host never-matching\n HostName never.example\n").unwrap();
+                    fs::write(
+                        &root_file,
+                        format!("Include {}\n{declaration}", old_file.display()),
+                    )
+                    .unwrap();
+                    root = root_file.clone();
+                    target = root.clone();
+                    access = old_file.clone();
+                    replacement = new_file.clone();
+                    mutation = "mode";
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                crate::runtime::effective::resolve(&root, "secondary")
+                    .unwrap()
+                    .user,
+                "specific"
+            );
+            let before: Vec<_> = [&old_file, &new_file, &root_file]
+                .into_iter()
+                .filter(|path| path.exists())
+                .map(|path| (path.clone(), fs::read(path).unwrap()))
+                .collect();
+            let script = bin.join("ssh");
+            fs::write(&script, "#!/bin/sh\nset -eu\nif [ \"$SSHM_COPY_MUTATION\" = link ]; then\n /bin/rm -f -- \"$SSHM_COPY_ACCESS\"\n /bin/ln -s -- \"$SSHM_COPY_REPLACEMENT\" \"$SSHM_COPY_ACCESS\"\nelse\n /bin/chmod 666 \"$SSHM_COPY_ACCESS\"\nfi\n/bin/touch \"$SSHM_COPY_WRAPPER_RAN\"\nexec /usr/bin/ssh \"$@\"\n").unwrap();
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+            let app = dir.join("app");
+            let marker = dir.join("native-wrapper-ran");
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "config::copy_tests::copy_preflight_access_graph_mutations_are_rejected",
+                    "--nocapture",
+                ])
+                .env("PATH", &bin)
+                .env("SSHM_COPY_MUTATION_CHILD", "1")
+                .env("SSHM_COPY_ROOT", &root)
+                .env("SSHM_COPY_TARGET", &target)
+                .env("SSHM_COPY_APP", &app)
+                .env("SSHM_COPY_MUTATION", mutation)
+                .env("SSHM_COPY_ACCESS", &access)
+                .env("SSHM_COPY_REPLACEMENT", &replacement)
+                .env("SSHM_COPY_WRAPPER_RAN", &marker)
+                .output()
+                .unwrap();
+            assert!(
+                marker.exists(),
+                "{case}: native wrapper must run during preflight"
+            );
+            assert!(
+                output.status.success(),
+                "{case}: {} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if mutation == "link" {
+                assert_eq!(
+                    fs::read_link(&access).unwrap(),
+                    replacement,
+                    "{case}: wrapper must complete the retarget"
+                );
+            } else {
+                assert_eq!(
+                    fs::metadata(&access).unwrap().permissions().mode() & 0o777,
+                    0o666,
+                    "{case}: refused copy must retain the external mode change"
+                );
+            }
+            for (path, bytes) in before {
+                assert_eq!(
+                    fs::read(&path).unwrap(),
+                    bytes,
+                    "{case}: no publication to {}",
+                    path.display()
+                );
+            }
+            assert!(
+                !app.exists(),
+                "{case}: no backups or app writes on refused preflight"
+            );
+        }
     }
 }

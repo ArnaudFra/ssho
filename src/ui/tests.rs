@@ -74,9 +74,9 @@ fn search_first_selection_and_escape() {
 #[test]
 fn search_never_runs_shortcuts() {
     let mut m = model();
-    typing(&mut m, "aefdmqHsnriph/");
+    typing(&mut m, "aefdmqHsnriph/D");
     assert!(matches!(m.view, View::List));
-    assert_eq!(m.query.value, "aefdmqHsnriph/");
+    assert_eq!(m.query.value, "aefdmqHsnriph/D");
 }
 #[test]
 fn tab_hidden_delete_and_preferences() {
@@ -356,6 +356,7 @@ fn selectors_and_tunnels_return_precise_actions() {
         selected: 0,
         host: Some(h.clone()),
         seed: String::new(),
+        duplicate: None,
     };
     m.key(key(KeyCode::Char('j')));
     assert_eq!(
@@ -369,6 +370,7 @@ fn selectors_and_tunnels_return_precise_actions() {
         selected: 0,
         host: None,
         seed: "new".into(),
+        duplicate: None,
     };
     m.key(key(KeyCode::Enter));
     let View::Host(ref form) = m.view else {
@@ -418,6 +420,7 @@ fn secondary_views_render_and_scroll_without_panics() {
             selected: 0,
             host: None,
             seed: String::new(),
+            duplicate: None,
         },
     ] {
         m.view = view;
@@ -1237,6 +1240,7 @@ fn navigation_files_add_cancel_returns_to_selector() {
         selected: 1,
         host: None,
         seed: "new".into(),
+        duplicate: None,
     };
     m.key(key(KeyCode::Enter));
     assert!(matches!(m.view, View::Host(_)));
@@ -1327,6 +1331,7 @@ fn navigation_added_host_selected_after_file_picker_and_incompatible_search() {
         selected: 0,
         host: None,
         seed: String::new(),
+        duplicate: None,
     });
     m.key(key(KeyCode::Enter));
     let added = Host {
@@ -3480,5 +3485,375 @@ fn advanced_search_repeated_save_snapshot_is_cancelled_by_typing_or_reload() {
         }
         assert!(m.pending_preferred.is_none());
         assert!(m.visible.is_empty());
+    }
+}
+
+#[test]
+fn duplication_shortcut_and_palette_offer_selected_host() {
+    let mut m = model();
+    m.search_focus = false;
+    m.apply_inspection(inspection("alpha", "deploy", PingStatus::Unknown));
+    assert_eq!(
+        m.key(key(KeyCode::Char('D'))),
+        Action::Duplicate(m.all[0].clone())
+    );
+    assert_eq!(PaletteAction::ALL.last().unwrap().label(), "Dupliquer D");
+    assert!(!PaletteAction::Duplicate.enabled(false));
+    m.query.set("alpha");
+    m.filter(true);
+    m.search_focus = true;
+    m.key(key(KeyCode::F(2)));
+    for _ in 0..10 {
+        m.key(key(KeyCode::Down));
+    }
+    assert_eq!(
+        m.key(key(KeyCode::Enter)),
+        Action::Duplicate(m.all[0].clone())
+    );
+    assert_eq!(m.query.value, "alpha");
+    assert!(m.search_focus);
+}
+
+#[test]
+fn duplication_preserves_native_effective_target_and_declared_fields_without_alias_sharing() {
+    for source_in_include in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("config");
+        let included = temp.path().join("included");
+        let keyfile = temp.path().join("key");
+        fs::write(&keyfile, "test key").unwrap();
+        let declaration = format!("# original comment\n# Tags: prod,work\nHost source secondary\n HostName source.example\n User declared\n Port 2255\n IdentityFile {}\n IdentityFile /missing/additional-key\n ProxyJump bastion\n ProxyCommand ssh -W %h:%p gateway\n RemoteCommand uptime\n RequestTTY force\n Compression yes\n ServerAliveInterval 13\n SendEnv FOO\n SendEnv BAR\n LocalCommand printf \"quoted space\"\n", keyfile.display());
+        let defaults = "Host *\n User inherited-user\n Port 2207\n";
+        fs::write(
+            &root,
+            format!(
+                "{defaults}Include {}\n{}",
+                included.display(),
+                if source_in_include { "" } else { &declaration }
+            ),
+        )
+        .unwrap();
+        fs::write(&included, if source_in_include { declaration.as_str() } else { "# destination\nHost hidden-collision alias-collision\n HostName hidden.example\n# Tags: hidden\nHost secret-collision\n HostName secret.example\n" }).unwrap();
+        let original_root = fs::read(&root).unwrap();
+        let original_include = fs::read(&included).unwrap();
+        let source = config::find_host(&root, "secondary").unwrap();
+        let effective = runtime::effective::resolve(&root, "secondary").unwrap();
+        assert_eq!(effective.user, "inherited-user");
+        assert_eq!(effective.port, "2207");
+        let mut m = Model::new(
+            config::load_hosts(&root).unwrap(),
+            AppConfig::default(),
+            BTreeMap::new(),
+            false,
+        );
+        let mut metadata = Metadata::load(&temp.path().join("app"), &root).unwrap();
+        metadata.set_favorite("secondary", true).unwrap();
+        metadata
+            .set_note("secondary", "personal source note")
+            .unwrap();
+        m.metadata = metadata.hosts().clone();
+        m.effective
+            .insert(source.name.clone(), Ok(effective.clone()));
+        select_duplicate_files(&mut m, &root, source.clone()).unwrap();
+        let View::Files {
+            files,
+            selected,
+            duplicate,
+            ..
+        } = &mut m.view
+        else {
+            panic!("expected destination picker")
+        };
+        assert!(duplicate.is_some());
+        assert!(
+            files.contains(&source.source_file),
+            "same-file copy must be offered"
+        );
+        let target = if source_in_include {
+            root.clone()
+        } else {
+            included.clone()
+        };
+        *selected = files.iter().position(|path| path == &target).unwrap();
+        m.key(key(KeyCode::Enter));
+        let View::Host(form) = &mut m.view else {
+            panic!("expected prefilled add form")
+        };
+        assert!(form.original.is_none());
+        assert!(form.names.is_empty());
+        assert!(!form.dirty());
+        assert!(!form.validate(), "new name is mandatory");
+        for invalid in [
+            "source",
+            "secondary",
+            "SOURCE",
+            "SECONDARY",
+            "*",
+            "!other",
+            "wild?",
+        ] {
+            form.inputs[0].set(invalid);
+            assert!(!form.validate(), "must reject {invalid}");
+        }
+        form.inputs[0].set("new-copy");
+        assert!(form.validate(), "{} {:?}", form.error, form.errors);
+        let copy = form.host().unwrap();
+        assert_eq!(copy.hostname, effective.hostname);
+        assert_eq!(copy.user, effective.user);
+        assert_eq!(copy.port, effective.port);
+        assert_eq!(copy.identity, source.identity);
+        assert_eq!(copy.extra_identities, source.extra_identities);
+        assert_eq!(copy.proxy_jump, source.proxy_jump);
+        assert_eq!(copy.proxy_command, source.proxy_command);
+        assert_eq!(copy.remote_command, source.remote_command);
+        assert_eq!(copy.request_tty, source.request_tty);
+        assert_eq!(copy.options, source.options);
+        assert_eq!(copy.tags, source.tags);
+        assert!(copy.aliases.is_empty());
+        assert!(
+            screen(&mut m, 120, 40).contains("/missing/additional-key"),
+            "copy form must display preserved extra identities"
+        );
+        let action = m.key(ctrl('s'));
+        assert!(matches!(&action, Action::SaveCopy(..)));
+        save_copy(&root, &copy, &target, &temp.path().join("app")).unwrap();
+        let mut resolved_copy = runtime::effective::resolve(&root, "new-copy").unwrap();
+        // ssh -G reports the requested alias separately from its effective target.
+        resolved_copy
+            .directives
+            .insert("host".into(), vec!["secondary".into()]);
+        assert_eq!(
+            resolved_copy, effective,
+            "native ssh -G must retain all represented source values"
+        );
+        assert_eq!(config::find_host(&root, "secondary").unwrap(), source);
+        assert_eq!(
+            config::find_host(&root, "source").unwrap().aliases,
+            ["source", "secondary"]
+        );
+        if source_in_include {
+            assert_eq!(fs::read(&included).unwrap(), original_include);
+            assert!(fs::read(&root).unwrap().ends_with(&original_root));
+        } else {
+            assert_eq!(fs::read(&root).unwrap(), original_root);
+            assert!(fs::read(&included).unwrap().ends_with(&original_include));
+        }
+        complete_saved_mutation(
+            &mut m,
+            config::load_hosts(&root).unwrap(),
+            &action,
+            &mut metadata,
+        );
+        assert!(m.is_favorite("secondary"));
+        assert_eq!(m.note("secondary"), "personal source note");
+        assert_eq!(m.selected_host().unwrap().name, "new-copy");
+        assert!(!m.is_favorite("new-copy"));
+        assert_eq!(m.note("new-copy"), "");
+        // Also allow a copy into its own original file.
+        let mut same = copy.clone();
+        same.name = "same-file-copy".into();
+        save_copy(&root, &same, &source.source_file, &temp.path().join("app")).unwrap();
+        for name in ["source", "secondary", "new-copy", "same-file-copy"]
+            .into_iter()
+            .chain(if source_in_include {
+                vec![]
+            } else {
+                vec![
+                    "alias-collision",
+                    "secret-collision",
+                    "ALIAS-COLLISION",
+                    "SECRET-COLLISION",
+                ]
+            })
+        {
+            let mut collision = copy.clone();
+            collision.name = name.into();
+            let before = fs::read(&target).unwrap();
+            assert!(
+                save_copy(&root, &collision, &target, &temp.path().join("app"))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("already exists")
+            );
+            assert_eq!(fs::read(&target).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn duplication_implicit_keys_stay_unset_and_resolution_errors_are_responsive() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    fs::write(&root, "Host original secondary\n").unwrap();
+    let source = config::find_host(&root, "secondary").unwrap();
+    let mut m = Model::new(
+        config::load_hosts(&root).unwrap(),
+        AppConfig::default(),
+        BTreeMap::new(),
+        false,
+    );
+    assert!(select_duplicate_files(&mut m, &root, source.clone())
+        .unwrap_err()
+        .to_string()
+        .contains("pending"));
+    assert!(matches!(m.view, View::List));
+    m.effective
+        .insert("secondary".into(), Err("fake failure".into()));
+    assert!(select_duplicate_files(&mut m, &root, source.clone())
+        .unwrap_err()
+        .to_string()
+        .contains("fake failure"));
+    assert!(matches!(m.view, View::List));
+    let effective = runtime::effective::resolve(&root, "secondary").unwrap();
+    assert!(!effective.identity_files.is_empty());
+    m.effective.insert("secondary".into(), Ok(effective));
+    select_duplicate_files(&mut m, &root, source).unwrap();
+    m.key(key(KeyCode::Enter));
+    let View::Host(form) = &mut m.view else {
+        panic!()
+    };
+    form.inputs[0].set("new");
+    assert_eq!(form.inputs[1].value, "secondary");
+    assert!(form.inputs[4].value.is_empty());
+    assert!(form.host().unwrap().extra_identities.is_empty());
+    assert!(form.validate());
+    m.key(key(KeyCode::Esc));
+    assert!(m.discard);
+    m.key(key(KeyCode::Esc));
+    let View::Host(form) = &mut m.view else {
+        panic!()
+    };
+    assert_eq!(form.inputs[0].value, "new");
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::List));
+    assert_eq!(
+        fs::read_to_string(&root).unwrap(),
+        "Host original secondary\n"
+    );
+}
+
+#[test]
+fn duplication_before_trailing_fallback_retains_explicit_port_22_and_old_aliases() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    let original = "# Tags: original-tag\n# attached original comment\nHost source secondary\n HostName source.example\n User specific\n Port 22\n Compression yes\nHost other\n HostName other.example\n User other-user\n Port 2244\nHost *\n User fallback\n Port 2207\n";
+    fs::write(&root, original).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o640)).unwrap();
+    }
+    let before_source = runtime::effective::resolve(&root, "secondary").unwrap();
+    let before_other = runtime::effective::resolve(&root, "other").unwrap();
+    let source = config::find_host(&root, "secondary").unwrap();
+    let mut copy = source.clone();
+    copy.name = "fresh-copy".into();
+    copy.aliases.clear();
+    copy.line_number = 0;
+    save_copy(&root, &copy, &root, &temp.path().join("app")).unwrap();
+    assert!(fs::read_to_string(&root).unwrap().ends_with(original));
+    assert_eq!(
+        fs::read_to_string(temp.path().join("app/backups/config.backup")).unwrap(),
+        original
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+    let after = runtime::effective::resolve(&root, "fresh-copy").unwrap();
+    assert_eq!(
+        (&after.hostname, &after.user, &after.port),
+        (
+            &before_source.hostname,
+            &before_source.user,
+            &before_source.port
+        )
+    );
+    assert_eq!(
+        runtime::effective::resolve(&root, "secondary").unwrap(),
+        before_source
+    );
+    assert_eq!(
+        runtime::effective::resolve(&root, "other").unwrap(),
+        before_other
+    );
+    let reloaded = config::find_host(&root, "secondary").unwrap();
+    assert_eq!(reloaded.tags, source.tags);
+    assert_eq!(reloaded.aliases, source.aliases);
+    assert_eq!(reloaded.options, source.options);
+    assert!(fs::read_to_string(&root)
+        .unwrap()
+        .contains("# Tags: original-tag\n# attached original comment\nHost source secondary"));
+}
+
+#[test]
+fn duplication_rejects_earlier_include_or_global_fallback_without_writes_or_backups() {
+    for copy_to_root in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("config");
+        let included = temp.path().join("included");
+        let declaration =
+            "Host source secondary\n HostName source.example\n User specific\n Port 22\n";
+        if copy_to_root {
+            // A preceding Include matches the new name but does not match the source.
+            let earlier = temp.path().join("earlier");
+            fs::write(&earlier, "Host new-*\n User fallback\n Port 2207\n").unwrap();
+            fs::write(
+                &root,
+                format!(
+                    "Include {}\nInclude {}\n",
+                    earlier.display(),
+                    included.display()
+                ),
+            )
+            .unwrap();
+            fs::write(&included, declaration).unwrap();
+        } else {
+            // The root source precedes a fallback which wins before the target Include.
+            fs::write(
+                &root,
+                format!(
+                    "{declaration}Host *\n User fallback\n Port 2207\n Include {}\n",
+                    included.display()
+                ),
+            )
+            .unwrap();
+            fs::write(
+                &included,
+                "# destination\nHost other\n HostName other.example\n",
+            )
+            .unwrap();
+        }
+        let native_source = runtime::effective::resolve(&root, "secondary").unwrap();
+        assert_eq!(native_source.user, "specific");
+        assert_eq!(native_source.port, "22");
+        let root_before = fs::read(&root).unwrap();
+        let include_before = fs::read(&included).unwrap();
+        let mut copy = config::find_host(&root, "secondary").unwrap();
+        copy.name = "new-copy".into();
+        copy.aliases.clear();
+        copy.user = "specific".into();
+        copy.port = "22".into();
+        let target = if copy_to_root { &root } else { &included };
+        let app = temp.path().join("app");
+        let result = save_copy(&root, &copy, target, &app);
+        assert!(
+            result.is_err(),
+            "incompatible destination must reject rather than silently change the copy target"
+        );
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("destination") && error.contains("choose"),
+            "{error}"
+        );
+        assert_eq!(fs::read(&root).unwrap(), root_before);
+        assert_eq!(fs::read(&included).unwrap(), include_before);
+        assert!(!app.join("backups").exists());
     }
 }
