@@ -3,6 +3,7 @@ mod actions;
 mod details;
 mod forms;
 mod notes;
+mod profiles;
 mod render;
 mod search;
 #[cfg(test)]
@@ -12,6 +13,7 @@ use crate::{
     runtime::{self, PingResult, PingStatus},
     storage::{
         metadata::{HostMetadata, Metadata},
+        tunnels::{HostProfiles, TunnelProfiles},
         AppConfig, AppPaths, History,
     },
     types::{ConnectionInfo, Forward, Host},
@@ -56,6 +58,7 @@ enum View {
     Note(notes::Editor),
     Help,
     Forward(ForwardForm),
+    Profiles(profiles::List),
     Files {
         files: Vec<PathBuf>,
         selected: usize,
@@ -80,6 +83,13 @@ enum Action {
     Reload,
     Favorite(Host),
     SaveNote(String, String),
+    SaveProfile {
+        host: String,
+        original: Option<String>,
+        name: String,
+        forward: Forward,
+    },
+    DeleteProfile(String, String),
 }
 struct PendingPreferred {
     host: Host,
@@ -101,6 +111,7 @@ struct Model {
     recent: bool,
     favorites_only: bool,
     metadata: BTreeMap<String, HostMetadata>,
+    tunnel_profiles: HostProfiles,
     delete: Option<Host>,
     discard: bool,
     view: View,
@@ -141,6 +152,7 @@ impl Model {
             recent: false,
             favorites_only: false,
             metadata: BTreeMap::new(),
+            tunnel_profiles: BTreeMap::new(),
             delete: None,
             discard: false,
             view: View::List,
@@ -515,7 +527,21 @@ impl Model {
                     _ => Action::None,
                 }
             }
+            View::Profiles(_) => return self.profile_key(k),
             View::Forward(f) => {
+                if ctrl && k.code == KeyCode::Char('l') {
+                    return if f.validate() {
+                        match f.forward() {
+                            Ok(forward) => Action::Connect(f.host.clone(), Some(forward)),
+                            Err(error) => {
+                                f.error = error.to_string();
+                                Action::None
+                            }
+                        }
+                    } else {
+                        Action::None
+                    };
+                }
                 return match f.key(k) {
                     FormEvent::Cancel => {
                         if f.dirty() {
@@ -525,16 +551,21 @@ impl Model {
                         }
                         Action::None
                     }
-                    FormEvent::Submit if !f.validate() => Action::None,
+                    FormEvent::Submit if !f.validate_save() => Action::None,
                     FormEvent::Submit => match f.forward() {
-                        Ok(forward) => Action::Connect(f.host.clone(), Some(forward)),
+                        Ok(forward) => Action::SaveProfile {
+                            host: f.host.clone(),
+                            original: f.original_name.clone(),
+                            name: f.inputs[5].value.clone(),
+                            forward,
+                        },
                         Err(e) => {
                             f.error = e.to_string();
                             Action::None
                         }
                     },
                     _ => Action::None,
-                }
+                };
             }
             View::Info(h) => {
                 if k.code == KeyCode::F(5) {
@@ -632,6 +663,9 @@ impl Model {
         }
         if k.code == KeyCode::F(5) {
             return Action::Reload;
+        }
+        if k.code == KeyCode::F(6) {
+            return self.activate_action(PaletteAction::Profiles);
         }
         if k.code == KeyCode::F(4) {
             return self.activate_action(PaletteAction::Details);
@@ -747,6 +781,11 @@ impl Model {
             PaletteAction::Edit => {
                 if let Some(host) = self.selected_host() {
                     self.open_view(View::Host(Box::new(HostForm::edit(host))));
+                }
+            }
+            PaletteAction::Profiles => {
+                if let Some(host) = self.selected_host() {
+                    self.open_view(View::Profiles(profiles::List::new(host.name)));
                 }
             }
             PaletteAction::Tunnel => {
@@ -1034,6 +1073,7 @@ pub fn run(
     let history = History::load(&paths.root)?;
     let hosts = config::load_hosts(config)?;
     let mut metadata = Metadata::load(&paths.root, config)?;
+    let mut profiles = TunnelProfiles::load(&paths.root, config)?;
     let standalone = !matches!(initial, InitialView::List);
     let mut m = Model::new(
         hosts,
@@ -1042,6 +1082,7 @@ pub fn run(
         force_search,
     );
     m.metadata = metadata.hosts().clone();
+    m.tunnel_profiles = profiles.hosts().clone();
     m.filter(false);
     match initial {
         InitialView::List => {}
@@ -1097,6 +1138,9 @@ pub fn run(
             Action::Favorite(_) | Action::SaveNote(..) => {
                 apply_metadata_action(&mut m, &mut metadata, &action).map(|_| false)
             }
+            Action::SaveProfile { .. } | Action::DeleteProfile(..) => {
+                profiles::apply(&mut m, &mut profiles, &action).map(|_| false)
+            }
             Action::None => Ok(false),
             Action::Quit => return Ok(0),
             Action::Connect(name, forward) => {
@@ -1116,7 +1160,15 @@ pub fn run(
                 inspection = start_inspection(&inspector, &mut m, config, true);
                 Ok(false)
             }
-            Action::Reload => reload_hosts(&inspector, &mut m, config).map(|receiver| {
+            Action::Reload => profiles::reload(
+                &inspector,
+                &mut m,
+                config,
+                &paths.root,
+                &mut metadata,
+                &mut profiles,
+            )
+            .map(|receiver| {
                 inspection = receiver;
                 false
             }),
@@ -1140,22 +1192,17 @@ pub fn run(
         };
         match operation {
             Ok(true) => {
-                if standalone {
-                    if let Action::Save(Some(original), replacement, _) = &completed_action {
-                        metadata
-                            .rename_hosts(original, replacement)
-                            .map_err(|error| {
-                                anyhow::anyhow!("SSH saved; metadata rename failed: {error:#}")
-                            })?;
-                    }
-                    return Ok(0);
-                }
-                complete_saved_mutation(
+                profiles::complete_saved(
                     &mut m,
                     config::load_hosts(config)?,
                     &completed_action,
                     &mut metadata,
+                    &mut profiles,
                 );
+                if standalone {
+                    anyhow::ensure!(m.error.is_empty(), "{}", m.error);
+                    return Ok(0);
+                }
                 inspection = start_inspection(&inspector, &mut m, config, false);
             }
             Ok(false) => {}
@@ -1163,6 +1210,10 @@ pub fn run(
                 View::Host(f) => f.error = e.to_string(),
                 View::Forward(f) => f.error = e.to_string(),
                 View::Note(editor) => editor.error = format!("{e:#}"),
+                View::Profiles(list) => {
+                    list.error = format!("{e:#}");
+                    list.delete = None;
+                }
                 _ => {
                     m.error = format!("{e:#}");
                     m.delete = None;

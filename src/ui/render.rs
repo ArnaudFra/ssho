@@ -65,6 +65,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         View::Note(_) => note_editor(f, m, area),
         View::Host(_) => host_form(f, m, area),
         View::Forward(_) => forward_form(f, m, area),
+        View::Profiles(_) => profile_list(f, m, area),
         View::Info(_) => info(f, m, area),
         View::Help => help(f, m, area),
         View::Files { .. } => files(f, m, area),
@@ -582,7 +583,7 @@ fn actions(f: &mut Frame, m: &Model, area: Rect) {
     let View::Actions { selected } = m.view else {
         return;
     };
-    let area = panel(area, 62, 16);
+    let area = panel(area, 62, 17);
     f.render_widget(Clear, area);
     let border = block("Actions", true);
     let inner = border.inner(area);
@@ -616,7 +617,7 @@ fn actions(f: &mut Frame, m: &Model, area: Rect) {
     });
     let mut state = TableState::default().with_selected(Some(selected));
     f.render_stateful_widget(
-        Table::new(rows, [Constraint::Length(14), Constraint::Min(0)])
+        Table::new(rows, [Constraint::Length(18), Constraint::Min(0)])
             .highlight_symbol("▶ ")
             .row_highlight_style(
                 Style::default()
@@ -922,14 +923,33 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     ])
     .split(inner);
     f.render_widget(
-        Paragraph::new(format!("Host: {}", form.host)).style(accent()),
+        Paragraph::new(format!(
+            "Host: {} • {}",
+            form.host,
+            if form.dirty() {
+                "Unsaved changes"
+            } else if form.original_name.is_some() {
+                "Profile saved"
+            } else {
+                "Draft"
+            }
+        ))
+        .style(accent()),
         parts[0],
     );
     let mut lines = vec![];
-    let mut focus_y = 0;
+    let mut focus_y = field_lines(
+        &mut lines,
+        "Profile name (required to save):".into(),
+        &form.inputs[5],
+        form.focus == 5,
+        inner.width as usize,
+        compact,
+        field_error(&form.errors, forms::FormField::Input(5)),
+    );
     let kind = ["Local (-L)", "Remote (-R)", "Dynamic (-D)"][form.kind];
     let input = Input::new(kind);
-    field_lines(
+    let kind_y = field_lines(
         &mut lines,
         "Forward Type:".into(),
         &input,
@@ -938,6 +958,9 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
         compact,
         None,
     );
+    if form.focus == 0 {
+        focus_y = kind_y;
+    }
     lines.push(Line::styled(
         "Use ←/→ to change type",
         Style::default().fg(GRAY),
@@ -969,7 +992,7 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
         ],
         _ => ["", "SOCKS Port:", "", "", "Bind Address (optional):"],
     };
-    for i in form.fields().into_iter().skip(1) {
+    for i in form.fields().into_iter().filter(|&i| i != 0 && i != 5) {
         let selected = form.focus == i;
         let y = field_lines(
             &mut lines,
@@ -1018,7 +1041,7 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
         Style::default().fg(GRAY),
     ));
     footer.push(Line::styled(
-        "Enter: connect • Ctrl+S: connect • Esc: cancel",
+        "Ctrl+S: save profile • Ctrl+L: launch • Esc: cancel",
         Style::default().fg(GRAY),
     ));
     f.render_widget(Paragraph::new(footer), parts[2]);
@@ -1163,13 +1186,14 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "F2     Favoris seuls: favorites filter",
         "p      ping all hosts",
         "H      toggle hidden hosts visibility",
-        "f      setup port forwarding",
+        "f      last forwarding draft (Ctrl+L launch, Ctrl+S save profile)",
+        "F6     named tunnel profiles (add/edit/rename/delete/launch)",
         "s      cycle sort modes",
         "n      sort by name",
         "r      sort by recent connection",
         "       Tester: check all hosts",
         "",
-        "Forms: Ctrl+S save/connect, Esc cancel",
+        "Forms: Ctrl+S save, Ctrl+L launch tunnel",
         "Ctrl+J/K tabs; Alt+A/D aliases",
         "Ctrl+A/E start/end of input",
         "Discard: Enter discard, Esc resume",
@@ -1270,4 +1294,78 @@ fn note_editor(f: &mut Frame, m: &mut Model, area: Rect) {
         "Ctrl+S: save • Esc/Ctrl+C: cancel • Enter: newline",
     ));
     f.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), parts[2]);
+}
+
+fn profile_list(f: &mut Frame, m: &Model, area: Rect) {
+    let View::Profiles(list) = &m.view else {
+        return;
+    };
+    let area = inset(area);
+    let parts = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(0),
+        Constraint::Length(3),
+    ])
+    .split(area);
+    f.render_widget(
+        Paragraph::new(format!("Host: {}", list.host)).block(block("Tunnel profiles", true)),
+        parts[0],
+    );
+    if let Some(name) = &list.delete {
+        f.render_widget(
+            Paragraph::new(format!(
+                "Delete profile '{name}'?\nEnter: confirm • Esc: cancel"
+            ))
+            .block(block("Delete tunnel profile", true)),
+            parts[1],
+        );
+    } else {
+        let profiles = m.tunnel_profiles.get(&list.host);
+        if profiles.is_none_or(BTreeMap::is_empty) {
+            f.render_widget(
+                Paragraph::new("No profiles. Press a to create one; f resumes last forwarding."),
+                parts[1],
+            );
+        } else {
+            let rows = profiles
+                .into_iter()
+                .flat_map(|p| p.iter())
+                .map(|(name, forward)| {
+                    Row::new(vec![
+                        name.clone(),
+                        forward.kind.clone(),
+                        forward.ssh_args().unwrap_or_default().join(" "),
+                    ])
+                });
+            let mut state = TableState::default().with_selected(Some(list.selected));
+            f.render_stateful_widget(
+                Table::new(
+                    rows,
+                    [
+                        Constraint::Percentage(30),
+                        Constraint::Length(9),
+                        Constraint::Min(0),
+                    ],
+                )
+                .header(Row::new(["Name", "Type", "Forwarding"]).style(accent()))
+                .highlight_symbol("▶ ")
+                .row_highlight_style(
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(CYAN)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                parts[1],
+                &mut state,
+            );
+        }
+    }
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::styled(&list.error, Style::default().fg(Color::Red)),
+            Line::from("a: create • Enter/e/r: edit or rename • d: delete • Ctrl+L: launch"),
+            Line::from("f: last forwarding draft • Esc: back"),
+        ]),
+        parts[2],
+    );
 }

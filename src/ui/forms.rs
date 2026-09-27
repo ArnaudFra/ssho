@@ -593,6 +593,7 @@ impl HostForm {
 #[derive(Clone, Debug)]
 pub(super) struct ForwardForm {
     pub host: String,
+    pub original_name: Option<String>,
     pub inputs: Vec<Input>,
     pub kind: usize,
     baseline: (usize, Vec<String>),
@@ -619,6 +620,7 @@ impl ForwardForm {
             Input::new(&old.remote_host),
             Input::new(&old.remote_port),
             Input::new(&old.bind_address),
+            Input::default(), // Named profile; index 5 preserves existing forwarding fields.
         ];
         for (i, hint) in [
             (1, "8080"),
@@ -632,6 +634,7 @@ impl ForwardForm {
         let baseline = (kind, input_values(&inputs));
         Self {
             baseline,
+            original_name: None,
             errors: vec![],
             host,
             inputs,
@@ -640,6 +643,33 @@ impl ForwardForm {
             error: String::new(),
             scroll: 0,
         }
+    }
+    pub fn named(host: String, name: String, forward: Forward) -> Self {
+        let mut form = Self::new(host, Some(forward));
+        form.inputs[5].set(&name);
+        form.original_name = Some(name);
+        form.focus = 5;
+        form.mark_saved();
+        form
+    }
+    pub fn mark_saved(&mut self) {
+        self.baseline = (self.kind, input_values(&self.inputs));
+        self.original_name = Some(self.inputs[5].value.clone());
+        self.error.clear();
+    }
+    pub fn validate_save(&mut self) -> bool {
+        self.validate();
+        if let Err(error) = crate::storage::tunnels::validate_name(&self.inputs[5].value) {
+            self.errors.insert(
+                0,
+                FieldError {
+                    field: FormField::Input(5),
+                    message: error.to_string(),
+                },
+            );
+            self.focus = 5;
+        }
+        self.errors.is_empty()
     }
     pub fn dirty(&self) -> bool {
         self.baseline != (self.kind, input_values(&self.inputs))
@@ -656,7 +686,7 @@ impl ForwardForm {
     }
     fn validation_errors(&self) -> Vec<FieldError> {
         let mut errors = vec![];
-        for i in self.fields().into_iter().skip(1) {
+        for i in self.fields().into_iter().filter(|&i| i != 0 && i != 5) {
             let mut f = Forward {
                 kind: ["local", "remote", "dynamic"][self.kind].into(),
                 local_port: "1".into(),
@@ -687,9 +717,9 @@ impl ForwardForm {
     }
     pub fn fields(&self) -> Vec<usize> {
         if self.kind == 2 {
-            vec![0, 1, 4]
+            vec![5, 0, 1, 4]
         } else {
-            vec![0, 1, 2, 3, 4]
+            vec![5, 0, 1, 2, 3, 4]
         }
     }
     pub fn key(&mut self, k: KeyEvent) -> FormEvent {
@@ -709,8 +739,6 @@ impl ForwardForm {
             KeyCode::Tab | KeyCode::Down | KeyCode::Enter => {
                 if pos + 1 < fields.len() {
                     self.focus = fields[pos + 1];
-                } else if k.code == KeyCode::Enter {
-                    return FormEvent::Submit;
                 }
             }
             KeyCode::BackTab | KeyCode::Up => {

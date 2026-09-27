@@ -281,7 +281,7 @@ sys.exit(int(mode))
     session.expect("Last Attempt")
     session.send(b"f")
     session.expect("Port Forwarding")
-    session.send(b"\x1b[C\x1b[C\t1080\t\x13")
+    session.send(b"\x1b[C\x1b[C\t1080\t\x0c")
     session.expect("SSH exit 37: b-server")
     assert b"SSH_TAKEOVER" in session.output
     session.send(b"\x03")
@@ -291,6 +291,90 @@ sys.exit(int(mode))
     history = json.loads((home/".config/ssho/sshm_history.json").read_text())
     assert history["connections"]["b-server"]["port_forwarding"]["type"] == "dynamic"
     print("PASS Include file move and saved SOCKS forwarding")
+
+    # Named profiles: saves are data-only; only Ctrl+L runs the temporary SSH.
+    profile_root = home/"profiles-config"
+    (home/".ssh/profile-key").write_text("temporary test identity\n")
+    profile_original = "Host profile-host\n HostName profile.example\n User deploy\n IdentityFile ~/.ssh/profile-key\n RemoteCommand keep-command\n RequestTTY force\n LocalForward 7000 localhost:70\n"
+    profile_root.write_text(profile_original)
+    profile_file = home/".config/ssho/tunnel_profiles.json"
+    history_file = home/".config/ssho/sshm_history.json"
+    history_before = history_file.read_bytes()
+    (home/"ssh-args").unlink()
+    session = Session(env, ["-c", str(profile_root)])
+    session.expect("Last Attempt")
+    session.send(b"\x1b[17~")  # F6 from focused search
+    session.expect("Tunnel profiles")
+    for name, arrows, local, remote in [("db", b"", b"8080", b"80"), ("remote", b"\x1b[C", b"9090", b"90"), ("socks", b"\x1b[C\x1b[C", b"1080", None)]:
+        session.send(b"a")
+        session.expect("Profile name")
+        session.send(name.encode()+b"\t"+arrows+b"\t"+local+b"\t")
+        if remote is not None:
+            session.send(b"\x15::1\t"+remote+b"\t")
+        session.send(b"127.0.0.1\x13")
+        session.expect("Profile saved")
+        assert not (home/"ssh-args").exists(), "Save launched SSH"
+        assert history_file.read_bytes() == history_before
+        assert profile_root.read_text() == profile_original
+        session.send(b"\r")
+        session.expect("Profile saved")
+        assert not (home/"ssh-args").exists(), "Enter launched SSH"
+        session.send(b"\x1b")
+        session.expect("Tunnel profiles")
+    stored = json.loads(profile_file.read_text())["configs"][str(profile_root)]["hosts"]["profile-host"]["profiles"]
+    assert set(stored) == {"db", "remote", "socks"}
+    session.send(b"\x1b[Hr\x15socks\x13")
+    session.expect("already exists")
+    session.send(b"\x15db-renamed\x13")
+    session.expect("Profile saved")
+    session.send(b"\x1b")
+    session.expect("Tunnel profiles")
+    # Launch all profiles via the same foreground SSH/UI-return path.
+    for index, flag, specification in [(0, "-L", "127.0.0.1:8080:[::1]:80"), (1, "-R", "127.0.0.1:9090:[::1]:90"), (2, "-D", "127.0.0.1:1080")]:
+        session.send(b"\x1b[H"+b"\x1b[B"*index+b"\x0c")
+        session.expect("SSH exit 37: profile-host")
+        arguments = (home/"ssh-args").read_text().splitlines()
+        assert arguments[arguments.index(flag)+1] == specification, arguments
+        assert arguments[-1] == "profile-host"
+        session.send(b"\x1b[17~")
+        session.expect("Tunnel profiles")
+    before_delete = profile_file.read_bytes()
+    session.send(b"\x1b[Fd")
+    session.expect("Delete profile 'socks'?")
+    session.send(b"\x1b")
+    assert profile_file.read_bytes() == before_delete
+    session.send(b"d\r")
+    session.expect("Tunnel profiles")
+    stored = json.loads(profile_file.read_text())["configs"][str(profile_root)]["hosts"]["profile-host"]["profiles"]
+    assert set(stored) == {"db-renamed", "remote"}
+    session.send(b"aunsaved\x1b")
+    session.expect("Discard changes?")
+    session.send(b"\r")
+    session.expect("Tunnel profiles")
+    # f still resumes the last SOCKS launch, even after its named profile is deleted.
+    session.send(b"f")
+    session.expect("Dynamic (-D)")
+    session.expect("1080")
+    session.send(b"\x1b")
+    session.expect("Tunnel profiles")
+    session.send(b"\x1b")
+    session.expect("Last Attempt")
+    session.send(b"\te")
+    session.expect("Edit SSH Host")
+    session.send(b"\x15renamed-host\x13")
+    session.expect("Last Attempt")
+    session.send(b"\x1b[17~")
+    session.expect("Tunnel profiles")
+    session.expect("db-renamed")
+    stored_hosts = json.loads(profile_file.read_text())["configs"][str(profile_root)]["hosts"]
+    assert "profile-host" not in stored_hosts
+    assert set(stored_hosts["renamed-host"]["profiles"]) == {"db-renamed", "remote"}
+    assert profile_root.read_text() == profile_original.replace("Host profile-host", "Host renamed-host")
+    session.send(b"\x1b")
+    session.expect("Last Attempt")
+    session.send(b"\x03")
+    session.close()
+    print("PASS named profiles: CRUD/collision/discard, Save and Enter never launch, local/remote/SOCKS Ctrl+L return, history draft and SSH alias rename")
 
     # Manual refresh resolves effective values again with ping disabled and keeps
     # search/caret/selection, including when invoked inside the read-only Info view.

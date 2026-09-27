@@ -152,37 +152,18 @@ impl Metadata {
     /// Retained aliases keep their entries. Pair removed/new aliases in declaration
     /// order, matching form rename slots; deletion alone never targets a survivor.
     pub fn rename_hosts(&mut self, original: &Host, replacement: &Host) -> Result<()> {
-        let old = if original.aliases.is_empty() {
-            vec![original.name.clone()]
-        } else {
-            original.aliases.clone()
-        };
-        let mut new = if replacement.aliases.is_empty() {
-            vec![replacement.name.clone()]
-        } else {
-            replacement.aliases.clone()
-        };
-        if replacement.aliases == original.aliases {
-            for name in &mut new {
-                if name == &original.name {
-                    *name = replacement.name.clone();
-                }
-            }
-        }
-        let removed = old.iter().filter(|name| !new.contains(name));
-        let added = new.iter().filter(|name| !old.contains(name));
-        let mapping: Vec<_> = removed.zip(added).collect();
+        let mapping = alias_renames(original, replacement);
         if mapping.is_empty() {
             return Ok(());
         }
         self.update(|hosts| {
             for (old, new) in &mapping {
-                if hosts.contains_key(*old) && hosts.contains_key(*new) {
+                if hosts.contains_key(old) && hosts.contains_key(new) {
                     bail!("metadata destination {new} is occupied; original {old} retained");
                 }
             }
             for (old, new) in mapping {
-                if let Some(entry) = hosts.remove(old) {
+                if let Some(entry) = hosts.remove(&old) {
                     let target = hosts
                         .entry(new.clone())
                         .or_insert_with(|| serde_json::json!({}));
@@ -192,6 +173,33 @@ impl Metadata {
             Ok(())
         })
     }
+}
+
+/// Shared declaration-order alias transition used by scoped app data.
+pub(crate) fn alias_renames(original: &Host, replacement: &Host) -> Vec<(String, String)> {
+    let old = if original.aliases.is_empty() {
+        vec![original.name.clone()]
+    } else {
+        original.aliases.clone()
+    };
+    let mut new = if replacement.aliases.is_empty() {
+        vec![replacement.name.clone()]
+    } else {
+        replacement.aliases.clone()
+    };
+    if replacement.aliases == original.aliases {
+        for name in &mut new {
+            if name == &original.name {
+                *name = replacement.name.clone();
+            }
+        }
+    }
+    let removed = old.iter().filter(|name| !new.contains(name));
+    let added = new.iter().filter(|name| !old.contains(name));
+    removed
+        .zip(added)
+        .map(|(old, new)| (old.clone(), new.clone()))
+        .collect()
 }
 
 #[cfg(test)]

@@ -388,7 +388,7 @@ fn selectors_and_tunnels_return_precise_actions() {
     };
     form.inputs[1].set("8080");
     form.inputs[3].set("80");
-    let action = m.key(ctrl('s'));
+    let action = m.key(ctrl('l'));
     assert!(matches!(action, Action::Connect(_, Some(_))));
 }
 #[test]
@@ -3497,7 +3497,7 @@ fn duplication_shortcut_and_palette_offer_selected_host() {
         m.key(key(KeyCode::Char('D'))),
         Action::Duplicate(m.all[0].clone())
     );
-    assert_eq!(PaletteAction::ALL.last().unwrap().label(), "Dupliquer D");
+    assert_eq!(PaletteAction::ALL[10].label(), "Dupliquer D");
     assert!(!PaletteAction::Duplicate.enabled(false));
     m.query.set("alpha");
     m.filter(true);
@@ -3856,4 +3856,342 @@ fn duplication_rejects_earlier_include_or_global_fallback_without_writes_or_back
         assert_eq!(fs::read(&included).unwrap(), include_before);
         assert!(!app.join("backups").exists());
     }
+}
+
+#[test]
+fn save_and_enter_never_launch_but_ctrl_l_does() {
+    let mut m = model();
+    m.activate_action(PaletteAction::Tunnel);
+    let View::Forward(form) = &mut m.view else {
+        panic!()
+    };
+    form.inputs[1].set("8080");
+    form.inputs[3].set("80");
+    form.focus = 4;
+    assert!(
+        !matches!(m.key(ctrl('s')), Action::Connect(..)),
+        "Save must not launch SSH"
+    );
+    assert!(
+        !matches!(m.key(key(KeyCode::Enter)), Action::Connect(..)),
+        "Enter must not launch SSH"
+    );
+    assert!(
+        matches!(m.key(ctrl('l')), Action::Connect(_, Some(_))),
+        "Ctrl+L explicitly launches"
+    );
+}
+
+#[test]
+fn f6_opens_profiles_from_focused_search() {
+    let mut m = model();
+    m.key(key(KeyCode::F(6)));
+    assert!(screen(&mut m, 100, 30).contains("Tunnel profiles"));
+}
+
+fn sample_forward(kind: &str) -> Forward {
+    Forward {
+        kind: kind.into(),
+        local_port: "8080".into(),
+        remote_host: "::1".into(),
+        remote_port: "80".into(),
+        bind_address: "127.0.0.1".into(),
+    }
+}
+
+#[test]
+fn save_persists_without_connect_and_launches_each_type_without_saving() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config");
+    let mut store = TunnelProfiles::load(dir.path(), &config).unwrap();
+    let mut m = model();
+    m.key(key(KeyCode::F(6)));
+    m.key(key(KeyCode::Char('a')));
+    for (kind, flag) in [("local", "-L"), ("remote", "-R"), ("dynamic", "-D")] {
+        m.view = View::Forward(ForwardForm::new("alpha".into(), Some(sample_forward(kind))));
+        let View::Forward(form) = &mut m.view else {
+            panic!()
+        };
+        form.inputs[5].set(kind);
+        let save = m.key(ctrl('s'));
+        assert!(matches!(save, Action::SaveProfile { .. }));
+        profiles::apply(&mut m, &mut store, &save).unwrap();
+        let View::Forward(form) = &mut m.view else {
+            panic!()
+        };
+        assert!(!form.dirty());
+        assert_eq!(form.original_name.as_deref(), Some(kind));
+        form.inputs[1].set("9090");
+        form.inputs[5].set(""); // An ad hoc launch does not require a profile name.
+        let Action::Connect(host, Some(forward)) = m.key(ctrl('l')) else {
+            panic!()
+        };
+        assert_eq!(host, "alpha");
+        assert_eq!(forward.ssh_args().unwrap()[0], flag);
+        assert!(forward.ssh_args().unwrap()[1].contains("9090"));
+        assert_eq!(store.hosts()["alpha"][kind].local_port, "8080");
+    }
+    assert_eq!(
+        TunnelProfiles::load(dir.path(), &config).unwrap().hosts()["alpha"].len(),
+        3
+    );
+    assert!(!dir.path().join("history.json").exists());
+}
+
+#[test]
+fn profile_crud_confirmations_dirty_paste_and_failed_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = TunnelProfiles::load(dir.path(), &dir.path().join("config")).unwrap();
+    store
+        .save("alpha", None, "first", &sample_forward("local"))
+        .unwrap();
+    store
+        .save("alpha", None, "taken", &sample_forward("dynamic"))
+        .unwrap();
+    let mut m = model();
+    m.tunnel_profiles = store.hosts().clone();
+    m.key(key(KeyCode::F(6)));
+    m.key(key(KeyCode::Enter));
+    let View::Forward(form) = &m.view else {
+        panic!()
+    };
+    assert_eq!(form.focus, 5);
+    assert!(!form.dirty());
+    m.key(ctrl('u'));
+    m.paste("réseau\r\nname\u{1b}");
+    let View::Forward(form) = &m.view else {
+        panic!()
+    };
+    assert_eq!(form.inputs[5].value, "réseau name");
+    m.key(key(KeyCode::Esc));
+    assert!(m.discard);
+    m.key(key(KeyCode::Esc));
+    assert!(!m.discard);
+    let View::Forward(form) = &mut m.view else {
+        panic!()
+    };
+    form.inputs[5].set("taken");
+    let action = m.key(ctrl('s'));
+    assert!(profiles::apply(&mut m, &mut store, &action).is_err());
+    assert!(matches!(&m.view, View::Forward(form) if form.dirty()));
+    assert!(store.hosts()["alpha"].contains_key("first"));
+    let View::Forward(form) = &mut m.view else {
+        panic!()
+    };
+    form.inputs[5].set("renamed");
+    let action = m.key(ctrl('s'));
+    profiles::apply(&mut m, &mut store, &action).unwrap();
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::Profiles(_)));
+    m.key(key(KeyCode::Char('d')));
+    assert!(screen(&mut m, 100, 30).contains("Delete profile 'renamed'?"));
+    assert_eq!(m.key(ctrl('l')), Action::None);
+    m.key(key(KeyCode::Esc));
+    assert!(store.hosts()["alpha"].contains_key("renamed"));
+    m.key(key(KeyCode::Char('d')));
+    let action = m.key(key(KeyCode::Enter));
+    assert_eq!(
+        action,
+        Action::DeleteProfile("alpha".into(), "renamed".into())
+    );
+    profiles::apply(&mut m, &mut store, &action).unwrap();
+    assert!(!store.hosts()["alpha"].contains_key("renamed"));
+    m.key(key(KeyCode::Char('a')));
+    m.paste("cancelled");
+    m.key(key(KeyCode::Esc));
+    assert!(m.discard);
+    m.key(key(KeyCode::Enter));
+    assert_eq!(store.hosts()["alpha"].len(), 1);
+}
+
+#[test]
+fn name_validation_caret_and_table_selection_are_visible() {
+    use ratatui::{backend::Backend, style::Color};
+    for (width, height) in [(100, 32), (30, 12), (4, 4)] {
+        let mut m = model();
+        let mut form = ForwardForm::new("alpha".into(), Some(sample_forward("local")));
+        assert!(!form.validate_save());
+        assert_eq!(form.focus, 5);
+        assert_eq!(form.errors[0].field, forms::FormField::Input(5));
+        form.inputs[5].set("界profil");
+        form.inputs[5].cursor = 0;
+        m.view = View::Forward(form);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+        let position = terminal.backend_mut().get_cursor_position().unwrap();
+        assert_eq!(terminal.backend().buffer()[position].symbol(), "界");
+    }
+    let mut m = model();
+    m.tunnel_profiles.insert(
+        "alpha".into(),
+        [("selected".into(), sample_forward("local"))].into(),
+    );
+    m.key(key(KeyCode::F(6)));
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    let cells: Vec<_> = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .filter(|cell| cell.bg == Color::Rgb(0, 173, 216))
+        .collect();
+    assert!(!cells.is_empty());
+    assert!(cells.iter().all(|cell| cell.fg == Color::Black));
+    assert!(matches!(m.key(ctrl('l')), Action::Connect(_, Some(_))));
+    assert!(matches!(
+        PaletteAction::ALL.last(),
+        Some(PaletteAction::Profiles)
+    ));
+}
+
+#[test]
+fn alias_rename_storage_failure_refreshes_committed_host_with_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config");
+    let mut metadata = Metadata::load(dir.path(), &config).unwrap();
+    let mut profiles = TunnelProfiles::load(dir.path(), &config).unwrap();
+    profiles
+        .save("alpha", None, "keep", &sample_forward("local"))
+        .unwrap();
+    profiles
+        .save("renamed", None, "occupied", &sample_forward("dynamic"))
+        .unwrap();
+    metadata.set_note("alpha", "retained").unwrap();
+    let mut m = model();
+    let old = m.all[0].clone();
+    let new = Host {
+        name: "renamed".into(),
+        ..old.clone()
+    };
+    m.open_view(View::Host(Box::new(HostForm::edit(old.clone()))));
+    profiles::complete_saved(
+        &mut m,
+        vec![new.clone()],
+        &Action::Save(Some(old), Box::new(new), config),
+        &mut metadata,
+        &mut profiles,
+    );
+    assert!(matches!(m.view, View::List));
+    assert_eq!(m.selected_host().unwrap().name, "renamed");
+    assert!(m.error.contains("SSH saved; tunnel profile rename failed"));
+    assert!(m.error.contains("occupied"));
+    assert_eq!(m.note("renamed"), "retained");
+    assert!(m.tunnel_profiles["alpha"].contains_key("keep"));
+    assert!(m.tunnel_profiles["renamed"].contains_key("occupied"));
+}
+
+#[cfg(unix)]
+#[test]
+fn reload_symlink_rebinds_both_scopes_and_stages_before_publishing() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+    let link = dir.path().join("config");
+    fs::write(&a, "Host alpha\n HostName a.example\n").unwrap();
+    fs::write(&b, "Host alpha\n HostName b.example\n").unwrap();
+    symlink(&a, &link).unwrap();
+    let mut metadata = Metadata::load(dir.path(), &link).unwrap();
+    let mut profiles = TunnelProfiles::load(dir.path(), &link).unwrap();
+    metadata.set_note("alpha", "note A").unwrap();
+    profiles
+        .save("alpha", None, "A", &sample_forward("local"))
+        .unwrap();
+    Metadata::load(dir.path(), &b)
+        .unwrap()
+        .set_note("alpha", "note B")
+        .unwrap();
+    TunnelProfiles::load(dir.path(), &b)
+        .unwrap()
+        .save("alpha", None, "B", &sample_forward("dynamic"))
+        .unwrap();
+    let mut m = model();
+    m.metadata = metadata.hosts().clone();
+    m.tunnel_profiles = profiles.hosts().clone();
+    fs::remove_file(&link).unwrap();
+    symlink(&b, &link).unwrap();
+    let inspector = runtime::effective::Inspector::default();
+    drop(
+        profiles::reload(
+            &inspector,
+            &mut m,
+            &link,
+            dir.path(),
+            &mut metadata,
+            &mut profiles,
+        )
+        .unwrap(),
+    );
+    assert_eq!(m.all[0].hostname, "b.example");
+    assert_eq!(m.note("alpha"), "note B");
+    assert!(m.tunnel_profiles["alpha"].contains_key("B"));
+    profiles
+        .save("alpha", None, "saved B", &sample_forward("remote"))
+        .unwrap();
+    assert!(
+        !TunnelProfiles::load(dir.path(), &a).unwrap().hosts()["alpha"].contains_key("saved B")
+    );
+    // A store read failure after changing the symlink leaves every published state on B.
+    fs::remove_file(&link).unwrap();
+    symlink(&a, &link).unwrap();
+    fs::remove_file(dir.path().join("tunnel_profiles.json")).unwrap();
+    fs::create_dir(dir.path().join("tunnel_profiles.json")).unwrap();
+    assert!(profiles::reload(
+        &inspector,
+        &mut m,
+        &link,
+        dir.path(),
+        &mut metadata,
+        &mut profiles
+    )
+    .is_err());
+    assert_eq!(m.all[0].hostname, "b.example");
+    assert_eq!(m.note("alpha"), "note B");
+    assert!(m.tunnel_profiles["alpha"].contains_key("B"));
+    metadata.set_note("alpha", "still B").unwrap();
+    assert_eq!(
+        Metadata::load(dir.path(), &b).unwrap().hosts()["alpha"].note,
+        "still B"
+    );
+    assert_eq!(
+        Metadata::load(dir.path(), &a).unwrap().hosts()["alpha"].note,
+        "note A"
+    );
+}
+
+#[test]
+fn alias_rename_failed_app_writes_report_both_without_stale_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config");
+    let mut metadata = Metadata::load(dir.path(), &config).unwrap();
+    let mut profiles = TunnelProfiles::load(dir.path(), &config).unwrap();
+    metadata.set_note("alpha", "recover note").unwrap();
+    profiles
+        .save("alpha", None, "recover profile", &sample_forward("local"))
+        .unwrap();
+    for name in ["metadata.json", "tunnel_profiles.json"] {
+        fs::remove_file(dir.path().join(name)).unwrap();
+        fs::create_dir(dir.path().join(name)).unwrap();
+    }
+    let mut m = model();
+    let old = m.all[0].clone();
+    let new = Host {
+        name: "renamed".into(),
+        ..old.clone()
+    };
+    m.open_view(View::Host(Box::new(HostForm::edit(old.clone()))));
+    profiles::complete_saved(
+        &mut m,
+        vec![new.clone()],
+        &Action::Save(Some(old), Box::new(new), config),
+        &mut metadata,
+        &mut profiles,
+    );
+    assert!(matches!(m.view, View::List));
+    assert_eq!(m.selected_host().unwrap().name, "renamed");
+    assert!(m.error.contains("SSH saved; metadata rename failed"));
+    assert!(m.error.contains("SSH saved; tunnel profile rename failed"));
+    assert_eq!(m.note("alpha"), "recover note");
+    assert!(m.tunnel_profiles["alpha"].contains_key("recover profile"));
 }
