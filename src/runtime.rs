@@ -1,4 +1,5 @@
 pub mod effective;
+pub mod tunnels;
 use crate::{
     storage::{AppPaths, History},
     types::{Forward, Host},

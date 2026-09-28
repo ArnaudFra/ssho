@@ -4040,7 +4040,7 @@ fn name_validation_caret_and_table_selection_are_visible() {
     assert!(cells.iter().all(|cell| cell.fg == Color::Black));
     assert!(matches!(m.key(ctrl('l')), Action::Connect(_, Some(_))));
     assert!(matches!(
-        PaletteAction::ALL.last(),
+        PaletteAction::ALL.get(11),
         Some(PaletteAction::Profiles)
     ));
 }
@@ -4194,4 +4194,168 @@ fn alias_rename_failed_app_writes_report_both_without_stale_host() {
     assert!(m.error.contains("SSH saved; tunnel profile rename failed"));
     assert_eq!(m.note("alpha"), "recover note");
     assert!(m.tunnel_profiles["alpha"].contains_key("recover profile"));
+}
+
+#[test]
+fn f7_from_search_and_mode_choice_are_reactive() {
+    let mut m = model();
+    m.key(key(KeyCode::F(7)));
+    assert!(screen(&mut m, 100, 30).contains("Owned tunnels"));
+    m.key(key(KeyCode::Esc));
+    m.view = View::Forward(ForwardForm::new(
+        "alpha".into(),
+        Some(Forward {
+            kind: "dynamic".into(),
+            local_port: "1080".into(),
+            ..Forward::default()
+        }),
+    ));
+    m.key(ctrl('t'));
+    assert!(screen(&mut m, 100, 30).contains("Tunnel only"));
+    m.key(key(KeyCode::Esc));
+    assert!(m.discard);
+}
+
+#[test]
+fn mode_save_launch_and_quit_cancel_preserve_editor() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = TunnelProfiles::load(dir.path(), &dir.path().join("config")).unwrap();
+    let mut m = model();
+    let mut form = ForwardForm::new(
+        "alpha".into(),
+        Some(Forward {
+            kind: "dynamic".into(),
+            local_port: "1080".into(),
+            ..Forward::default()
+        }),
+    );
+    form.inputs[5].set("sock");
+    m.view = View::Forward(form);
+    assert_eq!(m.key(ctrl('t')), Action::None);
+    let save = m.key(ctrl('s'));
+    assert!(matches!(
+        save,
+        Action::SaveProfile {
+            mode: LaunchMode::TunnelOnly,
+            ..
+        }
+    ));
+    profiles::apply(&mut m, &mut store, &save).unwrap();
+    assert!(matches!(&m.view, View::Forward(f) if !f.dirty()));
+    assert!(matches!(m.key(ctrl('l')), Action::StartTunnel(_, Some(name), _) if name == "sock"));
+    m.quit_tunnels = true;
+    m.paste("should not edit");
+    assert!(screen(&mut m, 90, 30).contains("stop + quit"));
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+    assert!(!m.quit_tunnels);
+    assert!(matches!(&m.view, View::Forward(f) if !f.dirty()));
+    m.quit_tunnels = true;
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::Quit);
+    m.quit_tunnels = false;
+    m.view = View::Profiles(profiles::List::new("alpha".into()));
+    assert!(matches!(m.key(ctrl('l')), Action::StartTunnel(_, _, _)));
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(&m.view, View::Forward(f) if f.mode == LaunchMode::TunnelOnly && !f.dirty()));
+}
+#[test]
+fn active_ids_survive_profile_reload_and_visible_high_contrast() {
+    let mut m = model();
+    m.tunnels.push(runtime::tunnels::Record {
+        id: 91,
+        snapshot: runtime::tunnels::Snapshot {
+            config: "/old/config".into(),
+            host: "deleted-alias".into(),
+            profile: Some("deleted-profile".into()),
+            forward: Forward {
+                kind: "dynamic".into(),
+                local_port: "1080".into(),
+                ..Forward::default()
+            },
+        },
+        state: runtime::tunnels::State::Active,
+        exit_code: None,
+        diagnostic: String::new(),
+    });
+    m.tunnel_profiles.clear();
+    m.view = View::Active { selected: 0 };
+    assert_eq!(m.key(key(KeyCode::Char('s'))), Action::StopTunnel(91));
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut m)).unwrap();
+    assert!(terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .any(|c| c.bg == ratatui::style::Color::Cyan && c.fg == ratatui::style::Color::Black));
+    assert!(screen(&mut m, 100, 30).contains("readiness unverified"));
+    for (w, h) in [(4, 4), (1, 1), (20, 8)] {
+        screen(&mut m, w, h);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn session_history_nonfatal_errors_and_drop_completion() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(dir.path().join("app"), dir.path().into());
+    paths.initialize().unwrap();
+    let config = dir.path().join("config");
+    fs::write(&config, "Host alpha\n HostName localhost\n").unwrap();
+    let exe = dir.path().join("ssh");
+    fs::write(&exe, "#!/bin/sh\nsleep 60 & wait\n").unwrap();
+    fs::set_permissions(&exe, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut session = active::Session::default();
+    session.manager = runtime::tunnels::Manager::with_program(exe);
+    let mut m = model();
+    session
+        .start(
+            &mut m,
+            &paths,
+            &config,
+            "alpha".into(),
+            None,
+            sample_forward("dynamic"),
+        )
+        .unwrap();
+    let history = History::load(&paths.root).unwrap();
+    assert_eq!(history.connections["alpha"].connect_count, 1);
+    assert!(history.connections["alpha"].last_result.is_none());
+    drop(session);
+    let history = History::load(&paths.root).unwrap();
+    assert_eq!(
+        history.connections["alpha"]
+            .last_result
+            .as_ref()
+            .unwrap()
+            .exit_code,
+        Some(137)
+    );
+    assert!(history.connections["alpha"]
+        .last_successful_completion
+        .is_none());
+    let history_path = paths.root.join("sshm_history.json");
+    let external = dir.path().join("history-external");
+    fs::rename(&history_path, &external).unwrap();
+    let original = fs::read(&external).unwrap();
+    symlink(&external, &history_path).unwrap();
+    let mut session = active::Session::default();
+    session.manager = runtime::tunnels::Manager::with_program(dir.path().join("ssh"));
+    session
+        .start(
+            &mut m,
+            &paths,
+            &config,
+            "alpha".into(),
+            None,
+            sample_forward("dynamic"),
+        )
+        .unwrap();
+    assert!(session.manager.has_active());
+    assert!(m.error.contains("history"));
+    assert!(screen(&mut m, 120, 30).contains("Warning"));
+    session.manager.stop_all();
+    session.poll(&mut m, &paths);
+    assert!(m.error.contains("history"));
+    assert_eq!(fs::read(external).unwrap(), original);
 }

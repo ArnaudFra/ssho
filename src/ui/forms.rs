@@ -596,7 +596,8 @@ pub(super) struct ForwardForm {
     pub original_name: Option<String>,
     pub inputs: Vec<Input>,
     pub kind: usize,
-    baseline: (usize, Vec<String>),
+    pub mode: crate::storage::tunnels::LaunchMode,
+    baseline: (usize, Vec<String>, crate::storage::tunnels::LaunchMode),
     pub errors: Vec<FieldError>,
     pub focus: usize,
     pub error: String,
@@ -631,9 +632,11 @@ impl ForwardForm {
             inputs[i].placeholder = hint.into();
             inputs[i].limit = [0, 5, 100, 5, 50][i];
         }
-        let baseline = (kind, input_values(&inputs));
+        let mode = crate::storage::tunnels::LaunchMode::Shell;
+        let baseline = (kind, input_values(&inputs), mode);
         Self {
             baseline,
+            mode,
             original_name: None,
             errors: vec![],
             host,
@@ -653,7 +656,7 @@ impl ForwardForm {
         form
     }
     pub fn mark_saved(&mut self) {
-        self.baseline = (self.kind, input_values(&self.inputs));
+        self.baseline = (self.kind, input_values(&self.inputs), self.mode);
         self.original_name = Some(self.inputs[5].value.clone());
         self.error.clear();
     }
@@ -672,7 +675,7 @@ impl ForwardForm {
         self.errors.is_empty()
     }
     pub fn dirty(&self) -> bool {
-        self.baseline != (self.kind, input_values(&self.inputs))
+        self.baseline != (self.kind, input_values(&self.inputs), self.mode)
     }
     pub fn validate(&mut self) -> bool {
         self.errors = self.validation_errors();
@@ -729,6 +732,15 @@ impl ForwardForm {
         }
         if ctrl && k.code == KeyCode::Char('s') {
             return FormEvent::Submit;
+        }
+        if ctrl && k.code == KeyCode::Char('t') {
+            use crate::storage::tunnels::LaunchMode;
+            self.mode = if self.mode == LaunchMode::Shell {
+                LaunchMode::TunnelOnly
+            } else {
+                LaunchMode::Shell
+            };
+            return FormEvent::None;
         }
         let fields = self.fields();
         let pos = fields.iter().position(|&i| i == self.focus).unwrap_or(0);

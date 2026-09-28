@@ -1,5 +1,6 @@
 //! Native terminal interface, adapted from SSHM, copyright Guillaume Archambault (MIT).
 mod actions;
+mod active;
 mod details;
 mod forms;
 mod notes;
@@ -13,7 +14,7 @@ use crate::{
     runtime::{self, PingResult, PingStatus},
     storage::{
         metadata::{HostMetadata, Metadata},
-        tunnels::{HostProfiles, TunnelProfiles},
+        tunnels::{HostModes, HostProfiles, LaunchMode, TunnelProfiles},
         AppConfig, AppPaths, History,
     },
     types::{ConnectionInfo, Forward, Host},
@@ -59,6 +60,9 @@ enum View {
     Help,
     Forward(ForwardForm),
     Profiles(profiles::List),
+    Active {
+        selected: usize,
+    },
     Files {
         files: Vec<PathBuf>,
         selected: usize,
@@ -72,6 +76,8 @@ enum Action {
     None,
     Quit,
     Connect(String, Option<Forward>),
+    StartTunnel(String, Option<String>, Forward),
+    StopTunnel(u64),
     Add(String),
     Move(Host),
     Duplicate(Host),
@@ -88,6 +94,7 @@ enum Action {
         original: Option<String>,
         name: String,
         forward: Forward,
+        mode: LaunchMode,
     },
     DeleteProfile(String, String),
 }
@@ -112,6 +119,9 @@ struct Model {
     favorites_only: bool,
     metadata: BTreeMap<String, HostMetadata>,
     tunnel_profiles: HostProfiles,
+    tunnel_modes: HostModes,
+    tunnels: Vec<runtime::tunnels::Record>,
+    quit_tunnels: bool,
     delete: Option<Host>,
     discard: bool,
     view: View,
@@ -153,6 +163,9 @@ impl Model {
             favorites_only: false,
             metadata: BTreeMap::new(),
             tunnel_profiles: BTreeMap::new(),
+            tunnel_modes: BTreeMap::new(),
+            tunnels: vec![],
+            quit_tunnels: false,
             delete: None,
             discard: false,
             view: View::List,
@@ -433,7 +446,7 @@ impl Model {
     }
     /// Pasted data only edits a focused input; it never enters command dispatch.
     fn paste(&mut self, text: &str) {
-        if self.discard || self.delete.is_some() {
+        if self.discard || self.delete.is_some() || self.quit_tunnels {
             return;
         }
         let multiline = matches!(self.view, View::Note(_));
@@ -474,12 +487,32 @@ impl Model {
             return Action::None;
         }
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        if self.quit_tunnels {
+            if k.code == KeyCode::Enter {
+                return Action::Quit;
+            }
+            if k.code == KeyCode::Esc || (ctrl && k.code == KeyCode::Char('c')) {
+                self.quit_tunnels = false;
+            }
+            return Action::None;
+        }
         if self.discard {
             if k.code == KeyCode::Esc || (ctrl && k.code == KeyCode::Char('c')) {
                 self.discard = false;
             } else if k.code == KeyCode::Enter {
                 self.discard = false;
                 self.back();
+            }
+            return Action::None;
+        }
+        if k.code == KeyCode::F(7)
+            && self.delete.is_none()
+            && !matches!(&self.view, View::Profiles(list) if list.delete.is_some())
+        {
+            if matches!(self.view, View::Active { .. }) {
+                self.back();
+            } else {
+                self.open_view(View::Active { selected: 0 });
             }
             return Action::None;
         }
@@ -528,11 +561,23 @@ impl Model {
                 }
             }
             View::Profiles(_) => return self.profile_key(k),
+            View::Active { .. } => return self.active_key(k),
             View::Forward(f) => {
                 if ctrl && k.code == KeyCode::Char('l') {
                     return if f.validate() {
                         match f.forward() {
-                            Ok(forward) => Action::Connect(f.host.clone(), Some(forward)),
+                            Ok(forward) => {
+                                if f.mode == LaunchMode::TunnelOnly {
+                                    Action::StartTunnel(
+                                        f.host.clone(),
+                                        (!f.inputs[5].value.is_empty())
+                                            .then(|| f.inputs[5].value.clone()),
+                                        forward,
+                                    )
+                                } else {
+                                    Action::Connect(f.host.clone(), Some(forward))
+                                }
+                            }
                             Err(error) => {
                                 f.error = error.to_string();
                                 Action::None
@@ -558,6 +603,7 @@ impl Model {
                             original: f.original_name.clone(),
                             name: f.inputs[5].value.clone(),
                             forward,
+                            mode: f.mode,
                         },
                         Err(e) => {
                             f.error = e.to_string();
@@ -783,6 +829,7 @@ impl Model {
                     self.open_view(View::Host(Box::new(HostForm::edit(host))));
                 }
             }
+            PaletteAction::Active => self.open_view(View::Active { selected: 0 }),
             PaletteAction::Profiles => {
                 if let Some(host) = self.selected_host() {
                     self.open_view(View::Profiles(profiles::List::new(host.name)));
@@ -1083,6 +1130,7 @@ pub fn run(
     );
     m.metadata = metadata.hosts().clone();
     m.tunnel_profiles = profiles.hosts().clone();
+    m.tunnel_modes = profiles.modes().clone();
     m.filter(false);
     match initial {
         InitialView::List => {}
@@ -1105,11 +1153,13 @@ pub fn run(
     } else {
         None
     };
+    let mut tunnels = active::Session::default();
     let mut guard = TerminalGuard::enter()?;
     let mut terminal: Terminal<CrosstermBackend<Stdout>> =
         Terminal::new(CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;
     loop {
+        tunnels.poll(&mut m, paths);
         while let Ok(result) = inspection.try_recv() {
             m.apply_inspection(result);
         }
@@ -1142,7 +1192,24 @@ pub fn run(
                 profiles::apply(&mut m, &mut profiles, &action).map(|_| false)
             }
             Action::None => Ok(false),
-            Action::Quit => return Ok(0),
+            Action::Quit => {
+                if tunnels.manager.has_active() && !m.quit_tunnels {
+                    m.quit_tunnels = true;
+                    Ok(false)
+                } else {
+                    tunnels.manager.stop_all();
+                    tunnels.poll(&mut m, paths);
+                    guard.restore();
+                    if !m.error.is_empty() {
+                        eprintln!("{}", m.error);
+                    }
+                    return Ok(0);
+                }
+            }
+            Action::StartTunnel(name, profile, forward) => tunnels
+                .start(&mut m, paths, config, name, profile, forward)
+                .map(|_| false),
+            Action::StopTunnel(id) => tunnels.manager.stop(id).map(|_| false),
             Action::Connect(name, forward) => {
                 #[cfg(unix)]
                 let signals = SshSignals::enter()?;

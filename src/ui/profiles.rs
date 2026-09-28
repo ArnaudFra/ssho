@@ -60,12 +60,29 @@ impl Model {
             }
             KeyCode::Enter | KeyCode::Char('e' | 'r') => {
                 if let Some((name, forward)) = selected {
-                    let form = ForwardForm::named(list.host.clone(), name.clone(), forward.clone());
+                    let mut form =
+                        ForwardForm::named(list.host.clone(), name.clone(), forward.clone());
+                    form.mode = self
+                        .tunnel_modes
+                        .get(&list.host)
+                        .and_then(|m| m.get(name))
+                        .copied()
+                        .unwrap_or_default();
+                    form.mark_saved();
                     self.open_view(View::Forward(form));
                 }
             }
             KeyCode::Char('l') if ctrl => {
-                if let Some((_, forward)) = selected {
+                if let Some((name, forward)) = selected {
+                    if self.tunnel_modes.get(&list.host).and_then(|m| m.get(name))
+                        == Some(&LaunchMode::TunnelOnly)
+                    {
+                        return Action::StartTunnel(
+                            list.host.clone(),
+                            Some(name.clone()),
+                            forward.clone(),
+                        );
+                    }
                     return Action::Connect(list.host.clone(), Some(forward.clone()));
                 }
             }
@@ -82,8 +99,9 @@ pub(super) fn apply(m: &mut Model, store: &mut TunnelProfiles, action: &Action) 
             original,
             name,
             forward,
+            mode,
         } => {
-            store.save(host, original.as_deref(), name, forward)?;
+            store.save_with_mode(host, original.as_deref(), name, forward, *mode)?;
             if let View::Forward(form) = &mut m.view {
                 form.mark_saved();
             }
@@ -115,6 +133,7 @@ pub(super) fn apply(m: &mut Model, store: &mut TunnelProfiles, action: &Action) 
         _ => return Ok(()),
     }
     m.tunnel_profiles = store.hosts().clone();
+    m.tunnel_modes = store.modes().clone();
     m.error.clear();
     Ok(())
 }
@@ -135,6 +154,7 @@ pub(super) fn reload(
     *profiles = next_profiles;
     m.metadata = metadata.hosts().clone();
     m.tunnel_profiles = profiles.hosts().clone();
+    m.tunnel_modes = profiles.modes().clone();
     m.filter(false);
     Ok(receiver)
 }
@@ -153,6 +173,7 @@ pub(super) fn complete_saved(
         Ok(())
     };
     m.tunnel_profiles = profiles.hosts().clone();
+    m.tunnel_modes = profiles.modes().clone();
     complete_saved_mutation(m, all, action, metadata);
     if let Err(error) = result {
         if !m.error.is_empty() {

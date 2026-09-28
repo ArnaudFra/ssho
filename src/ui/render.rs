@@ -45,6 +45,15 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+    if m.quit_tunnels {
+        f.render_widget(
+            Paragraph::new("Stop owned tunnels and quit?\nEnter: stop + quit • Esc: return")
+                .block(block("Active tunnels", true))
+                .wrap(Wrap { trim: false }),
+            panel(area, 66, 7),
+        );
+        return;
+    }
     if m.discard {
         let area = panel(area, 64, 7);
         f.render_widget(Clear, area);
@@ -65,6 +74,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         View::Note(_) => note_editor(f, m, area),
         View::Host(_) => host_form(f, m, area),
         View::Forward(_) => forward_form(f, m, area),
+        View::Active { .. } => active::draw(f, m, area),
         View::Profiles(_) => profile_list(f, m, area),
         View::Info(_) => info(f, m, area),
         View::Help => help(f, m, area),
@@ -924,8 +934,9 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     .split(inner);
     f.render_widget(
         Paragraph::new(format!(
-            "Host: {} • {}",
+            "Host: {} • {} • {} (Ctrl+T)",
             form.host,
+            form.mode.label(),
             if form.dirty() {
                 "Unsaved changes"
             } else if form.original_name.is_some() {
@@ -1180,19 +1191,19 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     ];
     let right = [
         "Advanced Features",
-        "",
         "*      toggle favorite (pinned first)",
         "N      edit personal note",
         "F2     Favoris seuls: favorites filter",
         "p      ping all hosts",
         "H      toggle hidden hosts visibility",
         "f      last forwarding draft (Ctrl+L launch, Ctrl+S save profile)",
+        "F7     owned tunnels: state, cause and explicit stop",
+        "Ctrl+T forwarding form: shell session / tunnel only",
         "F6     named tunnel profiles (add/edit/rename/delete/launch)",
         "s      cycle sort modes",
         "n      sort by name",
         "r      sort by recent connection",
         "       Tester: check all hosts",
-        "",
         "Forms: Ctrl+S save, Ctrl+L launch tunnel",
         "Ctrl+J/K tabs; Alt+A/D aliases",
         "Ctrl+A/E start/end of input",
@@ -1334,6 +1345,13 @@ fn profile_list(f: &mut Frame, m: &Model, area: Rect) {
                     Row::new(vec![
                         name.clone(),
                         forward.kind.clone(),
+                        m.tunnel_modes
+                            .get(&list.host)
+                            .and_then(|m| m.get(name))
+                            .copied()
+                            .unwrap_or_default()
+                            .label()
+                            .into(),
                         forward.ssh_args().unwrap_or_default().join(" "),
                     ])
                 });
@@ -1342,12 +1360,13 @@ fn profile_list(f: &mut Frame, m: &Model, area: Rect) {
                 Table::new(
                     rows,
                     [
-                        Constraint::Percentage(30),
+                        Constraint::Percentage(25),
                         Constraint::Length(9),
+                        Constraint::Length(14),
                         Constraint::Min(0),
                     ],
                 )
-                .header(Row::new(["Name", "Type", "Forwarding"]).style(accent()))
+                .header(Row::new(["Name", "Type", "Mode", "Forwarding"]).style(accent()))
                 .highlight_symbol("▶ ")
                 .row_highlight_style(
                     Style::default()

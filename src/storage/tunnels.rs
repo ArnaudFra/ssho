@@ -2,6 +2,22 @@
 use super::*;
 use crate::types::Host;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchMode {
+    #[default]
+    Shell,
+    TunnelOnly,
+}
+impl LaunchMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Shell => "Shell session",
+            Self::TunnelOnly => "Tunnel only",
+        }
+    }
+}
+pub type HostModes = BTreeMap<String, BTreeMap<String, LaunchMode>>;
 pub type HostProfiles = BTreeMap<String, BTreeMap<String, Forward>>;
 
 pub fn validate_name(name: &str) -> Result<()> {
@@ -26,20 +42,27 @@ pub struct TunnelProfiles {
     root: PathBuf,
     scope: String,
     hosts: HostProfiles,
+    modes: HostModes,
 }
 impl TunnelProfiles {
     pub fn load(root: &Path, config: &Path) -> Result<Self> {
         ensure_root(root)?;
         let scope = metadata::config_scope_key(config)?;
-        let hosts = Self::entries(&Self::read(root)?, &scope)?;
+        let document = Self::read(root)?;
+        let hosts = Self::entries(&document, &scope)?;
+        let modes = Self::mode_entries(&document, &scope)?;
         Ok(Self {
             root: root.into(),
             scope,
             hosts,
+            modes,
         })
     }
     pub fn hosts(&self) -> &HostProfiles {
         &self.hosts
+    }
+    pub fn modes(&self) -> &HostModes {
+        &self.modes
     }
     fn read(root: &Path) -> Result<Value> {
         let value = read_json(root, "tunnel_profiles.json")?
@@ -78,6 +101,12 @@ impl TunnelProfiles {
                                         .clone(),
                                 )?;
                                 forward.validate()?;
+                                let _: LaunchMode = serde_json::from_value(
+                                    entry
+                                        .get("mode")
+                                        .cloned()
+                                        .unwrap_or(serde_json::json!("shell")),
+                                )?;
                             }
                         }
                     }
@@ -109,6 +138,34 @@ impl TunnelProfiles {
         }
         Ok(result)
     }
+    fn mode_entries(value: &Value, scope: &str) -> Result<HostModes> {
+        let mut result = BTreeMap::new();
+        if let Some(hosts) = value
+            .get("configs")
+            .and_then(|v| v.get(scope))
+            .and_then(|v| v.get("hosts"))
+            .and_then(Value::as_object)
+        {
+            for (host, entry) in hosts {
+                let mut modes = BTreeMap::new();
+                if let Some(profiles) = entry.get("profiles").and_then(Value::as_object) {
+                    for (name, profile) in profiles {
+                        modes.insert(
+                            name.clone(),
+                            serde_json::from_value(
+                                profile
+                                    .get("mode")
+                                    .cloned()
+                                    .unwrap_or(serde_json::json!("shell")),
+                            )?,
+                        );
+                    }
+                }
+                result.insert(host.clone(), modes);
+            }
+        }
+        Ok(result)
+    }
     fn update(&mut self, edit: impl FnOnce(&mut Map<String, Value>) -> Result<()>) -> Result<()> {
         let mut output = Self::read(&self.root)?;
         let configs = output
@@ -130,7 +187,9 @@ impl TunnelProfiles {
             .unwrap();
         edit(hosts)?;
         let committed = Self::entries(&output, &self.scope)?;
+        let modes = Self::mode_entries(&output, &self.scope)?;
         atomic_json(&self.root, "tunnel_profiles.json", &output, 0o600)?;
+        self.modes = modes;
         self.hosts = committed;
         Ok(())
     }
@@ -142,6 +201,26 @@ impl TunnelProfiles {
         original: Option<&str>,
         name: &str,
         forward: &Forward,
+    ) -> Result<()> {
+        self.save_internal(host, original, name, forward, None)
+    }
+    pub fn save_with_mode(
+        &mut self,
+        host: &str,
+        original: Option<&str>,
+        name: &str,
+        forward: &Forward,
+        mode: LaunchMode,
+    ) -> Result<()> {
+        self.save_internal(host, original, name, forward, Some(mode))
+    }
+    fn save_internal(
+        &mut self,
+        host: &str,
+        original: Option<&str>,
+        name: &str,
+        forward: &Forward,
+        mode: Option<LaunchMode>,
     ) -> Result<()> {
         validate_name(name)?;
         forward.validate()?;
@@ -175,6 +254,12 @@ impl TunnelProfiles {
                 .entry("forward")
                 .or_insert_with(|| serde_json::json!({}));
             merge_value(forward_value, serde_json::to_value(forward)?);
+            if let Some(mode) = mode {
+                entry
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("mode".into(), serde_json::to_value(mode)?);
+            }
             profiles.insert(name.to_owned(), entry);
             Ok(())
         })

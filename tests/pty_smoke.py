@@ -110,6 +110,18 @@ from pathlib import Path
 if "-G" in sys.argv[1:]:
     os.execv("/usr/bin/ssh", ["ssh", *sys.argv[1:]])
 Path(os.environ["SSHM_TEST_ARGS"]).write_text("\n".join(sys.argv[1:]))
+if "-N" in sys.argv[1:]:
+    Path(os.environ["SSHM_TEST_ARGS"] + ".pid").write_text(str(os.getpid()))
+    assert not os.isatty(0)
+    assert sys.stdin.read() == ""
+    mode = Path(os.environ["SSHM_TEST_MODE"]).read_text()
+    if mode == "bind":
+        print("bind: Address already in use", file=sys.stderr, flush=True)
+        sys.exit(255)
+    print("TUNNEL_STDOUT_MUST_NOT_REACH_UI", flush=True)
+    print("waiting for tunnel fixture", file=sys.stderr, flush=True)
+    time.sleep(60)
+    sys.exit(0)
 Path(os.environ["SSHM_TEST_TERMIOS"]).write_text(json.dumps(termios.tcgetattr(0), default=lambda value: value.decode("latin1")))
 print("SSH_TAKEOVER", flush=True)
 mode = Path(os.environ["SSHM_TEST_MODE"]).read_text()
@@ -291,6 +303,66 @@ sys.exit(int(mode))
     history = json.loads((home/".config/ssho/sshm_history.json").read_text())
     assert history["connections"]["b-server"]["port_forwarding"]["type"] == "dynamic"
     print("PASS Include file move and saved SOCKS forwarding")
+
+    # Real owned child: save is inert, UI stays interactive, F7 owns stable IDs.
+    tunnel_root = home/"active-config"
+    tunnel_root.write_text("Host active-host\n HostName localhost\n RemoteCommand configured-command\n RequestTTY force\n")
+    mode.write_text("wait")
+    (home/"ssh-args").unlink(missing_ok=True)
+    session = Session(env, ["-c", str(tunnel_root)])
+    session.expect("Last Attempt")
+    session.send(b"\x1b[17~a")
+    session.expect("Profile name")
+    session.send(b"owned\t\x1b[C\x1b[C\t1081\x14\x13")
+    session.expect("Profile saved")
+    session.expect("Tunnel only")
+    assert not (home/"ssh-args").exists()
+    session.send(b"\x0c")
+    session.expect("Owned tunnels")
+    session.expect("Active")
+    args = (home/"ssh-args").read_text().splitlines()
+    assert all(x in args for x in ["-N", "-T", "BatchMode=yes", "ExitOnForwardFailure=yes", "RemoteCommand=none", "RequestTTY=no"])
+    pid = int((home/"ssh-args.pid").read_text())
+    assert b"TUNNEL_STDOUT_MUST_NOT_REACH_UI" not in session.output
+    session.send(b"q")
+    session.expect("Stop owned tunnels and quit?")
+    session.send(b"\x1b")
+    session.expect("Owned tunnels")
+    os.kill(pid, 0)
+    session.send(b"s")
+    session.expect("Stopped")
+    try:
+        os.kill(pid, 0)
+        raise AssertionError("stopped tunnel survived")
+    except ProcessLookupError:
+        pass
+    session.send(b"\x1b")
+    session.expect("Port Forwarding Setup")
+    mode.write_text("bind")
+    session.send(b"\x0c")
+    session.expect("Address already in use")
+    session.expect("Error")
+    session.send(b"\x1b")
+    session.expect("Port Forwarding Setup")
+    mode.write_text("wait")
+    session.send(b"\x0c")
+    session.expect("Owned tunnels")
+    pid = int((home/"ssh-args.pid").read_text())
+    session.send(b"q")
+    session.expect("Stop owned tunnels and quit?")
+    session.send(b"\r")
+    session.close()
+    try:
+        os.kill(pid, 0)
+        raise AssertionError("quit tunnel survived")
+    except ProcessLookupError:
+        pass
+    hist = json.loads((home/".config/ssho/sshm_history.json").read_text())["connections"]["active-host"]
+    assert hist["connect_count"] == 3
+    assert hist["last_result"]["exit_code"] == 137
+    assert hist.get("last_successful_completion") is None
+    mode.write_text("37")
+    print("PASS mode save/no launch, active UI, flags, no stdout corruption, bind cause, explicit stop, quit cancel and stop+quit with real children/history")
 
     # Named profiles: saves are data-only; only Ctrl+L runs the temporary SSH.
     profile_root = home/"profiles-config"
