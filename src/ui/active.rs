@@ -94,9 +94,9 @@ impl Model {
         };
         match k.code {
             KeyCode::Esc | KeyCode::F(7) => self.back(),
-            KeyCode::Char('q') => return Action::Quit,
+            KeyCode::Char('q') => return self.quit_action(),
             KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                return Action::Quit
+                return self.quit_action()
             }
             KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {

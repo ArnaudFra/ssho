@@ -3,14 +3,17 @@
 //! scalar directives use their last value, wildcards are omitted, Match bodies
 //! are skipped, and each concrete alias produces a separate list entry.
 use crate::types::Host;
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
+pub mod backups;
 mod document;
 mod files;
 mod parser;
+pub mod preview;
 use document::Document;
-use files::{ConfigMirror, Snapshot, WRITE_LOCK};
+#[cfg(test)]
+use files::ConfigMirror;
 use parser::{quote, split_line, Parsed};
 
 pub fn load_hosts(path: &Path) -> Result<Vec<Host>> {
@@ -36,146 +39,39 @@ pub fn config_files(path: &Path) -> Result<Vec<PathBuf>> {
 }
 
 pub fn add_host(host: &Host, target: &Path, app_dir: &Path) -> Result<()> {
-    safe_fields(host)?;
-    let _lock = WRITE_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("SSH configuration lock poisoned"))?;
-    let snapshot = Snapshot::read(target)?;
-    let mut document = Document::new(snapshot.text()?);
-    check_add(&document, host)?;
-    document.append(&document::serialize(host, document.newline));
-    publish_add(&snapshot, &document, app_dir)
+    preview::prepare_add(host, target)?.apply(app_dir)
 }
 
-fn publish_add(snapshot: &Snapshot, document: &Document, app_dir: &Path) -> Result<()> {
-    let staged = snapshot.stage(document.text().as_bytes())?;
-    snapshot.backup(app_dir)?;
-    snapshot.commit(staged)
-}
-
-/// Add a copy at a scope boundary only after native OpenSSH confirms its requested
-/// core connection target. Validation uses private mirrors, before backups/writes.
 pub fn add_host_preserving_target(
     host: &Host,
     target: &Path,
     app_dir: &Path,
     root: &Path,
 ) -> Result<()> {
-    safe_fields(host)?;
-    let _lock = WRITE_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("SSH configuration lock poisoned"))?;
-    let mut mirror = ConfigMirror::new(root)?;
-    anyhow::ensure!(
-        !load_hosts_checked(mirror.root())?
-            .iter()
-            .any(|existing| existing.name.eq_ignore_ascii_case(&host.name)),
-        "host '{}' already exists in SSH configuration (including Includes and hidden hosts)",
-        host.name
-    );
-    let snapshot = mirror.snapshot(target)?;
-    let mut document = Document::new(snapshot.text()?);
-    check_add(&document, host)?;
-    let boundary =
-        document.insert_before_first_block(&document::serialize_copy(host, document.newline));
-    anyhow::ensure!(boundary || snapshot.path == std::fs::canonicalize(root)?, "destination Include has no Host/Match boundary; choose the root file or another destination and retry");
-    let target = snapshot.path.clone();
-    mirror.replace(&target, &document.text())?;
-    let effective = crate::runtime::effective::resolve(mirror.root(), &host.name)
-        .map_err(|error| anyhow::anyhow!("cannot preflight copy destination; choose another destination or fix SSH configuration and retry: {error:#}"))?;
-    anyhow::ensure!(
-        effective.hostname == host.hostname
-            && (host.user.is_empty() || effective.user == host.user)
-            && (host.port.is_empty() || effective.port == host.port),
-        "destination precedence changes the requested copy target (resolved {}@{}:{}); choose an earlier destination, usually the root file, or adjust global/Include defaults and retry",
-        effective.user, effective.hostname, effective.port
-    );
-    mirror.unchanged()?;
-    publish_add(mirror.snapshot(&target)?, &document, app_dir)
+    preview::prepare_copy(host, target, root)?.apply(app_dir)
 }
 
-/// Nonempty aliases edit the whole declaration; an empty list detaches this
-/// alias into its own block. Pattern/negation entries are retained internally.
+/// Nonempty aliases edit the declaration; an empty list detaches this alias.
 pub fn update_host(original: &Host, replacement: &Host, app_dir: &Path) -> Result<()> {
-    safe_fields(replacement)?;
-    let _lock = WRITE_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("SSH configuration lock poisoned"))?;
-    let snapshot = Snapshot::read(&original.source_file)?;
-    let mut document = Document::new(snapshot.text()?);
-    let block = document.locate(original)?;
-    document.replace(&block, original, replacement)?;
-    let output = document.text();
-    if output.as_bytes() == snapshot.bytes.as_deref().unwrap_or_default() {
-        return Ok(());
-    }
-    let staged = snapshot.stage(output.as_bytes())?;
-    snapshot.backup(app_dir)?;
-    snapshot.commit(staged)
+    preview::prepare_update(original, replacement)?.apply(app_dir)
 }
 
 pub fn delete_host(host: &Host, app_dir: &Path) -> Result<()> {
-    let _lock = WRITE_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("SSH configuration lock poisoned"))?;
-    let snapshot = Snapshot::read(&host.source_file)?;
-    let mut document = Document::new(snapshot.text()?);
-    let block = document.locate(host)?;
-    document.remove(&block, &host.name);
-    let staged = snapshot.stage(document.text().as_bytes())?;
-    snapshot.backup(app_dir)?;
-    snapshot.commit(staged)
+    preview::prepare_delete(host)?.apply(app_dir)
 }
 
 pub fn move_host(host: &Host, target: &Path, app_dir: &Path) -> Result<()> {
-    move_with_hook(host, target, app_dir, || {})
+    preview::prepare_move(host, target)?.apply(app_dir)
 }
 
+#[cfg(test)]
 fn move_with_hook(
     host: &Host,
     target: &Path,
     app_dir: &Path,
     before_source: impl FnOnce(),
 ) -> Result<()> {
-    let _lock = WRITE_LOCK
-        .lock()
-        .map_err(|_| anyhow::anyhow!("SSH configuration lock poisoned"))?;
-    let source = Snapshot::read(&host.source_file)?;
-    let target = Snapshot::read(target)?;
-    if source.path == target.path {
-        bail!("host '{}' is already in the target config file", host.name);
-    }
-    let mut source_doc = Document::new(source.text()?);
-    let mut target_doc = Document::new(target.text()?);
-    if target_doc.contains(&host.name) {
-        bail!("host '{}' already exists in target config", host.name);
-    }
-    let block = source_doc.locate(host)?;
-    let raw = source_doc.extracted(&block, &host.name);
-    source_doc.remove(&block, &host.name);
-    target_doc.append(&raw);
-    let source_text = source_doc.text();
-    let target_text = target_doc.text();
-    // Prepare both edits, recovery data and rollback before publishing either.
-    let source_staged = source.stage(source_text.as_bytes())?;
-    let target_staged = target.stage(target_text.as_bytes())?;
-    let rollback = target
-        .bytes
-        .as_ref()
-        .map(|bytes| target.stage(bytes))
-        .transpose()?;
-    source.backup(app_dir)?;
-    target.backup(app_dir)?;
-    source.unchanged()?;
-    target.commit(target_staged)?;
-    before_source();
-    if let Err(error) = source.commit(source_staged) {
-        return match target.restore(rollback, target_text.as_bytes()) {
-            Ok(()) => Err(error).context("move failed; target restored and host retained in source"),
-            Err(rollback_error) => Err(error).context(format!("move failed; rollback also failed: {rollback_error:#}; recovery copies remain in {}", app_dir.join("backups").display())),
-        };
-    }
-    Ok(())
+    preview::prepare_move(host, target)?.apply_with_hook(app_dir, before_source)
 }
 
 fn check_add(document: &Document, host: &Host) -> Result<()> {
@@ -1308,5 +1204,108 @@ mod copy_tests {
                 "{case}: no backups or app writes on refused preflight"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn versioned_backups_keep_each_original_with_explicit_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config");
+        let app = tmp.path().join("app");
+        fs::write(&path, "# first\n").unwrap();
+        let host = Host {
+            name: "one".into(),
+            hostname: "one.example".into(),
+            ..Host::default()
+        };
+        add_host(&host, &path, &app).unwrap();
+        delete_host(&find_host(&path, "one").unwrap(), &app).unwrap();
+        let records: Vec<_> = fs::read_dir(app.join("backups"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        assert_eq!(
+            records.len(),
+            2,
+            "each write needs an immutable backup with explicit destination provenance"
+        );
+    }
+    #[test]
+    fn prepared_move_and_edit_are_inert_exact_and_reject_external_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("config");
+        let target = tmp.path().join("new/sub/config");
+        let app = tmp.path().join("app");
+        let before = b"# comment\r\nHost one two\r\n HostName old.example\r\n Compression yes";
+        fs::write(&source, before).unwrap();
+        let host = find_host(&source, "one").unwrap();
+        let plan = preview::prepare_move(&host, &target).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), before);
+        assert!(!target.parent().unwrap().exists());
+        assert!(!app.exists());
+        assert_eq!(plan.files().len(), 2);
+        let expected: Vec<_> = plan
+            .files()
+            .iter()
+            .map(|f| (f.path().to_owned(), f.after().to_vec()))
+            .collect();
+        assert!(plan.diff().contains("-Host one two"));
+        plan.apply(&app).unwrap();
+        for (path, bytes) in expected {
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+        let moved = find_host(&target, "one").unwrap();
+        let changed = Host {
+            hostname: "new.example".into(),
+            ..moved.clone()
+        };
+        let edit = preview::prepare_update(&moved, &changed).unwrap();
+        fs::write(&target, "# external\n").unwrap();
+        assert!(edit
+            .apply(&app)
+            .unwrap_err()
+            .to_string()
+            .contains("changed"));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "# external\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_missing_parent_retarget_and_existing_permissions_are_protected() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        let other = tmp.path().join("other");
+        fs::create_dir(&real).unwrap();
+        fs::create_dir(&other).unwrap();
+        let link = tmp.path().join("link");
+        symlink(&real, &link).unwrap();
+        let target = link.join("missing/config");
+        let app = tmp.path().join("app");
+        let host = Host {
+            name: "one".into(),
+            hostname: "one.example".into(),
+            ..Host::default()
+        };
+        let plan = preview::prepare_add(&host, &target).unwrap();
+        fs::remove_file(&link).unwrap();
+        symlink(&other, &link).unwrap();
+        assert!(plan.apply(&app).is_err());
+        assert!(!real.join("missing").exists());
+        assert!(!other.join("missing").exists());
+        assert!(!app.exists());
+        let path = real.join("config");
+        fs::write(&path, "# original\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let plan = preview::prepare_add(&host, &path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(plan.apply(&app).is_err());
+        assert!(!app.exists());
     }
 }

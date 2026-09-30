@@ -47,7 +47,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     }
     if m.quit_tunnels {
         f.render_widget(
-            Paragraph::new("Stop owned tunnels and quit?\nEnter: stop + quit • Esc: return")
+            Paragraph::new(if m.has_unsaved_context() { "Discard unsaved edits and stop owned tunnels, then quit?\nEnter: discard + stop + quit • Esc: return" } else { "Stop owned tunnels and quit?\nEnter: stop + quit • Esc: return" })
                 .block(block("Active tunnels", true))
                 .wrap(Wrap { trim: false }),
             panel(area, 66, 7),
@@ -67,6 +67,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     }
     match &m.view {
         View::List => list(f, m, area),
+        View::Changes(_) | View::Backups { .. } => changes::draw(f, m, area),
         View::Actions { .. } => {
             list(f, m, area);
             actions(f, m, area);
@@ -1069,10 +1070,23 @@ fn files(f: &mut Frame, m: &mut Model, area: Rect) {
         return;
     };
     let area = inset(area);
+    let errors = if m.error.is_empty() {
+        vec![]
+    } else {
+        details::wrapped(
+            m.error
+                .lines()
+                .map(|line| Line::styled(line.to_owned(), Style::default().fg(Color::Red)))
+                .collect(),
+            area.width,
+        )
+    };
+    let error_height = errors.len().min(usize::from(area.height.saturating_sub(3))) as u16;
     let parts = Layout::vertical([
-        Constraint::Length(3),
+        Constraint::Length(if errors.is_empty() { 3 } else { 1 }),
         Constraint::Min(1),
-        Constraint::Length(2),
+        Constraint::Length(error_height),
+        Constraint::Length(1),
     ])
     .split(area);
     let title = duplicate
@@ -1110,10 +1124,11 @@ fn files(f: &mut Frame, m: &mut Model, area: Rect) {
         }),
         parts[1],
     );
+    f.render_widget(Paragraph::new(errors), parts[2]);
     f.render_widget(
         Paragraph::new("↑/↓: navigate • Enter: select • Esc: cancel")
             .style(Style::default().fg(GRAY)),
-        parts[2],
+        parts[3],
     );
 }
 fn info(f: &mut Frame, m: &mut Model, area: Rect) {
@@ -1158,7 +1173,7 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     }
 }
 fn help(f: &mut Frame, m: &mut Model, area: Rect) {
-    let area = panel(area, 96, 28);
+    let area = panel(area, 96, 30);
     let border = block("SSHO - Commands", true);
     let inner = border.inner(area);
     f.render_widget(border, area);
@@ -1198,6 +1213,8 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "H      toggle hidden hosts visibility",
         "f      last forwarding draft (Ctrl+L launch, Ctrl+S save profile)",
         "F7     owned tunnels: state, cause and explicit stop",
+        "F8     backups: destination, diff, restore",
+        "Review: Enter confirms, Esc returns",
         "Ctrl+T forwarding form: shell session / tunnel only",
         "F6     named tunnel profiles (add/edit/rename/delete/launch)",
         "s      cycle sort modes",

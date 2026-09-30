@@ -84,11 +84,7 @@ fn tab_hidden_delete_and_preferences() {
     m.key(key(KeyCode::Tab));
     m.key(key(KeyCode::Char('H')));
     assert_eq!(m.visible.len(), 3);
-    m.key(key(KeyCode::Char('d')));
-    assert!(m.delete.is_some());
-    m.key(key(KeyCode::Char('j')));
-    assert_eq!(m.selected, 0);
-    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.key(key(KeyCode::Char('d'))), Action::Delete(_)));
     assert!(m.delete.is_none());
     m.preferences.key_bindings.disable_esc_quit = true;
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
@@ -305,12 +301,10 @@ fn sorting_history_and_table_shortcuts() {
     m.key(key(KeyCode::Char('s')));
     assert!(!m.recent);
     assert_eq!(m.selected_host().unwrap().name, "alpha");
-    m.key(key(KeyCode::Char('d')));
     assert_eq!(
-        m.key(key(KeyCode::Enter)),
+        m.key(key(KeyCode::Char('d'))),
         Action::Delete(m.selected_host().unwrap())
     );
-    m.key(key(KeyCode::Esc));
     m.key(key(KeyCode::Char('i')));
     assert!(matches!(m.view, View::Info(_)));
     m.key(key(KeyCode::Enter));
@@ -2023,10 +2017,7 @@ fn manual_reload_does_not_interrupt_forms_or_confirmations() {
     assert!(matches!(m.view, View::Forward(_)));
     m.key(key(KeyCode::Esc));
     m.key(key(KeyCode::Enter));
-    m.key(key(KeyCode::Char('d')));
-    assert!(m.delete.is_some());
-    assert_eq!(m.key(key(KeyCode::F(5))), Action::None);
-    assert!(m.delete.is_some());
+    assert!(matches!(m.key(key(KeyCode::Char('d'))), Action::Delete(_)));
 }
 
 #[test]
@@ -4358,4 +4349,422 @@ fn session_history_nonfatal_errors_and_drop_completion() {
     session.poll(&mut m, &paths);
     assert!(m.error.contains("history"));
     assert_eq!(fs::read(external).unwrap(), original);
+}
+
+#[test]
+fn preview_delete_is_the_only_confirmation_and_f8_opens_backups() {
+    let mut m = model();
+    m.search_focus = false;
+    assert!(
+        matches!(m.key(key(KeyCode::Char('d'))), Action::Delete(_)),
+        "delete should prepare a diff directly"
+    );
+    assert!(m.delete.is_none());
+    assert_eq!(format!("{:?}", m.key(key(KeyCode::F(8)))), "Backups");
+}
+
+#[test]
+fn preview_preserves_dirty_form_caret_parents_and_f7_overlay_then_completes_info() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    let app = temp.path().join("app");
+    fs::write(&root, "Host alpha\n HostName a.example\n").unwrap();
+    let mut m = model();
+    m.all = config::load_hosts(&root).unwrap();
+    m.filter(false);
+    m.open_view(View::Info(m.all[0].clone()));
+    m.key(key(KeyCode::Char('e')));
+    let View::Host(form) = &mut m.view else {
+        panic!()
+    };
+    form.names[0].set("new-name");
+    form.names[0].cursor = 3;
+    form.name_focus = true;
+    form.focus = 0;
+    let raw = format!("{form:?}");
+    let parents = format!("{:?}", m.parents);
+    m.key(key(KeyCode::F(7)));
+    m.paste("q\n\x13junk");
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(&m.view, View::Host(form) if format!("{form:?}") == raw));
+    assert_eq!(format!("{:?}", m.parents), parents);
+    let action = m.key(ctrl('s'));
+    changes::open(&mut m, action.clone(), &root).unwrap();
+    assert!(screen(&mut m, 100, 30).contains("Review SSH changes"));
+    m.paste("\r\nconfirm");
+    assert!(matches!(m.view, View::Changes(_)));
+    m.key(key(KeyCode::F(7)));
+    m.paste("q\n");
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::Changes(_)));
+    assert!(!app.exists());
+    assert!(fs::read_to_string(&root).unwrap().contains("Host alpha"));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(&m.view, View::Host(form) if format!("{form:?}") == raw));
+    assert_eq!(format!("{:?}", m.parents), parents);
+    changes::open(&mut m, action.clone(), &root).unwrap();
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::ConfirmChanges);
+    let completed = changes::apply(&mut m, &app).unwrap();
+    assert_eq!(completed, action);
+    assert!(matches!(m.view, View::Host(_)));
+    let mut metadata = Metadata::load(&app, &root).unwrap();
+    let mut profiles = TunnelProfiles::load(&app, &root).unwrap();
+    metadata
+        .set_note("alpha", "retained personal note")
+        .unwrap();
+    profiles
+        .save("alpha", None, "retained", &sample_forward("dynamic"))
+        .unwrap();
+    profiles::complete_saved(
+        &mut m,
+        config::load_hosts(&root).unwrap(),
+        &completed,
+        &mut metadata,
+        &mut profiles,
+    );
+    assert!(matches!(&m.view, View::Info(host) if host.name == "new-name"));
+    assert_eq!(m.note("new-name"), "retained personal note");
+    assert!(m.tunnel_profiles["new-name"].contains_key("retained"));
+}
+
+#[test]
+fn preview_failure_keeps_review_and_restoration_cannot_drop_suspended_editors() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    let app = temp.path().join("app");
+    fs::write(&root, "Host alpha\n HostName a.example\n").unwrap();
+    let mut m = model();
+    m.all = config::load_hosts(&root).unwrap();
+    m.filter(false);
+    m.open_view(View::Host(Box::new(HostForm::edit(m.all[0].clone()))));
+    let action = m.key(ctrl('s'));
+    changes::open(&mut m, action, &root).unwrap();
+    let parents = format!("{:?}", m.parents);
+    fs::write(&root, "# external\n").unwrap();
+    assert!(changes::apply(&mut m, &app).is_err());
+    assert!(matches!(m.view, View::Changes(_)));
+    assert_eq!(format!("{:?}", m.parents), parents);
+    assert!(!app.exists());
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::F(7)));
+    assert!(
+        changes::open_backups(&mut m, &app).is_err(),
+        "F8 must not enable restore over a suspended editor"
+    );
+    assert!(matches!(m.view, View::Active { .. }));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::Host(_)));
+}
+
+#[test]
+fn preview_move_cancel_keeps_file_selection_and_shows_both_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let target = temp.path().join("included");
+    fs::write(
+        &root,
+        format!(
+            "Include {}\nHost alpha\n HostName a.example\n",
+            target.display()
+        ),
+    )
+    .unwrap();
+    fs::write(&target, "# target\n").unwrap();
+    let mut m = model();
+    m.all = config::load_hosts(&root).unwrap();
+    m.filter(false);
+    let host = m.all[0].clone();
+    m.open_view(View::Files {
+        files: vec![root.clone(), target.clone()],
+        selected: 1,
+        host: Some(host),
+        seed: String::new(),
+        duplicate: None,
+    });
+    let picker = format!("{:?}", m.view);
+    let parents = format!("{:?}", m.parents);
+    let action = m.key(key(KeyCode::Enter));
+    changes::open(&mut m, action, &root).unwrap();
+    let View::Changes(review) = &m.view else {
+        panic!()
+    };
+    let text = format!("{review:?}");
+    assert!(text.contains(&root.display().to_string()));
+    assert!(text.contains(&target.display().to_string()));
+    assert_eq!(m.key(key(KeyCode::F(5))), Action::None);
+    m.key(key(KeyCode::Esc));
+    assert_eq!(format!("{:?}", m.view), picker);
+    assert_eq!(format!("{:?}", m.parents), parents);
+    assert_eq!(fs::read_to_string(target).unwrap(), "# target\n");
+}
+
+#[test]
+fn backups_keep_selected_long_destination_visible_on_short_narrow_terminal() {
+    let temp = tempfile::tempdir().unwrap();
+    let app = temp.path().join("app");
+    let root = temp
+        .path()
+        .join("a-long-explicit-destination-for-backup-provenance");
+    fs::write(&root, "# original\n").unwrap();
+    for n in 0..12 {
+        config::add_host(
+            &Host {
+                name: format!("host{n}"),
+                hostname: "example.org".into(),
+                ..Host::default()
+            },
+            &root,
+            &app,
+        )
+        .unwrap();
+    }
+    let mut m = model();
+    changes::open_backups(&mut m, &app).unwrap();
+    screen(&mut m, 40, 10);
+    for _ in 0..8 {
+        m.key(key(KeyCode::Down));
+    }
+    let text = screen(&mut m, 40, 10);
+    assert!(
+        text.contains('›'),
+        "selected backup must remain visible with wrapped destination: {text}"
+    );
+    m.paste("\n\r");
+    assert!(matches!(m.view, View::Backups { selected: 8, .. }));
+}
+
+#[test]
+fn active_quit_confirms_discard_of_suspended_dirty_forms_and_preserves_caret_on_cancel() {
+    let mut m = model();
+    m.open_view(View::Info(m.all[0].clone()));
+    m.key(key(KeyCode::Char('e')));
+    let View::Host(form) = &mut m.view else {
+        panic!()
+    };
+    form.names[0].set("unsaved-name");
+    form.names[0].cursor = 3;
+    let raw = format!("{form:?}");
+    let parents = format!("{:?}", m.parents);
+    m.key(key(KeyCode::F(7)));
+    assert_eq!(
+        m.key(key(KeyCode::Char('q'))),
+        Action::None,
+        "quit must confirm losing a suspended dirty draft even without active tunnels"
+    );
+    assert!(m.quit_tunnels);
+    assert!(screen(&mut m, 100, 20).contains("Discard unsaved edits"));
+    m.paste("\r\n");
+    assert!(m.quit_tunnels);
+    m.key(key(KeyCode::Esc));
+    assert!(!m.quit_tunnels);
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(&m.view, View::Host(form) if format!("{form:?}") == raw));
+    assert_eq!(format!("{:?}", m.parents), parents);
+    m.key(key(KeyCode::F(7)));
+    assert_eq!(m.key(ctrl('c')), Action::None);
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::Quit);
+    let mut clean = model();
+    clean.key(key(KeyCode::F(7)));
+    assert_eq!(clean.key(key(KeyCode::Char('q'))), Action::Quit);
+    assert!(!clean.quit_tunnels);
+}
+
+#[test]
+fn preview_end_shows_last_page_instead_of_a_blank_screen() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    fs::write(&root, "# preserved\n").unwrap();
+    let mut m = model();
+    let host = Host {
+        name: "new".into(),
+        hostname: "tail.example".into(),
+        ..Host::default()
+    };
+    changes::open(
+        &mut m,
+        Action::Save(None, Box::new(host), root.clone()),
+        &root,
+    )
+    .unwrap();
+    screen(&mut m, 50, 10);
+    m.key(key(KeyCode::End));
+    assert!(screen(&mut m, 50, 10).contains("tail.example"));
+    assert!(screen(&mut m, 100, 30).contains("tail.example"));
+}
+
+#[test]
+fn active_quit_also_protects_notes_profile_drafts_and_prepared_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    fs::write(&root, "# original\n").unwrap();
+    let mut note = notes::Editor::new("alpha".into(), "original");
+    note.input.set("changed");
+    let mut forward = ForwardForm::new("alpha".into(), None);
+    forward.inputs[1].set("changed");
+    for view in [View::Note(note), View::Forward(forward)] {
+        let mut m = model();
+        m.open_view(view);
+        let before = format!("{:?}", m.view);
+        m.key(key(KeyCode::F(7)));
+        assert_eq!(m.key(ctrl('c')), Action::None);
+        assert!(m.quit_tunnels);
+        m.key(key(KeyCode::Esc));
+        m.key(key(KeyCode::Esc));
+        assert_eq!(format!("{:?}", m.view), before);
+    }
+    let mut m = model();
+    changes::open(
+        &mut m,
+        Action::Save(
+            None,
+            Box::new(Host {
+                name: "new".into(),
+                hostname: "example.org".into(),
+                ..Host::default()
+            }),
+            root.clone(),
+        ),
+        &root,
+    )
+    .unwrap();
+    let before = format!("{:?}", m.view);
+    m.key(key(KeyCode::F(7)));
+    assert_eq!(m.key(key(KeyCode::Char('q'))), Action::None);
+    assert!(m.quit_tunnels);
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Esc));
+    assert_eq!(format!("{:?}", m.view), before);
+    assert_eq!(fs::read_to_string(root).unwrap(), "# original\n");
+}
+
+#[test]
+fn final_review_validation_errors_follow_visual_order_including_copy_name() {
+    use forms::FormField;
+    let mut form = HostForm::add("valid".into(), "config".into());
+    form.inputs[1].set("valid.example");
+    form.inputs[7].set("-o X=bad\0value");
+    form.inputs[8].set("bad\ntag");
+    assert!(!form.validate());
+    assert_eq!(form.focus, 8, "General tags precede Advanced options");
+    assert_eq!(form.tab, 0);
+    assert_eq!(
+        form.errors.iter().map(|e| e.field).collect::<Vec<_>>(),
+        vec![FormField::Input(8), FormField::Input(7)]
+    );
+}
+
+#[test]
+fn final_review_copy_name_error_precedes_invalid_port() {
+    use forms::FormField;
+    let source = model().all[0].clone();
+    let mut copy = HostForm::duplicate(source, "config".into());
+    copy.inputs[0].set("alpha");
+    copy.inputs[3].set("65536");
+    assert!(!copy.validate());
+    assert_eq!(copy.focus, 0, "copy-name collision precedes invalid port");
+    assert_eq!(
+        copy.errors.iter().map(|e| e.field).collect::<Vec<_>>(),
+        vec![FormField::Input(0), FormField::Input(3)]
+    );
+}
+
+#[test]
+fn final_review_picker_errors_wrap_without_losing_destination_or_parent() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let target = temp.path().join("included");
+    fs::write(
+        &root,
+        format!(
+            "Include {}\nHost alpha\n HostName a.example\n",
+            target.display()
+        ),
+    )
+    .unwrap();
+    fs::write(&target, "Host alpha\n HostName occupied.example\n").unwrap();
+    let before = (fs::read(&root).unwrap(), fs::read(&target).unwrap());
+    let mut m = model();
+    let host = config::load_hosts(&root)
+        .unwrap()
+        .into_iter()
+        .find(|h| h.source_file == root)
+        .unwrap();
+    m.open_view(View::Files {
+        files: vec![root.clone(), target.clone()],
+        selected: 1,
+        host: Some(host),
+        seed: String::new(),
+        duplicate: None,
+    });
+    let picker = format!("{:?}", m.view);
+    let parents = format!("{:?}", m.parents);
+    let action = m.key(key(KeyCode::Enter));
+    m.error = format!("{:#}", changes::open(&mut m, action, &root).unwrap_err());
+    assert!(m.error.contains("already exists"));
+    for (width, height) in [(100, 25), (40, 10)] {
+        let text = screen(&mut m, width, height);
+        assert!(text.contains("already exists"), "{text}");
+        assert!(text.contains('▶'), "destination remains visible: {text}");
+    }
+    assert_eq!(m.key(key(KeyCode::F(8))), Action::Backups);
+    m.error = format!(
+        "{:#}",
+        changes::open_backups(&mut m, &temp.path().join("app")).unwrap_err()
+    );
+    let text = screen(&mut m, 40, 10);
+    assert!(text.contains("Return to the host list"), "{text}");
+    assert!(text.contains("unchanged"), "wrapped instruction: {text}");
+    assert_eq!(format!("{:?}", m.view), picker);
+    assert_eq!(format!("{:?}", m.parents), parents);
+    assert_eq!((fs::read(root).unwrap(), fs::read(target).unwrap()), before);
+}
+
+#[test]
+fn final_review_explicit_edits_keep_query_when_earlier_native_values_mask_them() {
+    for prefix in [
+        "Host *\n User inherited\n HostName inherited.example\n",
+        "User inherited\nHostName inherited.example\n",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("config");
+        fs::write(
+            &root,
+            format!("{prefix}Host target\n User declared\n HostName declared.example\n"),
+        )
+        .unwrap();
+        let mut m = Model::new(
+            config::load_hosts(&root).unwrap(),
+            AppConfig::default(),
+            BTreeMap::new(),
+            false,
+        );
+        let inspector = runtime::effective::Inspector::default();
+        for result in start_inspection(&inspector, &mut m, &root, false) {
+            m.apply_inspection(result);
+        }
+        let query = "user:inherited AND inherited.example";
+        m.query.set(query);
+        m.filter(true);
+        for edit in 0..2 {
+            let original = m.selected_host().unwrap();
+            let mut saved = original.clone();
+            saved.user = format!("new-user-{edit}");
+            saved.hostname = format!("new-{edit}.example");
+            config::update_host(&original, &saved, &temp.path().join("app")).unwrap();
+            m.complete_mutation(
+                config::load_hosts(&root).unwrap(),
+                &Action::Save(Some(original), Box::new(saved), root.clone()),
+            );
+            assert_eq!(m.query.value, query, "defer to native precedence");
+            let receiver = start_inspection(&inspector, &mut m, &root, false);
+            assert_eq!(m.selected_host().unwrap().name, "target");
+            assert!(m.effective.is_empty());
+            for result in receiver {
+                m.apply_inspection(result);
+            }
+            assert_eq!(m.query.value, query);
+            assert!(m.pending_preferred.is_none());
+            assert_eq!(m.effective["target"].as_ref().unwrap().user, "inherited");
+        }
+    }
 }

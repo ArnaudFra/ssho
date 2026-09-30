@@ -12,39 +12,80 @@ use tempfile::NamedTempFile;
 
 pub(super) static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
+#[derive(Clone, Debug)]
 pub(super) struct Snapshot {
     pub path: PathBuf,
     pub bytes: Option<Vec<u8>>,
-    permissions: Option<fs::Permissions>,
+    pub(super) permissions: Option<fs::Permissions>,
+    pub(super) access: PathBuf,
+    access_state: Option<ConfigAccess>,
 }
 impl Snapshot {
     pub fn read(path: &Path) -> Result<Self> {
-        let path = absolute(path)?;
-        match fs::metadata(&path) {
+        let access = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        let path = resolve_destination(&access)?;
+        let access_state = match fs::metadata(&access) {
             Ok(metadata) => {
-                if !metadata.is_file() {
-                    bail!("SSH config {} is not a regular file", path.display());
-                }
-                let resolved = fs::canonicalize(&path)?;
-                Ok(Self {
-                    bytes: Some(fs::read(&resolved)?),
-                    permissions: Some(metadata.permissions()),
-                    path: resolved,
-                })
+                anyhow::ensure!(
+                    metadata.is_file(),
+                    "SSH config {} is not a regular file",
+                    access.display()
+                );
+                Some(ConfigAccess::read(&access)?)
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                // A dangling config symlink is an error, not a new file to replace.
-                if fs::symlink_metadata(&path).is_ok() {
-                    bail!("SSH config {} is a broken symbolic link", path.display());
-                }
-                Ok(Self {
-                    path,
-                    bytes: None,
-                    permissions: None,
-                })
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        let snapshot = Self {
+            bytes: access_state.as_ref().map(|_| fs::read(&path)).transpose()?,
+            permissions: access_state.as_ref().map(|state| state.permissions.clone()),
+            path,
+            access,
+            access_state,
+        };
+        snapshot.unchanged()?;
+        Ok(snapshot)
+    }
+    pub fn access_description(&self) -> String {
+        let metadata = match &self.access_state {
+            #[cfg(unix)]
+            Some(state) => {
+                use std::os::unix::fs::PermissionsExt;
+                format!(
+                    "mode {:04o}, owner {}, group {}",
+                    state.permissions.mode() & 0o7777,
+                    state.owner,
+                    state.group
+                )
             }
-            Err(error) => Err(error).with_context(|| format!("opening {}", path.display())),
-        }
+            #[cfg(not(unix))]
+            Some(state) => format!("permissions {:?}", state.permissions),
+            None => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    format!(
+                        "new file; mode {:04o}",
+                        self.permissions
+                            .as_ref()
+                            .map_or(0o600, |p| p.mode() & 0o777)
+                    )
+                }
+                #[cfg(not(unix))]
+                {
+                    "new file; recorded/private permissions".into()
+                }
+            }
+        };
+        format!(
+            "{}\nDestination: {}\nExpected: {metadata}",
+            self.access.display(),
+            self.path.display()
+        )
     }
     pub fn text(&self) -> Result<&str> {
         std::str::from_utf8(self.bytes.as_deref().unwrap_or_default())
@@ -70,6 +111,23 @@ impl Snapshot {
         Ok(file)
     }
     pub fn unchanged(&self) -> Result<()> {
+        let resolved = resolve_destination(&self.access).with_context(|| {
+            format!(
+                "SSH config access changed at {}; reload and retry",
+                self.access.display()
+            )
+        })?;
+        let actual = match fs::metadata(&self.access) {
+            Ok(_) => Some(ConfigAccess::read(&self.access)?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        anyhow::ensure!(
+            resolved == self.path && actual == self.access_state,
+            "SSH config access or permissions changed at {}; reload and retry",
+            self.access.display()
+        );
+
         let current = match fs::read(&self.path) {
             Ok(bytes) => Some(bytes),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -102,6 +160,7 @@ impl Snapshot {
         let Some(bytes) = &self.bytes else {
             return Ok(());
         };
+        super::backups::record(self, app_dir)?;
         let backup_dir = app_dir.join("backups");
         guard_path(&backup_dir)?;
         secure_mkdir(&backup_dir)?;
@@ -129,9 +188,25 @@ impl Snapshot {
         }
         Ok(())
     }
-    pub fn restore(&self, staged: Option<NamedTempFile>, expected: &[u8]) -> Result<()> {
+    pub fn staged_snapshot(&self, staged: &NamedTempFile, bytes: &[u8]) -> Result<Self> {
+        let mut state = ConfigAccess::read(staged.path())?;
+        state.resolved = self.path.clone();
+        Ok(Self {
+            path: self.path.clone(),
+            access: self.access.clone(),
+            bytes: Some(bytes.to_vec()),
+            permissions: Some(state.permissions.clone()),
+            access_state: Some(state),
+        })
+    }
+    pub fn restore(&self, staged: Option<NamedTempFile>, expected: &Snapshot) -> Result<()> {
+        expected.unchanged().context(
+            "cannot roll back destination because it changed externally; recovery copies retained",
+        )?;
         // Never overwrite an external edit made after the target was published.
-        if fs::read(&self.path)? != expected {
+        if resolve_destination(&self.access)? != self.path
+            || fs::read(&self.path)? != expected.bytes.as_deref().unwrap_or_default()
+        {
             bail!("cannot roll back {} because it changed externally; the host remains in its source and backups", self.path.display());
         }
         match staged {
@@ -230,6 +305,10 @@ struct ConfigAccess {
     owner: u32,
     #[cfg(unix)]
     group: u32,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
 }
 impl ConfigAccess {
     fn read(path: &Path) -> Result<Self> {
@@ -244,6 +323,10 @@ impl ConfigAccess {
             owner: metadata.uid(),
             #[cfg(unix)]
             group: metadata.gid(),
+            #[cfg(unix)]
+            device: metadata.dev(),
+            #[cfg(unix)]
+            inode: metadata.ino(),
         })
     }
 }
@@ -251,6 +334,7 @@ impl ConfigAccess {
 /// An isolated OpenSSH Include graph. Only Include paths are rewritten; native
 /// ssh -G continues to evaluate Host/Match/options, including their original order.
 /// Real configuration files are read and checked, never temporarily published.
+#[derive(Debug)]
 pub(super) struct ConfigMirror {
     directory: tempfile::TempDir,
     root: PathBuf,
@@ -438,7 +522,7 @@ impl ConfigMirror {
 }
 
 /// App-data writes must not traverse a symlink back into the legacy directory.
-fn guard_path(path: &Path) -> Result<()> {
+pub(super) fn guard_path(path: &Path) -> Result<()> {
     let path = absolute(path)?;
     let mut current = PathBuf::new();
     for component in path.components() {
@@ -458,7 +542,7 @@ fn guard_path(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn private_file(path: &Path) -> Result<()> {
+pub(super) fn private_file(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -470,7 +554,7 @@ fn private_file(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn secure_mkdir(path: &Path) -> Result<()> {
+pub(super) fn secure_mkdir(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -482,4 +566,24 @@ fn secure_mkdir(path: &Path) -> Result<()> {
     #[cfg(not(unix))]
     fs::create_dir_all(path)?;
     Ok(())
+}
+
+/// Resolve existing ancestors without creating them. Preserve lexical symlink semantics.
+fn resolve_destination(path: &Path) -> Result<PathBuf> {
+    match fs::canonicalize(path) {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::ensure!(
+                fs::symlink_metadata(path).is_err(),
+                "SSH config {} is a broken symbolic link",
+                path.display()
+            );
+            let parent = path
+                .parent()
+                .context("SSH config has no existing ancestor")?;
+            let name = path.file_name().context("SSH config has no filename")?;
+            Ok(resolve_destination(parent)?.join(name))
+        }
+        Err(error) => Err(error.into()),
+    }
 }

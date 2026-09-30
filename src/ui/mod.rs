@@ -1,6 +1,7 @@
 //! Native terminal interface, adapted from SSHM, copyright Guillaume Archambault (MIT).
 mod actions;
 mod active;
+mod changes;
 mod details;
 mod forms;
 mod notes;
@@ -51,6 +52,11 @@ pub enum InitialView {
 #[derive(Clone, Debug)]
 enum View {
     List,
+    Changes(changes::Review),
+    Backups {
+        entries: Vec<config::backups::Backup>,
+        selected: usize,
+    },
     Actions {
         selected: usize,
     },
@@ -74,6 +80,9 @@ enum View {
 #[derive(Clone, Debug, PartialEq)]
 enum Action {
     None,
+    ConfirmChanges,
+    Backups,
+    RestoreBackup(usize),
     Quit,
     Connect(String, Option<Forward>),
     StartTunnel(String, Option<String>, Forward),
@@ -439,6 +448,25 @@ impl Model {
         self.view = view;
         self.scroll = scroll;
     }
+    fn has_unsaved_context(&self) -> bool {
+        std::iter::once(&self.view)
+            .chain(self.parents.iter().map(|(view, _)| view))
+            .any(|view| match view {
+                View::Host(form) => form.dirty(),
+                View::Forward(form) => form.dirty(),
+                View::Note(editor) => editor.dirty(),
+                View::Changes(_) => true,
+                _ => false,
+            })
+    }
+    fn quit_action(&mut self) -> Action {
+        if self.has_unsaved_context() && !self.quit_tunnels {
+            self.quit_tunnels = true;
+            Action::None
+        } else {
+            Action::Quit
+        }
+    }
     fn quit_key(&self, k: KeyEvent) -> bool {
         self.preferences
             .key_bindings
@@ -516,7 +544,15 @@ impl Model {
             }
             return Action::None;
         }
+        if k.code == KeyCode::F(8) && self.delete.is_none() {
+            if matches!(self.view, View::Backups { .. }) {
+                self.back();
+                return Action::None;
+            }
+            return Action::Backups;
+        }
         match &mut self.view {
+            View::Changes(_) | View::Backups { .. } => return changes::key(self, k),
             View::Note(editor) => {
                 return match editor.key(k) {
                     FormEvent::Cancel => {
@@ -775,7 +811,11 @@ impl Model {
                     return Action::Move(h);
                 }
             }
-            KeyCode::Char('d') => self.delete = self.selected_host(),
+            KeyCode::Char('d') => {
+                if let Some(host) = self.selected_host() {
+                    return Action::Delete(host);
+                }
+            }
             KeyCode::Char('f') => return self.activate_action(PaletteAction::Tunnel),
             KeyCode::Char('p') => return self.activate_action(PaletteAction::Test),
             KeyCode::Char('H') => {
@@ -829,6 +869,7 @@ impl Model {
                     self.open_view(View::Host(Box::new(HostForm::edit(host))));
                 }
             }
+            PaletteAction::Backups => return Action::Backups,
             PaletteAction::Active => self.open_view(View::Active { selected: 0 }),
             PaletteAction::Profiles => {
                 if let Some(host) = self.selected_host() {
@@ -1098,14 +1139,8 @@ fn select_duplicate_files(m: &mut Model, config: &Path, mut source: Host) -> Res
     Ok(())
 }
 /// Recheck the full Include graph immediately before the targeted add operation.
+#[cfg(test)]
 fn save_copy(config: &Path, host: &Host, target: &Path, app_dir: &Path) -> Result<()> {
-    anyhow::ensure!(
-        !config::load_hosts_checked(config)?
-            .iter()
-            .any(|existing| existing.name.eq_ignore_ascii_case(&host.name)),
-        "host '{}' already exists in SSH configuration (including Includes and hidden hosts)",
-        host.name
-    );
     config::add_host_preserving_target(host, target, app_dir, config)
 }
 /// Runs the interactive browser or a standalone CLI form. SSH takes over the restored terminal.
@@ -1183,7 +1218,7 @@ pub fn run(
         if standalone && matches!(m.view, View::List) && matches!(action, Action::None) {
             return Ok(0);
         }
-        let completed_action = action.clone();
+        let mut completed_action = action.clone();
         let operation: Result<bool> = match action {
             Action::Favorite(_) | Action::SaveNote(..) => {
                 apply_metadata_action(&mut m, &mut metadata, &action).map(|_| false)
@@ -1191,9 +1226,15 @@ pub fn run(
             Action::SaveProfile { .. } | Action::DeleteProfile(..) => {
                 profiles::apply(&mut m, &mut profiles, &action).map(|_| false)
             }
+            Action::ConfirmChanges => changes::apply(&mut m, &paths.root).map(|action| {
+                completed_action = action;
+                true
+            }),
+            Action::Backups => changes::open_backups(&mut m, &paths.root).map(|_| false),
+            Action::RestoreBackup(index) => changes::open_restore(&mut m, index).map(|_| false),
             Action::None => Ok(false),
             Action::Quit => {
-                if tunnels.manager.has_active() && !m.quit_tunnels {
+                if (tunnels.manager.has_active() || m.has_unsaved_context()) && !m.quit_tunnels {
                     m.quit_tunnels = true;
                     Ok(false)
                 } else {
@@ -1241,20 +1282,11 @@ pub fn run(
             }),
             Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
             Action::Duplicate(host) => select_duplicate_files(&mut m, config, host).map(|_| false),
-            Action::SaveCopy(host, target) => {
-                save_copy(config, &host, &target, &paths.root).map(|_| true)
-            }
             Action::Move(host) => {
                 select_files(&mut m, config, Some(host), String::new()).map(|_| false)
             }
-            Action::Save(original, host, target) => match original {
-                Some(original) => config::update_host(&original, &host, &paths.root),
-                None => config::add_host(&host, &target, &paths.root),
-            }
-            .map(|_| true),
-            Action::Delete(host) => config::delete_host(&host, &paths.root).map(|_| true),
-            Action::MoveTo(host, target) => {
-                config::move_host(&host, &target, &paths.root).map(|_| true)
+            Action::SaveCopy(..) | Action::Save(..) | Action::Delete(_) | Action::MoveTo(..) => {
+                changes::open(&mut m, action, config).map(|_| false)
             }
         };
         match operation {

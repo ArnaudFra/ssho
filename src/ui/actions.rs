@@ -14,10 +14,11 @@ pub(super) enum PaletteAction {
     Duplicate,
     Profiles,
     Active,
+    Backups,
 }
 
 impl PaletteAction {
-    pub(super) const ALL: [Self; 13] = [
+    pub(super) const ALL: [Self; 14] = [
         Self::Add,
         Self::Edit,
         Self::Tunnel,
@@ -31,6 +32,7 @@ impl PaletteAction {
         Self::Duplicate,
         Self::Profiles,
         Self::Active,
+        Self::Backups,
     ];
 
     pub(super) fn label(self) -> &'static str {
@@ -46,6 +48,7 @@ impl PaletteAction {
             Self::Note => "Note N",
             Self::FavoritesOnly => "Favoris seuls",
             Self::Duplicate => "Dupliquer D",
+            Self::Backups => "Sauvegardes F8",
             Self::Active => "Tunnels actifs F7",
             Self::Profiles => "Profils F6",
         }
@@ -56,6 +59,7 @@ impl PaletteAction {
             || matches!(
                 self,
                 Self::Active
+                    | Self::Backups
                     | Self::Add
                     | Self::Help
                     | Self::Details
