@@ -8,6 +8,7 @@ mod notes;
 mod profiles;
 mod render;
 mod search;
+mod source_filter;
 #[cfg(test)]
 mod tests;
 use crate::{
@@ -69,6 +70,10 @@ enum View {
     Active {
         selected: usize,
     },
+    SourceFiles {
+        files: Vec<PathBuf>,
+        selected: usize,
+    },
     Files {
         files: Vec<PathBuf>,
         selected: usize,
@@ -96,6 +101,7 @@ enum Action {
     MoveTo(Host, PathBuf),
     Ping,
     Reload,
+    SourceFilter,
     Favorite(Host),
     SaveNote(String, String),
     SaveProfile {
@@ -124,6 +130,7 @@ struct Model {
     pending_preferred: Option<PendingPreferred>,
     search_focus: bool,
     show_hidden: bool,
+    source_filter: Option<PathBuf>,
     recent: bool,
     favorites_only: bool,
     metadata: BTreeMap<String, HostMetadata>,
@@ -168,6 +175,7 @@ impl Model {
             pending_preferred: None,
             search_focus,
             show_hidden: false,
+            source_filter: None,
             recent: false,
             favorites_only: false,
             metadata: BTreeMap::new(),
@@ -221,7 +229,10 @@ impl Model {
             .iter()
             .enumerate()
             .filter(|(_, h)| {
-                (self.show_hidden || !h.hidden())
+                self.source_filter
+                    .as_ref()
+                    .is_none_or(|path| path == &h.source_file)
+                    && (self.show_hidden || !h.hidden())
                     && self.matches_search(h)
                     && (!self.favorites_only || self.is_favorite(&h.name))
             })
@@ -284,7 +295,7 @@ impl Model {
         self.offset = self.offset.min(self.selected);
     }
     /// Replace the backing collection only after capturing the old selection's identity.
-    /// A preferred host (creation/rename/move) is made visible even under an old filter.
+    /// Prefer saved hosts within the exact source scope; retain existing text-search behavior.
     fn replace_hosts(&mut self, all: Vec<Host>, preferred: Option<Host>) {
         let identity = preferred.clone().or_else(|| self.selected_host());
         let fallback = self.selected;
@@ -321,7 +332,11 @@ impl Model {
             self.statuses.remove(&name);
         }
         self.search = search::Query::parse(&self.query.value);
-        if let Some(host) = &preferred {
+        if let Some(host) = preferred.as_ref().filter(|host| {
+            self.source_filter
+                .as_ref()
+                .is_none_or(|path| path == &host.source_file)
+        }) {
             let compatible = self.search.as_ref().is_ok_and(|query| {
                 // Either the saved declaration or the previous native projection may
                 // win. Only the new resolution can decide which values actually apply.
@@ -388,6 +403,17 @@ impl Model {
         self.refresh_search_membership();
     }
     fn complete_mutation(&mut self, all: Vec<Host>, action: &Action) {
+        // Visibility (hidden/search/favorites) must never decide whether a file is empty.
+        if let Some(path) = &self.source_filter {
+            let removed_from_source = match action {
+                Action::Delete(host) => &host.source_file == path,
+                Action::MoveTo(host, target) => &host.source_file == path && target != path,
+                _ => false,
+            };
+            if removed_from_source && !all.iter().any(|host| &host.source_file == path) {
+                self.source_filter = None;
+            }
+        }
         let preferred = match action {
             Action::Save(_, host, _) | Action::SaveCopy(host, _) => Some((**host).clone()),
             Action::MoveTo(host, target) => Some(Host {
@@ -679,6 +705,7 @@ impl Model {
                 }
                 return Action::None;
             }
+            View::SourceFiles { .. } => return source_filter::key(self, k),
             View::Files {
                 files,
                 selected,
@@ -790,6 +817,11 @@ impl Model {
                     self.filter(true);
                 }
             }
+            KeyCode::Char('c') => return Action::SourceFilter,
+            KeyCode::Char('C') => {
+                self.source_filter = None;
+                self.filter(false);
+            }
             KeyCode::Char('j') => self.navigate(1),
             KeyCode::Char('k') => self.navigate(-1),
             KeyCode::PageDown => self.navigate(self.page as isize),
@@ -841,6 +873,11 @@ impl Model {
     }
     fn activate_action(&mut self, action: PaletteAction) -> Action {
         match action {
+            PaletteAction::SourceFilter => return Action::SourceFilter,
+            PaletteAction::ClearSourceFilter => {
+                self.source_filter = None;
+                self.filter(false);
+            }
             PaletteAction::Favorite => {
                 if let Some(host) = self.selected_host() {
                     return Action::Favorite(host);
@@ -1280,6 +1317,7 @@ pub fn run(
                 inspection = receiver;
                 false
             }),
+            Action::SourceFilter => source_filter::open(&mut m, config).map(|_| false),
             Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
             Action::Duplicate(host) => select_duplicate_files(&mut m, config, host).map(|_| false),
             Action::Move(host) => {

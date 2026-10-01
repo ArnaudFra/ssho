@@ -142,6 +142,55 @@ sys.exit(int(mode))
     mode.write_text("37")
     env["SSHM_TEST_MODE"] = str(mode)
 
+    if "--source-filter-only" in sys.argv[2:]:
+        # Real terminal dispatch: c/C remain text in search and act from the table.
+        (home/".ssh/sources").mkdir()
+        source = home/".ssh/sources/hosts"
+        source.write_text("Host included\n HostName included.invalid\n")
+        empty = home/".ssh/empty"
+        empty.write_text("# Known empty file\n")
+        config.write_text("Include sources/hosts empty\nHost global\n HostName global.invalid\n")
+        session = Session(env)
+        session.expect("global")
+        session.send(b"cC")
+        session.expect("cC")
+        assert "Filtrer par fichier source" not in session.screen.text()
+        session.send(b"\x1b")  # clear query, retaining search focus
+        session.send(b"\t" + b"c")
+        session.expect("Filtrer par fichier source")
+        session.expect("Tous les fichiers")
+        session.expect(str(empty))
+        session.send(b"\x1b[B" * 3 + b"\r")
+        session.expect("File: C/F2 clear")
+        session.expect(str(empty))
+        assert "included" not in session.screen.text()
+        assert "global" not in session.screen.text()
+        session.send(b"H")
+        session.expect("File: C/F2 clear")
+        session.send(b"\x1b[15~")  # F5 keeps the empty scope
+        session.expect("File: C/F2 clear")
+        # A compact terminal keeps the source banner alongside errors/hidden badges.
+        fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 10, 60, 0, 0))
+        session.screen = Screen(60, 10)
+        session.process.send_signal(signal.SIGWINCH)
+        session.expect("File: C/F2 clear")
+        session.send(b"C")
+        session.expect("included")
+        session.expect("global")
+        assert "File:" not in session.screen.text()
+        # F2 works from focused search with no results; appended action index 14.
+        session.send(b"\tmissing")
+        session.send(b"\x1bOQ")
+        session.expect("Actions")
+        session.send(b"\x1b[B" * 14 + b"\r")
+        session.expect("Filtrer par fichier source")
+        session.send(b"\x1b")
+        session.expect("missing")
+        session.send(b"\x03")
+        session.close()
+        print("Source filter PTY passed: actual c/C, empty scope, H/F5, compact banner, search/F2")
+        sys.exit(0)
+
     session = Session(env)
     session.expect("Last Attempt")
     # Resolution happens with ping disabled, and -G must not touch connection markers.

@@ -4768,3 +4768,308 @@ fn final_review_explicit_edits_keep_query_when_earlier_native_values_mask_them()
         }
     }
 }
+
+#[test]
+fn table_c_opens_source_selector_action_and_search_keeps_text() {
+    let mut m = model();
+    typing(&mut m, "cC");
+    assert_eq!(m.query.value, "cC");
+    assert!(matches!(m.view, View::List));
+    m.key(key(KeyCode::Tab));
+    assert_eq!(
+        format!("{:?}", m.key(key(KeyCode::Char('c')))),
+        "SourceFilter"
+    );
+}
+
+#[test]
+fn f2_source_actions_are_available_with_empty_search_results() {
+    let mut m = model();
+    typing(&mut m, "no-such-host");
+    assert!(m.visible.is_empty());
+    m.key(key(KeyCode::F(2)));
+    for _ in 0..14 {
+        m.key(key(KeyCode::Down));
+    }
+    assert_eq!(format!("{:?}", m.key(key(KeyCode::Enter))), "SourceFilter");
+    assert!(m.search_focus);
+    assert_eq!(m.query.value, "no-such-host");
+}
+
+fn filter_sources() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, Model) {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    let a = temp.path().join("a/hosts");
+    let b = temp.path().join("b/hosts");
+    fs::create_dir_all(a.parent().unwrap()).unwrap();
+    fs::create_dir_all(b.parent().unwrap()).unwrap();
+    fs::write(
+        &root,
+        "Include a/hosts b/hosts empty\nHost global\n HostName global.invalid\n",
+    )
+    .unwrap();
+    fs::write(
+        &a,
+        "# Tags: work\nHost alpha\n User deploy\n# Tags: hidden, work\nHost secret\n",
+    )
+    .unwrap();
+    fs::write(&b, "# Tags: work\nHost beta\n User deploy\n").unwrap();
+    fs::write(temp.path().join("empty"), "# Empty config\n").unwrap();
+    let m = Model::new(
+        config::load_hosts(&root).unwrap(),
+        AppConfig::default(),
+        BTreeMap::new(),
+        false,
+    );
+    (temp, root, a, b, m)
+}
+fn choose_source(m: &mut Model, root: &Path, target: Option<&Path>) {
+    source_filter::open(m, root).unwrap();
+    if let View::SourceFiles { files, selected } = &mut m.view {
+        *selected = target
+            .map(|p| files.iter().position(|f| f == p).unwrap() + 1)
+            .unwrap_or(0);
+    } else {
+        panic!("source selector missing");
+    }
+    m.key(key(KeyCode::Enter));
+}
+#[test]
+fn selector_lists_empty_files_and_all_and_preserves_parent_caret() {
+    let (temp, root, a, _, mut m) = filter_sources();
+    typing(&mut m, "tag:work");
+    m.query.key(key(KeyCode::Left));
+    let caret = m.query.cursor;
+    m.scroll = 7;
+    source_filter::open(&mut m, &root).unwrap();
+    let text = screen(&mut m, 100, 20);
+    assert!(text.contains("Tous les fichiers"), "{text}");
+    assert!(text.contains(temp.path().join("empty").to_str().unwrap()));
+    if let View::SourceFiles { files, .. } = &m.view {
+        assert_eq!(files.len(), 4);
+        assert!(files.iter().all(|p| p.is_absolute()));
+        assert!(m.all.iter().all(|h| files.contains(&h.source_file)));
+    } else {
+        panic!("source selector missing");
+    }
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::List));
+    assert_eq!(m.scroll, 7);
+    assert!(m.parents.is_empty());
+    choose_source(&mut m, &root, Some(&a));
+    assert_eq!(m.source_filter.as_deref(), Some(a.as_path()));
+    assert!(m.search_focus);
+    assert_eq!(m.query.value, "tag:work");
+    assert_eq!(m.query.cursor, caret);
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    choose_source(&mut m, &root, None);
+    assert!(m.source_filter.is_none());
+    assert_eq!(m.visible.len(), 2);
+}
+#[test]
+fn exact_scope_composes_with_search_hidden_favorites_and_clear() {
+    let (_temp, root, a, _, mut m) = filter_sources();
+    typing(&mut m, "tag:work user:deploy file:hosts");
+    choose_source(&mut m, &root, Some(&a));
+    assert_eq!(m.visible.len(), 1);
+    m.metadata.insert(
+        "beta".into(),
+        HostMetadata {
+            favorite: true,
+            ..HostMetadata::default()
+        },
+    );
+    m.favorites_only = true;
+    m.filter(false);
+    assert!(m.visible.is_empty());
+    assert_eq!(m.selected, 0);
+    m.favorites_only = false;
+    m.query.set("tag:work");
+    m.filter(true);
+    m.search_focus = false;
+    m.key(key(KeyCode::Char('H')));
+    assert_eq!(m.visible.len(), 2);
+    assert_eq!(m.source_filter.as_ref(), Some(&a));
+    m.key(key(KeyCode::End));
+    m.key(key(KeyCode::Char('H')));
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    assert_eq!(m.selected, 0);
+    let query = m.query.value.clone();
+    m.key(key(KeyCode::Char('C')));
+    assert!(m.source_filter.is_none());
+    assert_eq!(m.query.value, query);
+    assert_eq!(m.visible.len(), 2);
+}
+#[test]
+fn empty_filter_banner_survives_query_reload_and_compact_errors() {
+    let (temp, root, _, _, mut m) = filter_sources();
+    let empty = temp.path().join("empty");
+    choose_source(&mut m, &root, Some(&empty));
+    assert!(m.visible.is_empty());
+    typing(&mut m, "missing");
+    m.key(key(KeyCode::Esc));
+    assert_eq!(m.source_filter.as_ref(), Some(&empty));
+    let inspector = runtime::effective::Inspector::default();
+    drop(reload_hosts(&inspector, &mut m, &root).unwrap());
+    assert_eq!(m.source_filter.as_ref(), Some(&empty));
+    m.error = "reload failed".into();
+    m.query.set("tag:\"");
+    m.filter(true);
+    for (w, h) in [(100, 25), (60, 10), (24, 8)] {
+        let s = screen(&mut m, w, h);
+        assert!(s.contains("File:"), "{w}x{h}: {s}");
+        assert!(s.contains("C/F2"), "{w}x{h}: {s}");
+    }
+    screen(&mut m, 1, 1);
+    m.key(key(KeyCode::F(2)));
+    for _ in 0..15 {
+        m.key(key(KeyCode::Down));
+    }
+    m.key(key(KeyCode::Enter));
+    assert!(m.source_filter.is_none());
+    assert!(m.search_focus);
+}
+#[test]
+fn only_delete_or_move_last_raw_host_clears_filter() {
+    for moved in [false, true] {
+        for remaining in [true, false] {
+            let (_temp, root, a, b, mut m) = filter_sources();
+            choose_source(&mut m, &root, Some(&a));
+            let alpha = m.selected_host().unwrap();
+            let mut next: Vec<_> = m
+                .all
+                .iter()
+                .filter(|h| h.name != "alpha" && (remaining || h.name != "secret"))
+                .cloned()
+                .collect();
+            let action = if moved {
+                next.push(Host {
+                    source_file: b.clone(),
+                    ..alpha.clone()
+                });
+                Action::MoveTo(alpha, b)
+            } else {
+                Action::Delete(alpha)
+            };
+            m.query.set("alpha");
+            m.filter(true);
+            m.complete_mutation(next, &action);
+            assert_eq!(m.source_filter.is_some(), remaining);
+            assert!(m.selected <= m.visible.len().saturating_sub(1));
+            if remaining {
+                assert!(m.visible.is_empty());
+                assert_eq!(m.query.value, "alpha");
+            }
+        }
+    }
+    let (_temp, root, a, b, mut m) = filter_sources();
+    choose_source(&mut m, &root, Some(&a));
+    m.replace_hosts(vec![], None);
+    assert_eq!(m.source_filter.as_ref(), Some(&a));
+    let saved = Host {
+        name: "outside".into(),
+        source_file: b.clone(),
+        ..Host::default()
+    };
+    m.complete_mutation(vec![saved.clone()], &Action::Save(None, Box::new(saved), b));
+    assert_eq!(m.source_filter.as_ref(), Some(&a));
+    assert!(m.visible.is_empty());
+}
+
+#[test]
+fn source_selector_selected_row_is_legible_and_help_names_active_file() {
+    use ratatui::style::Color;
+    let (_temp, root, a, _, mut m) = filter_sources();
+    source_filter::open(&mut m, &root).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+    terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    let cells = terminal.backend().buffer().content();
+    let selected = cells.iter().find(|cell| cell.symbol() == "▶").unwrap();
+    assert_eq!(selected.fg, Color::Black);
+    assert_eq!(selected.bg, Color::Rgb(0, 173, 216));
+    m.key(key(KeyCode::Esc));
+    choose_source(&mut m, &root, Some(&a));
+    m.search_focus = false;
+    m.key(key(KeyCode::Char('h')));
+    let text = screen(&mut m, 100, 30);
+    assert!(text.contains(a.to_str().unwrap()), "{text}");
+}
+
+fn pending_filter_save(m: &mut Model, root: &Path, source: &Path) {
+    choose_source(m, root, Some(source));
+    m.apply_inspection(inspection("alpha", "inherited", PingStatus::Unknown));
+    m.query.set("user:inherited");
+    m.filter(true);
+    let mut saved = m.selected_host().unwrap();
+    saved.tags.push("edited".into());
+    let mut hosts = m.all.clone();
+    *hosts.iter_mut().find(|host| host.name == "alpha").unwrap() = saved.clone();
+    m.complete_mutation(
+        hosts,
+        &Action::Save(
+            Some(m.selected_host().unwrap()),
+            Box::new(saved),
+            source.to_path_buf(),
+        ),
+    );
+    assert_eq!(m.query.value, "user:inherited");
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    m.query.key(key(KeyCode::Left));
+}
+
+#[test]
+fn selecting_other_source_protects_query_from_late_saved_host_resolution() {
+    for empty in [false, true] {
+        for search_focus in [false, true] {
+            let (temp, root, a, b, mut m) = filter_sources();
+            pending_filter_save(&mut m, &root, &a);
+            m.search_focus = search_focus;
+            let caret = m.query.cursor;
+            let target = if empty { temp.path().join("empty") } else { b };
+            choose_source(&mut m, &root, Some(&target));
+            assert!(m.visible.is_empty());
+            m.apply_inspection(inspection("alpha", "changed", PingStatus::Unknown));
+            assert_eq!(m.query.value, "user:inherited");
+            assert_eq!(m.query.cursor, caret);
+            assert_eq!(m.search_focus, search_focus);
+            assert_eq!(m.source_filter.as_ref(), Some(&target));
+            assert!(m.visible.is_empty());
+            assert_eq!(m.selected, 0);
+            assert!(matches!(m.view, View::List));
+            assert!(m.parents.is_empty());
+        }
+    }
+}
+
+#[test]
+fn expanding_or_retaining_source_keeps_applicable_pending_save_resolution() {
+    for selection in ["C", "F2-clear", "all", "same"] {
+        let (_temp, root, a, _, mut m) = filter_sources();
+        pending_filter_save(&mut m, &root, &a);
+        m.search_focus = false;
+        match selection {
+            "C" => {
+                m.key(key(KeyCode::Char('C')));
+            }
+            "F2-clear" => {
+                m.search_focus = true;
+                m.key(key(KeyCode::F(2)));
+                for _ in 0..15 {
+                    m.key(key(KeyCode::Down));
+                }
+                m.key(key(KeyCode::Enter));
+            }
+            "all" => choose_source(&mut m, &root, None),
+            "same" => choose_source(&mut m, &root, Some(&a)),
+            _ => unreachable!(),
+        }
+        assert_eq!(m.query.value, "user:inherited");
+        m.apply_inspection(inspection("alpha", "changed", PingStatus::Unknown));
+        assert!(
+            m.query.value.is_empty(),
+            "{selection} must retain still-applicable pending resolution"
+        );
+        assert_eq!(m.selected_host().unwrap().name, "alpha");
+        assert_eq!(m.source_filter.is_some(), selection == "same");
+    }
+}

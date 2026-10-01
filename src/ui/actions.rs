@@ -15,10 +15,12 @@ pub(super) enum PaletteAction {
     Profiles,
     Active,
     Backups,
+    SourceFilter,
+    ClearSourceFilter,
 }
 
 impl PaletteAction {
-    pub(super) const ALL: [Self; 14] = [
+    pub(super) const ALL: [Self; 16] = [
         Self::Add,
         Self::Edit,
         Self::Tunnel,
@@ -33,10 +35,14 @@ impl PaletteAction {
         Self::Profiles,
         Self::Active,
         Self::Backups,
+        Self::SourceFilter,
+        Self::ClearSourceFilter,
     ];
 
     pub(super) fn label(self) -> &'static str {
         match self {
+            Self::SourceFilter => "Fichier source c",
+            Self::ClearSourceFilter => "Tous les fichiers C",
             Self::Add => "Ajouter",
             Self::Edit => "Modifier",
             Self::Tunnel => "Tunnel",
@@ -58,7 +64,9 @@ impl PaletteAction {
         has_host
             || matches!(
                 self,
-                Self::Active
+                Self::SourceFilter
+                    | Self::ClearSourceFilter
+                    | Self::Active
                     | Self::Backups
                     | Self::Add
                     | Self::Help

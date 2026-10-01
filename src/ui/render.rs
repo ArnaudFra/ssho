@@ -80,6 +80,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         View::Info(_) => info(f, m, area),
         View::Help => help(f, m, area),
         View::Files { .. } => files(f, m, area),
+        View::SourceFiles { .. } => source_files(f, m, area),
     }
 }
 fn list(f: &mut Frame, m: &mut Model, area: Rect) {
@@ -114,6 +115,16 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     }
     let viewport_width = area.width;
     let area = if area.height >= 12 { inset(area) } else { area };
+    let area = if let Some(path) = &m.source_filter {
+        let parts = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+        f.render_widget(
+            Paragraph::new(format!("File: C/F2 clear • {}", path.display())).style(accent()),
+            parts[0],
+        );
+        parts[1]
+    } else {
+        area
+    };
     let search_error = m.search.as_ref().err();
     let notice_count = u16::from(search_error.is_some())
         + u16::from(!m.error.is_empty())
@@ -573,7 +584,7 @@ fn list_footer(width: u16, search_focus: bool) -> Vec<Line<'static>> {
         } else {
             vec![
                 "F2: actions • F5: reload • ↑/↓: navigate • Enter: connect • Tab: search • i: info • h: help • q: quit",
-                "*: favorite • N: note • a: add • e: edit • d: del • m: move • f: tunnel • p: test • s: sort • H: hidden",
+                "*: favorite • a: add • e: edit • d: del • m: move • f: tunnel • p: test • c/C: file/all",
             ]
         }
     } else if width >= 65 {
@@ -582,7 +593,7 @@ fn list_footer(width: u16, search_focus: bool) -> Vec<Line<'static>> {
         } else {
             vec![
                 "F2: actions • ↑↓: select • Enter: connect • Tab: search • q: quit",
-                "a/e/d/m: add/edit/delete/move • f: tunnel • p: test • h: help",
+                "c/C: file/all • a/e/d/m: manage • f: tunnel • p: test • h: help",
             ]
         }
     } else {
@@ -628,7 +639,7 @@ fn actions(f: &mut Frame, m: &Model, area: Rect) {
     });
     let mut state = TableState::default().with_selected(Some(selected));
     f.render_stateful_widget(
-        Table::new(rows, [Constraint::Length(18), Constraint::Min(0)])
+        Table::new(rows, [Constraint::Length(24), Constraint::Min(0)])
             .highlight_symbol("▶ ")
             .row_highlight_style(
                 Style::default()
@@ -1058,6 +1069,46 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     ));
     f.render_widget(Paragraph::new(footer), parts[2]);
 }
+fn source_files(f: &mut Frame, m: &Model, area: Rect) {
+    let View::SourceFiles { files, selected } = &m.view else {
+        return;
+    };
+    let area = inset(area);
+    let parts = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    f.render_widget(
+        Paragraph::new("Filtrer par fichier source").style(accent()),
+        parts[0],
+    );
+    let count = usize::from(parts[1].height).max(1);
+    let offset = selected.saturating_sub(count - 1);
+    let lines = std::iter::once("Tous les fichiers".to_owned())
+        .chain(files.iter().map(|path| path.display().to_string()))
+        .enumerate()
+        .skip(offset)
+        .map(|(i, label)| {
+            Line::styled(
+                format!("{} {label}", if i == *selected { "▶" } else { " " }),
+                if i == *selected {
+                    Style::default().bg(CYAN).fg(Color::Black)
+                } else {
+                    Style::default()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(Paragraph::new(lines), parts[1]);
+    f.render_widget(
+        Paragraph::new("↑/↓: navigate • Enter: select • Esc: cancel")
+            .style(Style::default().fg(GRAY)),
+        parts[2],
+    );
+}
+
 fn files(f: &mut Frame, m: &mut Model, area: Rect) {
     let View::Files {
         files,
@@ -1187,7 +1238,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "i      show host information",
         "/      search words/phrases (AND/ET)",
         "Tab/Shift+Tab switch search / table",
-        "F2     actions (also from search)",
+        "F2     actions; c/C: source / all files",
         "F4     toggle details (width >=110)",
         "F5     reload config and Includes",
         "Alt+↑↓ scroll details (Ctrl+PgUp/PgDn)",
@@ -1231,7 +1282,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "q      quit application",
         "Esc    clear search / leave search / exit view",
     ];
-    let text = if inner.width >= 77 {
+    let mut text = if inner.width >= 77 {
         (0..left.len().max(right.len()))
             .map(|i| {
                 format!(
@@ -1247,6 +1298,9 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
             .map(|s| s.to_string())
             .collect()
     };
+    if let Some(path) = &m.source_filter {
+        text.insert(0, format!("File: {} • C/F2: clear", path.display()));
+    }
     m.scroll = m
         .scroll
         .min(text.len().saturating_sub(parts[0].height as usize));
