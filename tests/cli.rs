@@ -603,3 +603,104 @@ fn history_failure_does_not_replace_actual_ssh_exit_code() {
         "invalid JSON"
     );
 }
+
+#[test]
+fn cli_inherited_search_provenance_and_single_warning() {
+    let f = Fixture::new();
+    let path = f.dir.path().join(".ssh/config");
+    fs::write(&path, "#FileTags: Work, shared\n# Tags: own, Work\nHost prod\n HostName db.example.org\n# FileTags: ignored\n").unwrap();
+    let out = f.run(&["search", "shared", "--tags", "-f", "json"]);
+    assert!(out.status.success());
+    let value: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("JSON search remains parseable");
+    assert_eq!(
+        value[0]["tags"],
+        serde_json::json!(["own", "Work", "shared"])
+    );
+    assert_eq!(value[0]["host_tags"], serde_json::json!(["own", "Work"]));
+    assert_eq!(value[0]["file_tags"], serde_json::json!(["Work", "shared"]));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(stderr.contains("config:5:"));
+    let out = f.run(&["info", "prod"]);
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        value["result"]["tags"],
+        serde_json::json!(["own", "Work", "shared"])
+    );
+    assert_eq!(
+        value["result"]["file_tags"],
+        serde_json::json!(["Work", "shared"])
+    );
+    assert_eq!(String::from_utf8(out.stderr).unwrap().lines().count(), 1);
+}
+
+#[test]
+fn completion_hides_inherited_hidden_except_explicit_info() {
+    let f = Fixture::new();
+    fs::write(
+        f.dir.path().join(".ssh/config"),
+        "#FileTags: HIDDEN\nHost secret\n HostName secret.example\n#FileTags: late\n",
+    )
+    .unwrap();
+    for (args, present) in [
+        (&["__complete", "se"][..], false),
+        (&["__complete", "info", "se"][..], true),
+    ] {
+        let out = f.run(args);
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(text.contains("secret"), present);
+        assert_eq!(String::from_utf8(out.stderr).unwrap().lines().count(), 1);
+    }
+    let alt = f.dir.path().join("alternate");
+    fs::write(
+        &alt,
+        "Host alternate\n HostName alternate.example\n#FileTags: late\n",
+    )
+    .unwrap();
+    let out = f.run(&["__complete", "-c", alt.to_str().unwrap(), "alt"]);
+    assert!(String::from_utf8(out.stdout).unwrap().contains("alternate"));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(stderr.lines().count(), 1);
+    assert!(stderr.contains("alternate:3:"));
+}
+
+#[test]
+fn json_empty_results_are_arrays_with_any_filetags_directive() {
+    let f = Fixture::new();
+    for text in [
+        "#FileTags: hidden\nHost secret\n HostName secret.example\n",
+        "#FileTags: work\nHost visible\n HostName visible.example\n",
+        "#FileTags: work\n",
+        "#FileTags:\n",
+        "Host visible\n HostName visible.example\n#FileTags: ignored\n",
+    ] {
+        fs::write(f.dir.path().join(".ssh/config"), text).unwrap();
+        let out = f.run(&["search", "nomatch", "-f", "json"]);
+        let value: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("FileTags commands always return JSON");
+        assert_eq!(value, serde_json::json!([]));
+    }
+}
+
+#[test]
+fn no_filetags_preserves_legacy_duplicate_tags_and_omits_provenance() {
+    let f = Fixture::new();
+    fs::write(
+        f.dir.path().join(".ssh/config"),
+        "# Tags: own, own\nHost visible\n HostName visible.example\n",
+    )
+    .unwrap();
+    for (args, info) in [
+        (&["search", "-f", "json"][..], false),
+        (&["info", "visible"][..], true),
+    ] {
+        let out = f.run(args);
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let entry = if info { &value["result"] } else { &value[0] };
+        assert_eq!(entry["tags"], serde_json::json!(["own", "own"]));
+        assert!(entry.get("host_tags").is_none());
+        assert!(entry.get("file_tags").is_none());
+        assert!(out.stderr.is_empty());
+    }
+}

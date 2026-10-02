@@ -131,6 +131,7 @@ struct Model {
     search_focus: bool,
     show_hidden: bool,
     source_filter: Option<PathBuf>,
+    config_warnings: Vec<config::ConfigWarning>,
     recent: bool,
     favorites_only: bool,
     metadata: BTreeMap<String, HostMetadata>,
@@ -176,6 +177,7 @@ impl Model {
             search_focus,
             show_hidden: false,
             source_filter: None,
+            config_warnings: vec![],
             recent: false,
             favorites_only: false,
             metadata: BTreeMap::new(),
@@ -414,14 +416,20 @@ impl Model {
                 self.source_filter = None;
             }
         }
-        let preferred = match action {
-            Action::Save(_, host, _) | Action::SaveCopy(host, _) => Some((**host).clone()),
-            Action::MoveTo(host, target) => Some(Host {
-                source_file: target.clone(),
-                ..host.clone()
-            }),
+        let preferred_identity = match action {
+            Action::Save(_, host, _) | Action::SaveCopy(host, _) => {
+                Some((&host.name, &host.source_file))
+            }
+            Action::MoveTo(host, target) => Some((&host.name, target)),
             _ => None,
         };
+        // The reloaded declaration owns destination inheritance and saved metadata.
+        // Keep the acted-on alias identity, but never reuse its pre-save FileTags.
+        let preferred = preferred_identity.and_then(|(name, source)| {
+            all.iter()
+                .find(|host| &host.name == name && &host.source_file == source)
+                .cloned()
+        });
         self.replace_hosts(all, preferred);
         let info_parent = matches!(action, Action::Save(..))
             && matches!(self.parents.last(), Some((View::Info(_), _)));
@@ -1103,12 +1111,13 @@ fn reload_hosts(
     m: &mut Model,
     config: &Path,
 ) -> Result<Receiver<runtime::effective::Inspection>> {
-    let hosts = config::load_hosts_checked(config)?;
+    let report = config::load_report_checked(config)?;
     let info = match &m.view {
         View::Info(host) => Some(host.clone()),
         _ => None,
     };
-    m.replace_hosts(hosts, None);
+    m.replace_hosts(report.hosts, None);
+    m.config_warnings = report.warnings;
     if let Some(info) = info {
         if let Some(host) = m
             .all
@@ -1190,17 +1199,18 @@ pub fn run(
 ) -> Result<i32> {
     let preferences = AppConfig::load(&paths.root)?;
     let history = History::load(&paths.root)?;
-    let hosts = config::load_hosts(config)?;
+    let report = config::load_report(config)?;
     let mut metadata = Metadata::load(&paths.root, config)?;
     let mut profiles = TunnelProfiles::load(&paths.root, config)?;
     let standalone = !matches!(initial, InitialView::List);
     let mut m = Model::new(
-        hosts,
+        report.hosts,
         preferences,
         history.connections.clone(),
         force_search,
     );
     m.metadata = metadata.hosts().clone();
+    m.config_warnings = report.warnings;
     m.tunnel_profiles = profiles.hosts().clone();
     m.tunnel_modes = profiles.modes().clone();
     m.filter(false);
@@ -1329,9 +1339,11 @@ pub fn run(
         };
         match operation {
             Ok(true) => {
+                let report = config::load_report_checked(config)?;
+                m.config_warnings = report.warnings;
                 profiles::complete_saved(
                     &mut m,
-                    config::load_hosts(config)?,
+                    report.hosts,
                     &completed_action,
                     &mut metadata,
                     &mut profiles,
@@ -1378,3 +1390,6 @@ fn time_ago(time: chrono::DateTime<Utc>) -> String {
     };
     format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
 }
+
+#[cfg(test)]
+mod file_tags_tests;

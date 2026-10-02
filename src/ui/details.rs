@@ -130,7 +130,7 @@ pub(super) fn content(
         ("RemoteCommand", optional(&host.remote_command)),
         ("RequestTTY", optional(&host.request_tty)),
         ("Aliases", optional(&host.aliases.join(", "))),
-        ("Tags", optional(&host.tags.join(", "))),
+        ("Tags", optional(&host.display_tags())),
     ];
     if let Some(history) = history {
         sections.push((

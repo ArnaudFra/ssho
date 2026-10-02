@@ -16,6 +16,63 @@ use document::Document;
 use files::ConfigMirror;
 use parser::{quote, split_line, Parsed};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigWarning {
+    pub path: PathBuf,
+    pub line: usize,
+    pub message: String,
+}
+impl std::fmt::Display for ConfigWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}: {}", self.path.display(), self.line, self.message)
+    }
+}
+#[derive(Debug)]
+pub struct LoadReport {
+    pub hosts: Vec<Host>,
+    pub files: Vec<PathBuf>,
+    pub warnings: Vec<ConfigWarning>,
+    /// Includes empty and ignored directives, so presentation can retain JSON framing.
+    pub has_file_tags: bool,
+}
+impl From<Parsed> for LoadReport {
+    fn from(parsed: Parsed) -> Self {
+        Self {
+            hosts: parsed.hosts,
+            files: parsed.files,
+            warnings: parsed.warnings,
+            has_file_tags: parsed.has_file_tags,
+        }
+    }
+}
+/// Quiet load: presentation boundaries decide how to surface diagnostics.
+pub fn load_report(path: &Path) -> Result<LoadReport> {
+    Ok(Parsed::load(path)?.into())
+}
+pub fn load_report_checked(path: &Path) -> Result<LoadReport> {
+    Ok(Parsed::load_checked(path)?.into())
+}
+/// Inspect a destination's own header, including files with no Host declarations.
+pub fn file_tags(path: &Path) -> Result<Vec<String>> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e.into()),
+    };
+    let mut tags = Vec::new();
+    for text in content
+        .lines()
+        .take_while(|text| !parser::closes_header(text))
+    {
+        for tag in parser::file_tags(text).unwrap_or_default() {
+            if !tags.contains(&tag) {
+                tags.push(tag);
+            }
+        }
+    }
+    Ok(tags)
+}
+
 pub fn load_hosts(path: &Path) -> Result<Vec<Host>> {
     Ok(Parsed::load(path)?.hosts)
 }
@@ -1309,3 +1366,6 @@ mod preview_tests {
         assert!(!app.exists());
     }
 }
+
+#[cfg(test)]
+mod file_tags_tests;

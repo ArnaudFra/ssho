@@ -200,6 +200,7 @@ pub(super) struct HostForm {
     pub original: Option<Host>,
     copy_source: Option<Host>,
     pub target: PathBuf,
+    pub file_tags: Vec<String>,
     pub name_focus: bool,
     pub focus: usize,
     pub tab: usize,
@@ -252,6 +253,7 @@ impl HostForm {
             names: vec![],
             original: None,
             copy_source: None,
+            file_tags: config::file_tags(&target).unwrap_or_default(),
             target,
             name_focus: false,
             focus: 0,
@@ -551,6 +553,7 @@ impl HostForm {
             proxy_jump: value(5),
             proxy_command: value(6),
             options: config::options_to_config(&value(7)),
+            file_tags: self.file_tags.clone(),
             tags: value(8)
                 .split(',')
                 .map(str::trim)

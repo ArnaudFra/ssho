@@ -2,7 +2,7 @@ use super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{backend::TestBackend, Terminal};
 use std::fs;
-fn key(code: KeyCode) -> KeyEvent {
+pub(super) fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 fn ctrl(c: char) -> KeyEvent {
@@ -34,12 +34,12 @@ fn model() -> Model {
         false,
     )
 }
-fn typing(m: &mut Model, s: &str) {
+pub(super) fn typing(m: &mut Model, s: &str) {
     for c in s.chars() {
         m.key(key(KeyCode::Char(c)));
     }
 }
-fn screen(m: &mut Model, w: u16, h: u16) -> String {
+pub(super) fn screen(m: &mut Model, w: u16, h: u16) -> String {
     let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
     t.draw(|f| render::draw(f, m)).unwrap();
     t.backend()
@@ -1085,7 +1085,7 @@ fn details_long_values_scroll_to_all_tails_without_changing_search_or_selection(
     assert!(m.query.value.is_empty());
     assert!(m.search_focus);
     let bottom = screen(&mut m, 120, 20);
-    assert!(bottom.contains("Tags: work"));
+    assert!(bottom.contains("Tags: #work"));
     for _ in 0..120 {
         m.key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::CONTROL));
     }
@@ -1093,7 +1093,7 @@ fn details_long_values_scroll_to_all_tails_without_changing_search_or_selection(
     for _ in 0..120 {
         m.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL));
     }
-    assert!(screen(&mut m, 120, 20).contains("Tags: work"));
+    assert!(screen(&mut m, 120, 20).contains("Tags: #work"));
     m.key(key(KeyCode::Down));
     assert!(
         screen(&mut m, 120, 20).contains("Host: beta"),

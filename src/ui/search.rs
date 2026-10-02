@@ -106,9 +106,9 @@ impl Query {
             match field {
                 Field::Any => {
                     [&host.name, hostname, user, note].into_iter().any(contains)
-                        || host.tags.iter().any(|s| contains(s))
+                        || host.all_tags().iter().any(|s| contains(s))
                 }
-                Field::Tag => host.tags.iter().any(|s| contains(s)),
+                Field::Tag => host.all_tags().iter().any(|s| contains(s)),
                 Field::User => contains(user),
                 Field::File => contains(&host.source_file.to_string_lossy()),
                 Field::State => match value.as_str() {

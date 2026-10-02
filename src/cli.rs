@@ -168,6 +168,13 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
 }
 
 pub fn info_response(path: &std::path::Path, name: &str) -> (serde_json::Value, i32) {
+    info_from_hosts(path, name, crate::config::load_hosts(path))
+}
+fn info_from_hosts(
+    path: &std::path::Path,
+    name: &str,
+    loaded: Result<Vec<crate::types::Host>>,
+) -> (serde_json::Value, i32) {
     use serde_json::{json, Value};
     let failure = |code: &str, message: String, exit| {
         (
@@ -175,7 +182,7 @@ pub fn info_response(path: &std::path::Path, name: &str) -> (serde_json::Value, 
             exit,
         )
     };
-    let hosts = match crate::config::load_hosts(path) {
+    let hosts = match loaded {
         Ok(hosts) => hosts,
         Err(error) => return failure("CONFIG_ERROR", format!("{error:#}"), 1),
     };
@@ -212,10 +219,10 @@ pub fn info_response(path: &std::path::Path, name: &str) -> (serde_json::Value, 
             }
         }
     };
-    let tags = if host.tags.is_empty() {
+    let tags = if host.all_tags().is_empty() {
         Value::Null
     } else {
-        json!(host.tags)
+        json!(public_tags(&host))
     };
     let declared = json!({"hostname":optional(&host.hostname),"user":optional(&host.user),"port":port,
         "identity_file":optional(&host.identity),"extra_identities":host.extra_identities,
@@ -226,15 +233,14 @@ pub fn info_response(path: &std::path::Path, name: &str) -> (serde_json::Value, 
     } else {
         json!({"host":name,"hostname":effective["hostname"],"user":effective["user"],"port":effective["port"].as_str().and_then(|p| p.parse::<u16>().ok())})
     };
-    (
-        json!({"schema":"sshm.info.v1","ok":exit == 0,"hostname":name,"error":if exit == 0 { Value::Null } else { json!({"code":"RESOLUTION_ERROR","message":resolution_status["error"],"details":null}) },"result":{
-            "canonical_name":host.name,"target":target,
-            "effective":effective,"resolution":resolution_status,"declared":declared,
-            "identity_file":optional(&host.identity),"proxy_jump":optional(&host.proxy_jump),"proxy_command":optional(&host.proxy_command),"options":optional(&host.options),"tags":tags,
-            "remote_command":optional(&host.remote_command),"request_tty":optional(&host.request_tty),"source":{"file":host.source_file,"line":host.line_number}
-        }}),
-        exit,
-    )
+    let mut response = json!({"schema":"sshm.info.v1","ok":exit == 0,"hostname":name,"error":if exit == 0 { Value::Null } else { json!({"code":"RESOLUTION_ERROR","message":resolution_status["error"],"details":null}) },"result":{
+        "canonical_name":host.name,"target":target,
+        "effective":effective,"resolution":resolution_status,"declared":declared,
+        "identity_file":optional(&host.identity),"proxy_jump":optional(&host.proxy_jump),"proxy_command":optional(&host.proxy_command),"options":optional(&host.options),"tags":tags,
+        "remote_command":optional(&host.remote_command),"request_tty":optional(&host.request_tty),"source":{"file":host.source_file,"line":host.line_number}
+    }});
+    add_tag_provenance(&mut response["result"], &host);
+    (response, exit)
 }
 pub fn filter_search(
     hosts: &[crate::types::Host],
@@ -251,7 +257,10 @@ pub fn filter_search(
                 || (!tags
                     && (h.name.to_lowercase().contains(&query)
                         || (!names && h.hostname.to_lowercase().contains(&query))))
-                || (!names && h.tags.iter().any(|t| t.to_lowercase().contains(&query)))
+                || (!names
+                    && h.all_tags()
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(&query)))
         })
         .cloned()
         .collect()
@@ -261,7 +270,11 @@ pub fn render_search(hosts: &[crate::types::Host], format: &str) -> String {
         return hosts.iter().map(|h| format!("{}\n", h.name)).collect();
     }
     if format == "json" {
-        let entries:Vec<_>=hosts.iter().map(|h|serde_json::json!({"name":h.name,"hostname":h.hostname,"user":h.user,"port":h.port,"identity":h.identity,"proxy_jump":h.proxy_jump,"proxy_command":h.proxy_command,"options":h.options,"tags":h.tags})).collect();
+        let entries: Vec<_> = hosts.iter().map(|h| {
+            let mut entry = serde_json::json!({"name":h.name,"hostname":h.hostname,"user":h.user,"port":h.port,"identity":h.identity,"proxy_jump":h.proxy_jump,"proxy_command":h.proxy_command,"options":h.options,"tags":public_tags(h)});
+            add_tag_provenance(&mut entry, h);
+            entry
+        }).collect();
         return format!(
             "{}\n",
             serde_json::to_string_pretty(&entries).expect("host values serialize")
@@ -279,7 +292,7 @@ pub fn render_search(hosts: &[crate::types::Host], format: &str) -> String {
         hosts.iter().map(|h| h.user.len()).max().unwrap_or(0).max(4) + 2,
         hosts
             .iter()
-            .map(|h| h.tags.join(", ").len())
+            .map(|h| table_tags(h).len())
             .max()
             .unwrap_or(0)
             .max(4)
@@ -308,7 +321,7 @@ pub fn render_search(hosts: &[crate::types::Host], format: &str) -> String {
     );
     output.push('\n');
     for h in hosts {
-        let tags = h.tags.join(", ");
+        let tags = table_tags(h);
         output.push_str(&row([
             &h.name,
             &h.hostname,
@@ -318,6 +331,33 @@ pub fn render_search(hosts: &[crate::types::Host], format: &str) -> String {
     }
     output.push_str(&format!("\nFound {} host(s)\n", hosts.len()));
     output
+}
+
+fn public_tags(host: &crate::types::Host) -> Vec<String> {
+    if host.file_tags.is_empty() {
+        host.tags.clone()
+    } else {
+        host.all_tags()
+    }
+}
+fn table_tags(host: &crate::types::Host) -> String {
+    // Preserve the established table bytes for configurations without FileTags.
+    if host.file_tags.is_empty() {
+        host.tags.join(", ")
+    } else {
+        host.display_tags()
+    }
+}
+fn add_tag_provenance(value: &mut serde_json::Value, host: &crate::types::Host) {
+    if !host.file_tags.is_empty() {
+        value["host_tags"] = serde_json::json!(host.tags);
+        value["file_tags"] = serde_json::json!(host.file_tags);
+    }
+}
+fn emit_warnings(warnings: &[crate::config::ConfigWarning]) {
+    for warning in warnings {
+        eprintln!("Warning: {warning}");
+    }
 }
 
 pub fn run(args: &[String]) -> Result<i32> {
@@ -346,7 +386,11 @@ pub fn run(args: &[String]) -> Result<i32> {
     let path = invocation.config.as_deref().unwrap_or(&paths.ssh_config);
     match invocation.command {
         Command::Info { host, pretty } => {
-            let (response, code) = info_response(path, &host);
+            let loaded = config::load_report(path).map(|report| {
+                emit_warnings(&report.warnings);
+                report.hosts
+            });
+            let (response, code) = info_from_hosts(path, &host, loaded);
             println!(
                 "{}",
                 if pretty {
@@ -363,14 +407,23 @@ pub fn run(args: &[String]) -> Result<i32> {
             tags,
             names,
         } => {
-            let hosts = config::load_hosts(path)?;
+            let report = config::load_report(path)?;
+            emit_warnings(&report.warnings);
+            let file_tags_json = report.has_file_tags && format == "json";
+            let hosts = report.hosts;
             if hosts.is_empty() {
-                println!("No SSH hosts found in your configuration file.");
+                if file_tags_json {
+                    println!("[]");
+                } else {
+                    println!("No SSH hosts found in your configuration file.");
+                }
                 return Ok(1);
             }
             let hosts = filter_search(&hosts, &query, tags, names);
             if hosts.is_empty() {
-                if query.is_empty() {
+                if file_tags_json {
+                    println!("[]");
+                } else if query.is_empty() {
                     println!("No hosts found.")
                 } else {
                     println!("No hosts found matching '{query}'.")
@@ -381,10 +434,14 @@ pub fn run(args: &[String]) -> Result<i32> {
             Ok(0)
         }
         Command::Connect { host, remote } => {
+            emit_warnings(&config::load_report(path)?.warnings);
             crate::runtime::connect(&paths, path, &host, invocation.tty, &remote, None)
         }
         Command::Complete(words) => {
-            for value in complete_words(&words, path)? {
+            let mut warnings = Vec::new();
+            let values = complete_words(&words, path, &mut warnings)?;
+            emit_warnings(&warnings);
+            for value in values {
                 println!("{value}")
             }
             println!(":4");
@@ -398,7 +455,9 @@ pub fn run(args: &[String]) -> Result<i32> {
                 Command::Move(name) => InitialView::Move(name),
                 _ => InitialView::List,
             };
-            if matches!(initial, InitialView::List) && config::load_hosts(path)?.is_empty() {
+            let report = config::load_report(path)?;
+            if matches!(initial, InitialView::List) && report.hosts.is_empty() {
+                emit_warnings(&report.warnings);
                 use std::io::{self, Write};
                 println!("No SSH hosts found in your ~/.ssh/config file.");
                 print!("Would you like to add a new host now? [y/N]: ");
@@ -455,7 +514,11 @@ const SUBCOMMANDS: &[&str] = &[
 const SHELLS: &[&str] = &["bash", "zsh", "fish", "powershell"];
 const FORMATS: &[&str] = &["table", "json", "simple"];
 
-fn complete_words(words: &[String], default_config: &std::path::Path) -> Result<Vec<String>> {
+fn complete_words(
+    words: &[String],
+    default_config: &std::path::Path,
+    warnings: &mut Vec<crate::config::ConfigWarning>,
+) -> Result<Vec<String>> {
     let prefix = words.last().map(String::as_str).unwrap_or("");
     let prior = words
         .get(..words.len().saturating_sub(1))
@@ -545,7 +608,13 @@ fn complete_words(words: &[String], default_config: &std::path::Path) -> Result<
         || (positional.len() == 1 && matches!(command, Some("edit" | "move" | "info")));
     if hosts_allowed {
         // A missing/unreadable config must not suppress static command candidates.
-        for host in crate::config::load_hosts(&config).unwrap_or_default() {
+        let hosts = crate::config::load_report(&config)
+            .map(|report| {
+                *warnings = report.warnings;
+                report.hosts
+            })
+            .unwrap_or_default();
+        for host in hosts {
             if (command == Some("info") || !host.hidden())
                 && host.name.to_lowercase().starts_with(&prefix.to_lowercase())
                 && !completions.contains(&host.name)

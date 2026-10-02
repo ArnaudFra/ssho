@@ -17,14 +17,34 @@ pub struct Host {
     pub remote_command: String,
     pub request_tty: String,
     pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_tags: Vec<String>,
     pub aliases: Vec<String>,
     pub source_file: PathBuf,
     pub line_number: usize,
 }
 
 impl Host {
-    pub fn hidden(&self) -> bool {
+    /// Own tags first, then inherited tags, preserving spelling and exact uniqueness.
+    pub fn all_tags(&self) -> Vec<String> {
+        let mut tags = Vec::new();
+        for tag in self.tags.iter().chain(&self.file_tags) {
+            if !tags.contains(tag) {
+                tags.push(tag.clone());
+            }
+        }
+        tags
+    }
+    pub fn display_tags(&self) -> String {
         self.tags
+            .iter()
+            .map(|t| format!("#{t}"))
+            .chain(self.file_tags.iter().map(|t| format!("%{t}")))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    pub fn hidden(&self) -> bool {
+        self.all_tags()
             .iter()
             .any(|tag| tag.eq_ignore_ascii_case("hidden"))
     }
@@ -34,6 +54,7 @@ impl Host {
             [&self.name, &self.hostname, &self.user]
                 .into_iter()
                 .chain(self.tags.iter())
+                .chain(self.file_tags.iter())
                 .any(|value| value.to_lowercase().contains(&word))
         })
     }

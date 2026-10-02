@@ -77,6 +77,32 @@ pub(super) fn split_line(line: &str) -> Option<Line> {
     Some(result)
 }
 
+/// File-scoped metadata is a comment, never an OpenSSH directive.
+pub(super) fn file_tags(text: &str) -> Option<Vec<String>> {
+    let comment = text.trim().strip_prefix('#')?.trim_start();
+    let (key, values) = comment.split_once(':')?;
+    if !key.trim().eq_ignore_ascii_case("filetags") {
+        return None;
+    }
+    Some(
+        values
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+pub(super) fn closes_header(text: &str) -> bool {
+    split_line(text).is_some_and(|line| {
+        matches!(
+            line.keyword.to_ascii_lowercase().as_str(),
+            "host" | "include" | "match"
+        )
+    })
+}
+
 pub(super) fn verbatim(key: &str) -> bool {
     matches!(
         key,
@@ -179,6 +205,8 @@ fn check_include_metadata(path: &Path) -> Result<()> {
 pub(super) struct Parsed {
     pub hosts: Vec<Host>,
     pub files: Vec<PathBuf>,
+    pub warnings: Vec<super::ConfigWarning>,
+    pub has_file_tags: bool,
     seen: HashSet<PathBuf>,
     strict: bool,
 }
@@ -195,6 +223,8 @@ impl Parsed {
         let mut parsed = Self {
             hosts: vec![],
             files: vec![],
+            warnings: vec![],
+            has_file_tags: false,
             seen: HashSet::new(),
             strict,
         };
@@ -230,7 +260,30 @@ impl Parsed {
         };
         let mut current = None;
         let mut pending_tags = Vec::new();
+        let mut inherited = Vec::new();
+        let mut header = true;
         for (index, text) in content.lines().enumerate() {
+            if let Some(tags) = file_tags(text) {
+                self.has_file_tags = true;
+                if header {
+                    for tag in tags {
+                        if !inherited.contains(&tag) {
+                            inherited.push(tag);
+                        }
+                    }
+                } else {
+                    self.warnings.push(super::ConfigWarning {
+                        path: path.clone(),
+                        line: index + 1,
+                        message: "FileTags ignored after Host, Include or Match".into(),
+                    });
+                }
+                continue;
+            }
+            if closes_header(text) {
+                header = false;
+            }
+
             if let Some(tags) = text.trim().strip_prefix("# Tags:") {
                 pending_tags.extend(
                     tags.split(',')
@@ -293,6 +346,7 @@ impl Parsed {
                             aliases,
                             port: "22".into(),
                             tags: std::mem::take(&mut pending_tags),
+                            file_tags: inherited.clone(),
                             source_file: path.clone(),
                             line_number: index + 1,
                             ..Host::default()

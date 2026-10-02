@@ -1,4 +1,4 @@
-use super::parser::{concrete, quote, split_line, verbatim};
+use super::parser::{closes_header, concrete, file_tags, quote, split_line, verbatim};
 use crate::types::Host;
 use anyhow::{bail, Result};
 use std::collections::{BTreeMap, HashSet};
@@ -128,7 +128,26 @@ impl Document {
         {
             start -= 1;
         }
-        let mut added = Document::new(text).lines;
+        // Keep active scope declarations before the inserted Host, without stealing
+        // the original host's own Tags when both comments share its preamble.
+        let header_end = self
+            .lines
+            .iter()
+            .position(|line| closes_header(line))
+            .unwrap_or(self.lines.len());
+        let mut active = Vec::new();
+        let mut index = start;
+        let mut end = header_end;
+        while index < end {
+            if file_tags(&self.lines[index]).is_some() {
+                active.push(self.lines.remove(index));
+                end -= 1;
+            } else {
+                index += 1;
+            }
+        }
+        let mut added = active;
+        added.extend(Document::new(text).lines);
         added.push(self.newline.into());
         self.lines.splice(start..start, added);
         true
@@ -143,12 +162,32 @@ impl Document {
             .cloned()
             .collect();
         if remaining.iter().all(|pattern| pattern.starts_with('!')) {
+            // A removed boundary must never promote a previously ignored directive.
+            // Keep the original text as an explicit inactive comment (also in suffixes).
+            let mut header = true;
+            for text in &mut self.lines {
+                if closes_header(text) {
+                    header = false;
+                }
+                if !header && file_tags(text).is_some() {
+                    let newline = if text.ends_with("\r\n") {
+                        "\r\n"
+                    } else if text.ends_with('\n') {
+                        "\n"
+                    } else {
+                        ""
+                    };
+                    *text = format!("# Inactive FileTags: {}{newline}", text.trim());
+                }
+            }
             // Includes remain in their source document, even when inside this block.
             let keep: Vec<_> = self.lines[block.start..block.end]
                 .iter()
                 .filter(|text| {
-                    split_line(text)
-                        .is_some_and(|line| line.keyword.eq_ignore_ascii_case("include"))
+                    file_tags(text).is_some()
+                        || text.trim_start().starts_with("# Inactive FileTags:")
+                        || split_line(text)
+                            .is_some_and(|line| line.keyword.eq_ignore_ascii_case("include"))
                 })
                 .cloned()
                 .collect();
@@ -180,7 +219,10 @@ impl Document {
         }
         // Includes refer to their source directory and must never migrate.
         lines.retain(|text| {
-            !split_line(text).is_some_and(|line| line.keyword.eq_ignore_ascii_case("include"))
+            file_tags(text).is_none()
+                && !text.trim_start().starts_with("# Inactive FileTags:")
+                && !split_line(text)
+                    .is_some_and(|line| line.keyword.eq_ignore_ascii_case("include"))
         });
         let mut result = lines.concat();
         if !result.ends_with('\n') {

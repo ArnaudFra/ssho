@@ -45,6 +45,36 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+    // Persistent diagnostics have their own rows; notices and exact-file scope coexist.
+    let area = if !m.config_warnings.is_empty() {
+        let count = m
+            .config_warnings
+            .len()
+            .min(usize::from((area.height / 4).max(1)));
+        let parts =
+            Layout::vertical([Constraint::Length(count as u16), Constraint::Min(0)]).split(area);
+        let lines = m
+            .config_warnings
+            .iter()
+            .take(count)
+            .enumerate()
+            .map(|(i, warning)| {
+                let more = if i + 1 == count && count < m.config_warnings.len() {
+                    format!(" (+{}; h for all)", m.config_warnings.len() - count)
+                } else {
+                    String::new()
+                };
+                Line::from(format!("FileTags warning{more}: {warning}"))
+            })
+            .collect::<Vec<_>>();
+        f.render_widget(
+            Paragraph::new(lines).style(Style::default().fg(Color::Yellow)),
+            parts[0],
+        );
+        parts[1]
+    } else {
+        area
+    };
     if m.quit_tunnels {
         f.render_widget(
             Paragraph::new(if m.has_unsaved_context() { "Discard unsaved edits and stop owned tunnels, then quit?\nEnter: discard + stop + quit • Esc: return" } else { "Stop owned tunnels and quit?\nEnter: stop + quit • Esc: return" })
@@ -345,12 +375,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             .spans,
         );
         let name = Cell::from(Line::from(name_spans));
-        let tags = h
-            .tags
-            .iter()
-            .map(|s| format!("#{s}"))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let tags = h.display_tags();
         let time = m
             .history
             .get(&h.name)
@@ -778,6 +803,19 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
     let mut lines = vec![];
     let mut focus_y = 0;
     let width = parts[1].width as usize;
+    if !form.file_tags.is_empty() {
+        lines.push(Line::styled(
+            format!(
+                "Inherited (read only): {}",
+                form.file_tags
+                    .iter()
+                    .map(|tag| format!("%{tag}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            Style::default().fg(GRAY),
+        ));
+    }
     if form.original.is_some() {
         lines.push(Line::styled(
             format!("Config file: {}", form.target.display()),
@@ -1300,6 +1338,20 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     };
     if let Some(path) = &m.source_filter {
         text.insert(0, format!("File: {} • C/F2: clear", path.display()));
+    }
+    if !m.config_warnings.is_empty() {
+        text.push("Configuration warnings (FileTags ignored):".into());
+        text.extend(
+            details::wrapped(
+                m.config_warnings
+                    .iter()
+                    .map(|warning| Line::from(warning.to_string()))
+                    .collect(),
+                parts[0].width,
+            )
+            .into_iter()
+            .map(|line| line.to_string()),
+        );
     }
     m.scroll = m
         .scroll
