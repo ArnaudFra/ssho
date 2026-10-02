@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Linux/macOS PTY smoke checks using disposable SSH/config fixtures only."""
 import atexit
+from contextlib import nullcontext
 import fcntl
 import json
 import os
@@ -98,7 +99,9 @@ def cli(env, *args):
     return subprocess.run([str(BINARY), *args], env=env, capture_output=True, check=True, text=True).stdout
 
 
-with tempfile.TemporaryDirectory(prefix="ssho-pty-") as directory:
+with (nullcontext(os.environ["SSHM_TEST_FIXTURE_DIR"])
+      if "--launcher-only" in sys.argv[2:] and "SSHM_TEST_FIXTURE_DIR" in os.environ
+      else tempfile.TemporaryDirectory(prefix="ssho-pty-")) as directory:
     home = Path(directory)
     (home/".ssh").mkdir()
     (home/"bin").mkdir()
@@ -141,6 +144,68 @@ sys.exit(int(mode))
     mode = home/"ssh-mode"
     mode.write_text("37")
     env["SSHM_TEST_MODE"] = str(mode)
+
+    if "--launcher-only" in sys.argv[2:]:
+        # Same foreground process fixture, preceded by two literal wrapper argv.
+        wrapper = home/"wrapper space ;$"
+        wrapper.write_text(fake.read_text().replace(
+            'if "-G" in sys.argv[1:]:',
+            'Path(os.environ["SSHM_WRAPPER_PREFIX"]).write_text(json.dumps(sys.argv[1:3]))\n'
+            'del sys.argv[1:3]\nif "-G" in sys.argv[1:]:'
+        ))
+        wrapper.chmod(0o700)
+        prefix = ["prefix space", "$(touch SHOULD_NOT_EXIST); *"]
+        env["SSHM_WRAPPER_PREFIX"] = str(home/"wrapper-prefix")
+        (legacy/"config.json").write_text(json.dumps({
+            "ping_on_start": False, "check_for_updates": False,
+            "ssh_command": [str(wrapper), *prefix]
+        }))
+        session = Session(env)
+        session.expect("a-server")
+        session.send(b"server\x0e")
+        session.expect("b-server")
+        browser_modes = termios.tcgetattr(session.slave)
+        browser_signals = interrupt_dispositions(session.process)
+        session.send(b"\r")
+        session.expect("SSH exit 37: b-server")
+        assert json.loads((home/"wrapper-prefix").read_text()) == prefix
+        assert not (home/"SHOULD_NOT_EXIST").exists()
+        assert (home/"ssh-args").read_text().splitlines() == ["-F", str(config), "b-server"]
+        assert json.loads((home/"ssh-termios").read_text())[:6] == session.original[:6]
+        session.expect("Search: > server")
+        assert termios.tcgetattr(session.slave) == browser_modes
+        assert interrupt_dispositions(session.process) == browser_signals
+        for child_mode, expected in [("0", 0), ("signal", 143)]:
+            mode.write_text(child_mode)
+            session.send(b"\r")
+            session.expect(f"SSH exit {expected}: b-server")
+        mode.write_text("wait")
+        session.send(b"\r")
+        deadline = time.monotonic() + 5
+        while b"SSH_TAKEOVER" not in session.output[session.mark:] and time.monotonic() < deadline:
+            session.drain(0.1)
+        assert b"SSH_TAKEOVER" in session.output[session.mark:]
+        assert termios.tcgetattr(session.slave) == session.original
+        session.send(b"\x03")  # Real foreground-group SIGINT reaches wrapper.
+        session.expect("SSH exit 130: b-server")
+        session.expect("Search: > server")
+        assert termios.tcgetattr(session.slave) == browser_modes
+        assert interrupt_dispositions(session.process) == browser_signals
+        history = json.loads((home/".config/ssho/sshm_history.json").read_text())
+        assert history["connections"]["b-server"]["connect_count"] == 4
+        assert history["connections"]["b-server"]["last_result"]["exit_code"] == 130
+        assert history["connections"]["b-server"]["last_successful_completion"]
+        # Missing executable also returns to the same search and restores terminal state.
+        wrapper.unlink()
+        session.send(b"\r")
+        session.expect("ssh_command")
+        session.expect("Search: > server")
+        assert termios.tcgetattr(session.slave) == browser_modes
+        session.send(b"\x03")
+        session.close()
+        (home/"launcher-terminal.raw").write_bytes(session.output)
+        print("Launcher PTY passed: literal wrapper prefix, selected alias/search, foreground modes/signals, exit 37/0/143/130, history and missing-program return")
+        raise SystemExit(0)
 
     if "--file-tags-only" in sys.argv[2:]:
         included = home/".ssh/included"

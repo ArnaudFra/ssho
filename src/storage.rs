@@ -263,6 +263,36 @@ fn nullable_bindings<'de, D: Deserializer<'de>>(
     Ok(Option::<KeyBindings>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+fn default_ssh_command() -> Vec<String> {
+    vec!["ssh".into()]
+}
+
+fn validate_ssh_command(command: &[String]) -> Result<()> {
+    anyhow::ensure!(
+        command.first().is_some_and(|program| !program.trim().is_empty()),
+        "ssh_command must be a non-empty array of string arguments with a non-blank executable first; use [\"ssh\"] for OpenSSH"
+    );
+    anyhow::ensure!(
+        !command.iter().any(|argument| argument.contains('\0')),
+        "ssh_command arguments must not contain NUL characters; remove the NUL or use [\"ssh\"]"
+    );
+    Ok(())
+}
+
+fn nullable_ssh_command<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error> {
+    let command = Option::<Vec<String>>::deserialize(deserializer)
+        .map_err(|error| {
+            serde::de::Error::custom(format!(
+                "ssh_command must be an array of string arguments, for example [\"ssh\"]: {error}"
+            ))
+        })?
+        .unwrap_or_else(default_ssh_command);
+    validate_ssh_command(&command).map_err(serde::de::Error::custom)?;
+    Ok(command)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -274,6 +304,8 @@ pub struct AppConfig {
     pub ping_on_start: bool,
     #[serde(deserialize_with = "nullable_bindings")]
     pub key_bindings: KeyBindings,
+    #[serde(deserialize_with = "nullable_ssh_command")]
+    pub ssh_command: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -283,6 +315,7 @@ impl Default for AppConfig {
             focus_search_on_start: true,
             ping_on_start: true,
             key_bindings: KeyBindings::default(),
+            ssh_command: default_ssh_command(),
         }
     }
 }
@@ -309,6 +342,7 @@ impl AppConfig {
     }
 
     pub fn save(&self, root: &Path) -> Result<()> {
+        validate_ssh_command(&self.ssh_command)?;
         ensure_root(root)?;
         let mut value =
             read_json(root, "config.json")?.unwrap_or_else(|| Value::Object(Map::new()));

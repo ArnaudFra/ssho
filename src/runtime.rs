@@ -1,7 +1,7 @@
 pub mod effective;
 pub mod tunnels;
 use crate::{
-    storage::{AppPaths, History},
+    storage::{AppConfig, AppPaths, History},
     types::{Forward, Host},
 };
 use anyhow::{Context, Result};
@@ -54,6 +54,13 @@ pub fn connect(
     crate::config::find_host(config, name)?;
     let arguments = ssh_arguments(config, name, tty, remote, forward)?;
     paths.initialize()?;
+    // Wrappers only own ordinary connections. Forwarding (including a shell)
+    // retains native OpenSSH, like managed tunnels, resolution and diagnostics.
+    let launcher = if forward.is_none() {
+        AppConfig::load(&paths.root)?.ssh_command
+    } else {
+        vec!["ssh".into()]
+    };
     if let Err(error) =
         History::load(&paths.root).and_then(|mut history| history.record(name, forward))
     {
@@ -62,10 +69,17 @@ pub fn connect(
     if remote.is_empty() && forward.is_none() {
         eprintln!("Connecting to {name}...");
     }
-    let result = Command::new("ssh")
+    let result = Command::new(&launcher[0])
+        .args(&launcher[1..])
         .args(arguments)
         .status()
-        .context("Error executing SSH command; ensure OpenSSH is installed")
+        .with_context(|| {
+            if forward.is_none() {
+                format!("Error executing SSH command (ssh_command executable {:?}); check its path and arguments in config.json", launcher[0])
+            } else {
+                "Error executing SSH command; ensure OpenSSH is installed".into()
+            }
+        })
         .map(exit_code);
     if let Err(error) = History::load(&paths.root).and_then(|mut history| {
         history.complete(

@@ -43,12 +43,36 @@ Exemple de préférences, dans `ssho/config.json` :
   "check_for_updates": false,
   "focus_search_on_start": true,
   "ping_on_start": false,
+  "ssh_command": ["ssh"],
   "key_bindings": {
     "quit_keys": ["q", "ctrl+c"],
     "disable_esc_quit": false
   }
 }
 ```
+
+`ssh_command` est un tableau argv configurable uniquement dans ce fichier JSON.
+Un champ absent ou `null` conserve `["ssh"]`. Exemple avec un wrapper local :
+
+```json
+{"ssh_command": ["/usr/local/bin/my-wrapper", "--profile", "work"]}
+```
+
+Le premier élément est l’exécutable ; les suivants précèdent les arguments SSH
+(`-F`, chemin de configuration, éventuel `-t`, alias, puis commande distante).
+Chaque élément reste un argument littéral : aucun shell, expansion, découpage
+sur les espaces ou interprétation de métacaractères n’est ajouté. Le tableau
+doit contenir un exécutable non blanc et aucun argument ne peut contenir NUL.
+Un argument supplémentaire vide est permis. Le wrapper doit accepter les
+arguments SSH et conserver la session au premier plan pour que retour, flux,
+codes de sortie et signaux décrivent la connexion. Cet exemple ne certifie
+aucun wrapper tiers.
+
+Ce réglage concerne les connexions et commandes distantes sans forwarding.
+Tout forwarding, y compris avec shell, les tunnels possédés, `ssh -G`, les
+prévalidations de copie et les sondes via proxy utilisent toujours `ssh` du
+`PATH`. Les sondes directes gardent leur négociation SSH native. Une erreur de
+lancement indique l’exécutable configuré et est conservée dans l’historique.
 
 ## Utilisation
 
@@ -207,6 +231,8 @@ cargo build --release
 python3 tests/pty_smoke.py target/release/ssho
 # Parcours ciblé du filtre par fichier
 python3 tests/pty_smoke.py target/release/ssho --source-filter-only
+# Parcours ciblé du lanceur et de son retour au terminal
+python3 tests/pty_smoke.py target/release/ssho --launcher-only
 
 # Comparaison facultative avec un exécutable SSHM
 python3 tests/reference_parity.py /path/to/sshm target/release/ssho
