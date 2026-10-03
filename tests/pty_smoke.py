@@ -100,7 +100,7 @@ def cli(env, *args):
 
 
 with (nullcontext(os.environ["SSHM_TEST_FIXTURE_DIR"])
-      if "--launcher-only" in sys.argv[2:] and "SSHM_TEST_FIXTURE_DIR" in os.environ
+      if any(flag in sys.argv[2:] for flag in ("--launcher-only", "--aliases-only")) and "SSHM_TEST_FIXTURE_DIR" in os.environ
       else tempfile.TemporaryDirectory(prefix="ssho-pty-")) as directory:
     home = Path(directory)
     (home/".ssh").mkdir()
@@ -144,6 +144,78 @@ sys.exit(int(mode))
     mode = home/"ssh-mode"
     mode.write_text("37")
     env["SSHM_TEST_MODE"] = str(mode)
+
+    if "--aliases-only" in sys.argv[2:]:
+        config.write_text("Match host production\n HostName primary.target\n User primary-user\n"
+                          "Match host prod\n HostName secondary.target\n User secondary-user\n"
+                          "Host production prod\n Port 22\n")
+        original = config.read_bytes()
+        session = Session(env)
+        session.expect("production")
+        app_config = home/".config/ssho/config.json"
+        latest = json.loads(app_config.read_text())
+        latest.update(ssh_command=["ssh", "-v"], check_for_updates=True,
+                      future_setting={"preserve": [1, 2]})
+        app_config.write_text(json.dumps(latest))
+        session.send(b"\tA")
+        session.expect("1 blocks")
+        saved = json.loads(app_config.read_text())
+        assert saved["group_aliases"] is True
+        assert saved["ssh_command"] == ["ssh", "-v"]
+        assert saved["check_for_updates"] is True
+        assert saved["future_setting"] == {"preserve": [1, 2]}
+        session.send(b"/secondary.target")
+        session.expect("prod")
+        session.expect("1/2 aliases")
+        session.send(b"\r")
+        session.expect("SSH exit 37: prod")
+        assert (home/"ssh-args").read_text().splitlines() == ["-v", "-F", str(config), "prod"]
+        session.send(b"\x1bOR")  # F3
+        session.expect("Choose alias")
+        session.expect("primary-user@primary.target")
+        session.expect("secondary-user@secondary.target")
+        session.send(b"\x1b[H\r")  # Home + select primary: incompatible query is cleared
+        session.expect("production")
+        session.send(b"\r")
+        session.expect("SSH exit 37: production")
+        assert (home/"ssh-args").read_text().splitlines()[-1] == "production"
+        session.send(b"\x03")
+        session.close()
+        (home/"aliases-terminal.raw").write_bytes(session.output)
+        # Persisted preference is read at restart; failed safe publication leaves mode intact.
+        session = Session(env, ("--no-update-check",))
+        session.expect("1 blocks")
+        session.send(b"\x1bOQ" + b"\x1b[B" * 16 + b"\r")  # F2: alias grouping toggle
+        session.expect("Hosts: 2/2")
+        session.send(b"\tA")
+        session.expect("1 blocks")
+        # A compact terminal must keep an explicit primary -> active alias label.
+        fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 24, 0, 0))
+        os.kill(session.process.pid, signal.SIGWINCH)
+        session.send(b"/secondary.target")
+        session.expect("→prod")
+        session.expect("aliases")
+        session.send(b"\x1b\t")  # clear query, then table focus
+        protected = home/"protected-config.json"
+        app_config.rename(protected)
+        app_config.symlink_to(protected)
+        session.send(b"A")
+        session.expect("Error:")
+        session.expect("1 blocks")
+        assert json.loads(protected.read_text())["group_aliases"] is True
+        app_config.unlink()
+        protected.rename(app_config)
+        session.send(b"\x03")
+        session.close()
+        (home/"aliases-errors.raw").write_bytes(session.output)
+        assert config.read_bytes() == original
+        # UI grouping never removes raw CLI aliases or shell completion candidates.
+        listing = cli(env, "search", "--format", "simple")
+        assert set(listing.splitlines()) == {"production", "prod"}
+        completions = cli(env, "__complete", "pro")
+        assert set(completions.splitlines()) == {"production", "prod", ":4"}
+        print("Aliases PTY passed: grouping, native secondary search/targets, chooser, persistence and errors")
+        sys.exit(0)
 
     if "--launcher-only" in sys.argv[2:]:
         # Same foreground process fixture, preceded by two literal wrapper argv.

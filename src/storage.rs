@@ -306,6 +306,8 @@ pub struct AppConfig {
     pub key_bindings: KeyBindings,
     #[serde(deserialize_with = "nullable_ssh_command")]
     pub ssh_command: Vec<String>,
+    #[serde(deserialize_with = "nullable_false")]
+    pub group_aliases: bool,
 }
 
 impl Default for AppConfig {
@@ -316,11 +318,21 @@ impl Default for AppConfig {
             ping_on_start: true,
             key_bindings: KeyBindings::default(),
             ssh_command: default_ssh_command(),
+            group_aliases: false,
         }
     }
 }
 
 impl AppConfig {
+    /// Read current preferences, change only the requested fields, then publish.
+    /// Callers commit their UI state only after this succeeds.
+    pub fn update(root: &Path, change: impl FnOnce(&mut Self)) -> Result<Self> {
+        let mut config = Self::load(root)?;
+        change(&mut config);
+        config.save(root)?;
+        Ok(config)
+    }
+
     pub fn load(root: &Path) -> Result<Self> {
         ensure_root(root)?;
         let mut config: Self = match read_json(root, "config.json")? {

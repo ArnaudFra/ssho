@@ -111,6 +111,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         View::Help => help(f, m, area),
         View::Files { .. } => files(f, m, area),
         View::SourceFiles { .. } => source_files(f, m, area),
+        View::Aliases { .. } => alias_chooser(f, m, area),
     }
 }
 fn list(f: &mut Frame, m: &mut Model, area: Rect) {
@@ -172,10 +173,9 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         help.push(Line::from(details::narrow_hint(area.width, m.search_focus)));
     }
     let help_height = help.len() as u16;
-    let status_height = list_status(
+    let status_height = browser_status(
+        m,
         area.width,
-        m.visible.len(),
-        m.all.len(),
         if m.visible.is_empty() {
             0
         } else {
@@ -368,7 +368,11 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         name_spans.extend(
             highlight(
                 m,
-                &ellipsize(&h.name, widths[0].saturating_sub(3) as usize),
+                &alias_label(
+                    h,
+                    m.preferences.group_aliases,
+                    widths[0].saturating_sub(3) as usize,
+                ),
                 search::Field::Any,
                 position == m.selected,
             )
@@ -458,14 +462,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             (m.offset + row_capacity).min(m.visible.len()),
         )
     };
-    let status = list_status(
-        chunks[4].width,
-        m.visible.len(),
-        m.all.len(),
-        position,
-        first,
-        last,
-    );
+    let status = browser_status(m, chunks[4].width, position, first, last);
     f.render_widget(
         Paragraph::new(status).style(Style::default().fg(GRAY)),
         chunks[4],
@@ -531,6 +528,50 @@ pub(super) fn highlight_details(m: &Model, lines: Vec<Line<'static>>) -> Vec<Lin
             line
         })
         .collect()
+}
+
+/// Keep both identities visible when a secondary alias is active, even in a
+/// single narrow name column. The arrow identifies the actual action target.
+fn alias_label(host: &Host, grouped: bool, width: usize) -> String {
+    let primary = aliases::primary(host);
+    if !grouped || primary == host.name {
+        return ellipsize(&host.name, width);
+    }
+    let available = width.saturating_sub(1);
+    let active_width = host.name.width().min(available.div_ceil(2));
+    let primary_width = primary.width().min(available.saturating_sub(active_width));
+    let active_width = available.saturating_sub(primary_width);
+    format!(
+        "{}→{}",
+        ellipsize(primary, primary_width),
+        ellipsize(&host.name, active_width)
+    )
+}
+
+fn browser_status(
+    m: &Model,
+    width: u16,
+    position: usize,
+    first: usize,
+    last: usize,
+) -> Vec<Line<'static>> {
+    if !m.preferences.group_aliases {
+        return list_status(width, m.visible.len(), m.all.len(), position, first, last);
+    }
+    let blocks = format!("{} blocks", m.visible.len());
+    let aliases = format!("{}/{} aliases", m.matching.len(), m.all.len());
+    let counts = format!("{blocks} • {aliases}");
+    let full = format!(
+        "{counts} • Selected: {position}/{} • Rows: {first}-{last}",
+        m.visible.len()
+    );
+    if full.width() <= usize::from(width) {
+        vec![Line::from(full)]
+    } else if counts.width() <= usize::from(width) {
+        vec![Line::from(counts)]
+    } else {
+        vec![Line::from(blocks), Line::from(aliases)]
+    }
 }
 
 fn list_status(
@@ -1147,6 +1188,58 @@ fn source_files(f: &mut Frame, m: &Model, area: Rect) {
     );
 }
 
+fn alias_chooser(f: &mut Frame, m: &Model, area: Rect) {
+    let View::Aliases { hosts, selected } = &m.view else {
+        return;
+    };
+    let area = inset(area);
+    let parts = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    f.render_widget(
+        Paragraph::new("Choose alias • exact connection target").style(accent()),
+        parts[0],
+    );
+    let count = usize::from(parts[1].height).max(1);
+    let offset = selected.saturating_sub(count - 1);
+    let lines = hosts
+        .iter()
+        .map(|host| {
+            let effective = m
+                .effective
+                .get(&host.name)
+                .and_then(|value| value.as_ref().ok());
+            format!(
+                "{} • {}@{}",
+                host.name,
+                effective.map_or(host.user.as_str(), |e| &e.user),
+                effective.map_or(host.hostname.as_str(), |e| &e.hostname)
+            )
+        })
+        .enumerate()
+        .skip(offset)
+        .map(|(i, label)| {
+            Line::styled(
+                format!("{} {label}", if i == *selected { "▶" } else { " " }),
+                if i == *selected {
+                    Style::default().bg(CYAN).fg(Color::Black)
+                } else {
+                    Style::default()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(Paragraph::new(lines), parts[1]);
+    f.render_widget(
+        Paragraph::new("↑/↓: navigate • Enter: select • Esc: cancel")
+            .style(Style::default().fg(GRAY)),
+        parts[2],
+    );
+}
+
 fn files(f: &mut Frame, m: &mut Model, area: Rect) {
     let View::Files {
         files,
@@ -1312,6 +1405,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "       Tester: check all hosts",
         "Forms: Ctrl+S save, Ctrl+L launch tunnel",
         "Ctrl+J/K tabs; Alt+A/D aliases",
+        "A: group aliases • F3: choose active alias (also F2)",
         "Ctrl+A/E start/end of input",
         "Discard: Enter discard, Esc resume",
         "System",

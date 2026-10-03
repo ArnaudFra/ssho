@@ -1,6 +1,9 @@
 //! Native terminal interface, adapted from SSHM, copyright Guillaume Archambault (MIT).
 mod actions;
 mod active;
+mod aliases;
+#[cfg(test)]
+mod aliases_tests;
 mod changes;
 mod details;
 mod forms;
@@ -70,6 +73,10 @@ enum View {
     Active {
         selected: usize,
     },
+    Aliases {
+        hosts: Vec<Host>,
+        selected: usize,
+    },
     SourceFiles {
         files: Vec<PathBuf>,
         selected: usize,
@@ -102,6 +109,7 @@ enum Action {
     Ping,
     Reload,
     SourceFilter,
+    ToggleAliases,
     Favorite(Host),
     SaveNote(String, String),
     SaveProfile {
@@ -122,6 +130,9 @@ struct PendingPreferred {
 struct Model {
     all: Vec<Host>,
     visible: Vec<usize>,
+    // Unsorted raw search membership, independent of projected display rows.
+    matching: Vec<usize>,
+    alias_projection: aliases::Projection,
     selected: usize,
     offset: usize,
     query: Input,
@@ -165,6 +176,8 @@ impl Model {
         let mut m = Self {
             all,
             visible: vec![],
+            matching: vec![],
+            alias_projection: aliases::Projection::default(),
             selected: 0,
             offset: 0,
             query: Input {
@@ -264,7 +277,13 @@ impl Model {
     }
     fn refilter(&mut self, identity: Option<&Host>, fallback: usize) {
         self.search = search::Query::parse(&self.query.value);
-        self.visible = self.matching_indices();
+        self.matching = self.matching_indices();
+        self.visible = if self.preferences.group_aliases {
+            self.alias_projection
+                .project(&self.all, &self.matching, identity)
+        } else {
+            self.matching.clone()
+        };
         let metadata = &self.metadata;
         self.visible.sort_by(|&a, &b| {
             let a = &self.all[a];
@@ -377,9 +396,7 @@ impl Model {
     /// Diagnostics may change membership, but must not silently apply new history sorting.
     fn refresh_search_membership(&mut self) {
         let next = self.matching_indices();
-        let mut previous = self.visible.clone();
-        previous.sort_unstable();
-        if next != previous {
+        if next != self.matching {
             self.filter(false);
         }
     }
@@ -630,6 +647,7 @@ impl Model {
                     _ => Action::None,
                 }
             }
+            View::Aliases { .. } => return aliases::key(self, k),
             View::Profiles(_) => return self.profile_key(k),
             View::Active { .. } => return self.active_key(k),
             View::Forward(f) => {
@@ -778,6 +796,9 @@ impl Model {
             self.open_view(View::Actions { selected: 0 });
             return Action::None;
         }
+        if k.code == KeyCode::F(3) {
+            return self.activate_action(PaletteAction::ChooseAlias);
+        }
         if k.code == KeyCode::F(5) {
             return Action::Reload;
         }
@@ -825,6 +846,7 @@ impl Model {
                     self.filter(true);
                 }
             }
+            KeyCode::Char('A') => return Action::ToggleAliases,
             KeyCode::Char('c') => return Action::SourceFilter,
             KeyCode::Char('C') => {
                 self.source_filter = None;
@@ -881,6 +903,8 @@ impl Model {
     }
     fn activate_action(&mut self, action: PaletteAction) -> Action {
         match action {
+            PaletteAction::ToggleAliases => return Action::ToggleAliases,
+            PaletteAction::ChooseAlias => aliases::open(self),
             PaletteAction::SourceFilter => return Action::SourceFilter,
             PaletteAction::ClearSourceFilter => {
                 self.source_filter = None;
@@ -1327,6 +1351,7 @@ pub fn run(
                 inspection = receiver;
                 false
             }),
+            Action::ToggleAliases => aliases::toggle(&mut m, &paths.root).map(|_| false),
             Action::SourceFilter => source_filter::open(&mut m, config).map(|_| false),
             Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
             Action::Duplicate(host) => select_duplicate_files(&mut m, config, host).map(|_| false),

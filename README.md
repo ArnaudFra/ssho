@@ -44,6 +44,7 @@ Exemple de préférences, dans `ssho/config.json` :
   "focus_search_on_start": true,
   "ping_on_start": false,
   "ssh_command": ["ssh"],
+  "group_aliases": false,
   "key_bindings": {
     "quit_keys": ["q", "ctrl+c"],
     "disable_esc_quit": false
@@ -123,6 +124,8 @@ L'écran principal utilise un titre compact et toute la hauteur disponible pour 
 | --- | --- |
 | Recherche | Saisir pour filtrer ; ↑/↓ ou Ctrl+P/Ctrl+N pour sélectionner ; Entrée pour se connecter |
 | Recharger les changements externes | F5 depuis la recherche, le tableau ou la fiche d’information ; ou Recharger dans F2 |
+| Regrouper les alias | `A` depuis le tableau ou F2 → Alias regroupés ; préférence persistée, désactivée par défaut |
+| Choisir un alias concret | F3 ou F2 → Choisir un alias ; ↑/↓ puis Entrée, Échap annule |
 | Palette d'actions | F2 depuis la recherche ou le tableau ; ↑/↓ puis Entrée ; Échap annule sans changer la recherche ni le focus |
 | Changer le focus | Tab ou Shift+Tab ; `/` pour revenir à la recherche depuis le tableau |
 | Effacer ou quitter | Échap efface d'abord une recherche non vide, puis quitte le focus de recherche ; depuis le tableau, les préférences contrôlent la sortie |
@@ -149,7 +152,26 @@ Sur un terminal court, les champs occupent deux lignes (libellé et saisie). Cha
 
 Les hôtes masqués restent accessibles en connexion directe. La recherche de la TUI combine plusieurs mots sur le nom, l'adresse, l'utilisateur et les tags. La recherche CLI conserve ses propres filtres de champs.
 
-La palette propose **Ajouter**, **Modifier**, **Tunnel**, **Tester**, **Aide**, **Détails**, **Recharger**, **Favori \***, **Note N**, **Favoris seuls**, **Dupliquer D**, **Profils F6**, **Tunnels actifs F7** et **Sauvegardes F8**. Modifier, Tunnel, Tester, Favori, Note, Dupliquer et Profils sont indisponibles sans hôte sélectionné ; Ajouter, Aide, Détails, Recharger, Tunnels actifs, Sauvegardes et Favoris seuls restent accessibles avec une liste vide ; ce dernier permet donc de sortir d’un filtre sans résultats. Tester réutilise le contrôle de connectivité de tous les hôtes, comme `p`. La barre sous le tableau adapte ses rappels à la largeur ; sur un écran étroit, **F2**, puis **Aide**, donne accès aux raccourcis détaillés. Les lettres saisies dans la recherche restent du texte.
+La palette propose **Ajouter**, **Modifier**, **Tunnel**, **Tester**, **Aide**, **Détails**, **Recharger**, **Favori \***, **Note N**, **Favoris seuls**, **Dupliquer D**, **Profils F6**, **Tunnels actifs F7**, **Sauvegardes F8**, **Alias regroupés A** et **Choisir un alias F3**. Modifier, Tunnel, Tester, Favori, Note, Dupliquer, Profils et Choisir un alias sont indisponibles sans hôte sélectionné ; Ajouter, Aide, Détails, Recharger, Tunnels actifs, Sauvegardes, Alias regroupés et Favoris seuls restent accessibles avec une liste vide ; ce dernier permet donc de sortir d’un filtre sans résultats. Tester réutilise le contrôle de connectivité de tous les hôtes, comme `p`. La barre sous le tableau adapte ses rappels à la largeur ; sur un écran étroit, **F2**, puis **Aide**, donne accès aux raccourcis détaillés. Les lettres saisies dans la recherche restent du texte.
+
+**Alias regroupés** (`group_aliases: true`, absent/null : `false`) affiche une ligne
+par déclaration `Host`, sans modifier SSH. Seuls les alias du même fichier, de
+la même ligne fiable et de la même déclaration sont réunis. Le nom principal
+reste visible ; `principal→actif` précise une cible secondaire, même en colonne
+étroite. Les détails listent les alias. Les compteurs distinguent les blocs
+projetés et les alias correspondant aux filtres, sur le total brut.
+
+La recherche examine chaque alias avec ses propres valeurs natives, notes et
+favoris. L’alias actif encore admissible est conservé ; sinon le principal est
+choisi s’il correspond, puis le premier alias correspondant. F3 permet de choisir
+explicitement un autre alias, même quand leurs noms sont ambigus pour la
+recherche. Ce choix retire uniquement les contraintes de recherche/favori/hidden
+incompatibles, conserve le fichier source exact et ne lance pas de connexion.
+Échap conserve le curseur, la requête et le contexte. Les actions, informations,
+notes et profils concernent toujours l’alias actif ; CLI et complétion conservent
+tous les alias. La bascule relit les préférences avant sauvegarde pour conserver
+les autres réglages modifiés pendant la session ; une erreur laisse l’ancien mode
+actif et affiche le diagnostic.
 
 **Dupliquer** (`D` depuis le tableau ou F2 → Dupliquer depuis la recherche) demande toujours le fichier cible, y compris le fichier source, puis ouvre un ajout prérempli. Un nouveau nom concret est obligatoire : aucun alias de l’original, motif SSH ou nom déjà présent dans la configuration racine et ses Includes, même masqué et sans distinguer la casse, n’est accepté. La copie conserve les champs SSH représentés, les options et les identités supplémentaires déclarées ; la cible, l’utilisateur et le port viennent de la résolution de l’alias source par `ssh -G`, pour conserver les valeurs héritées. Les chemins de clés implicites de `ssh -G` ne deviennent pas des identités déclarées. Si cette résolution attend encore ou échoue, un message explique de réessayer après résolution ou F5 ; la navigation reste disponible. Avant toute écriture ou sauvegarde de secours, une copie privée du graphe Include permet à `ssh -G` de vérifier la cible, l’utilisateur et le port demandés. Le nouveau bloc est inséré avant le premier `Host`/`Match` du fichier cible, en gardant les commentaires et tags du bloc original ; les directives globales et Includes précédents restent en place, et le port 22 est écrit explicitement. Une destination dont les valeurs antérieures imposent une autre connexion est refusée : choisir un fichier plus tôt dans la configuration (souvent la racine), ou corriger les valeurs globales, puis réessayer. Les fichiers restent inchangés lors d’un refus. Cette vérification accepte les Includes littéraux, les globs, les chemins absolus, `~/` et les chemins relatifs natifs d’OpenSSH ; elle refuse prudemment les chemins Include avec variables `$`, tokens `%`, `~utilisateur`, ou des correspondances qui ne sont pas des fichiers. Hors Unix, cette vérification n’accepte que les Includes sans glob. Un fichier Include sans frontière `Host`/`Match` ne peut pas recevoir la copie ; choisir un autre fichier. L’original et ses alias restent inchangés. Une copie est un nouvel hôte ordinaire : ses favoris et notes personnelles ne sont pas clonés. Ctrl+S sauvegarde puis sélectionne la copie ; Échap annule avec les règles habituelles d’abandon.
 
@@ -233,6 +255,8 @@ python3 tests/pty_smoke.py target/release/ssho
 python3 tests/pty_smoke.py target/release/ssho --source-filter-only
 # Parcours ciblé du lanceur et de son retour au terminal
 python3 tests/pty_smoke.py target/release/ssho --launcher-only
+# Parcours ciblé alias regroupés, choix de cible et préférences
+python3 tests/pty_smoke.py target/release/ssho --aliases-only
 
 # Comparaison facultative avec un exécutable SSHM
 python3 tests/reference_parity.py /path/to/sshm target/release/ssho
