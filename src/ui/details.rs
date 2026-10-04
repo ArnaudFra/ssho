@@ -250,7 +250,12 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model, area: Rect) {
                 m.note(&host.name),
             )
         })
-        .unwrap_or_else(|| vec![Line::from("No selected host")]);
+        .unwrap_or_else(|| match m.rows.get(m.selected) {
+            Some(groups::Row::Group { key, count, .. }) => {
+                render::group_content(key, *count, m.preferences.group_aliases)
+            }
+            _ => vec![Line::from("No selected host")],
+        });
     let lines = render::highlight_details(m, lines);
     m.details.page = usize::from(parts[0].height).max(1);
     m.details.max_scroll = render_rows(f, parts[0], lines, &mut m.details.scroll);

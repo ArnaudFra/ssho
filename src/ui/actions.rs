@@ -19,10 +19,11 @@ pub(super) enum PaletteAction {
     ClearSourceFilter,
     ToggleAliases,
     ChooseAlias,
+    GroupMode,
 }
 
 impl PaletteAction {
-    pub(super) const ALL: [Self; 18] = [
+    pub(super) const ALL: [Self; 19] = [
         Self::Add,
         Self::Edit,
         Self::Tunnel,
@@ -41,10 +42,12 @@ impl PaletteAction {
         Self::ClearSourceFilter,
         Self::ToggleAliases,
         Self::ChooseAlias,
+        Self::GroupMode,
     ];
 
     pub(super) fn label(self) -> &'static str {
         match self {
+            Self::GroupMode => "Groupes g",
             Self::ToggleAliases => "Alias regroupés A",
             Self::ChooseAlias => "Choisir un alias F3",
             Self::SourceFilter => "Fichier source c",
@@ -70,7 +73,8 @@ impl PaletteAction {
         has_host
             || matches!(
                 self,
-                Self::ToggleAliases
+                Self::GroupMode
+                    | Self::ToggleAliases
                     | Self::SourceFilter
                     | Self::ClearSourceFilter
                     | Self::Active

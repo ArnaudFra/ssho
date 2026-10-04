@@ -45,6 +45,7 @@ Exemple de préférences, dans `ssho/config.json` :
   "ping_on_start": false,
   "ssh_command": ["ssh"],
   "group_aliases": false,
+  "group_mode": "flat",
   "key_bindings": {
     "quit_keys": ["q", "ctrl+c"],
     "disable_esc_quit": false
@@ -125,6 +126,8 @@ L'écran principal utilise un titre compact et toute la hauteur disponible pour 
 | Recherche | Saisir pour filtrer ; ↑/↓ ou Ctrl+P/Ctrl+N pour sélectionner ; Entrée pour se connecter |
 | Recharger les changements externes | F5 depuis la recherche, le tableau ou la fiche d’information ; ou Recharger dans F2 |
 | Regrouper les alias | `A` depuis le tableau ou F2 → Alias regroupés ; préférence persistée, désactivée par défaut |
+| Groupes repliables | `g` depuis le tableau ou F2 → Groupes : plat, fichiers, fichiers → tag principal |
+| Naviguer dans les groupes | ← replie ou sélectionne le parent ; → déplie ou sélectionne le premier enfant ; Entrée/Espace bascule un groupe ; `i` montre sa fiche |
 | Choisir un alias concret | F3 ou F2 → Choisir un alias ; ↑/↓ puis Entrée, Échap annule |
 | Palette d'actions | F2 depuis la recherche ou le tableau ; ↑/↓ puis Entrée ; Échap annule sans changer la recherche ni le focus |
 | Changer le focus | Tab ou Shift+Tab ; `/` pour revenir à la recherche depuis le tableau |
@@ -152,7 +155,7 @@ Sur un terminal court, les champs occupent deux lignes (libellé et saisie). Cha
 
 Les hôtes masqués restent accessibles en connexion directe. La recherche de la TUI combine plusieurs mots sur le nom, l'adresse, l'utilisateur et les tags. La recherche CLI conserve ses propres filtres de champs.
 
-La palette propose **Ajouter**, **Modifier**, **Tunnel**, **Tester**, **Aide**, **Détails**, **Recharger**, **Favori \***, **Note N**, **Favoris seuls**, **Dupliquer D**, **Profils F6**, **Tunnels actifs F7**, **Sauvegardes F8**, **Alias regroupés A** et **Choisir un alias F3**. Modifier, Tunnel, Tester, Favori, Note, Dupliquer, Profils et Choisir un alias sont indisponibles sans hôte sélectionné ; Ajouter, Aide, Détails, Recharger, Tunnels actifs, Sauvegardes, Alias regroupés et Favoris seuls restent accessibles avec une liste vide ; ce dernier permet donc de sortir d’un filtre sans résultats. Tester réutilise le contrôle de connectivité de tous les hôtes, comme `p`. La barre sous le tableau adapte ses rappels à la largeur ; sur un écran étroit, **F2**, puis **Aide**, donne accès aux raccourcis détaillés. Les lettres saisies dans la recherche restent du texte.
+La palette propose **Ajouter**, **Modifier**, **Tunnel**, **Tester**, **Aide**, **Détails**, **Recharger**, **Favori \***, **Note N**, **Favoris seuls**, **Dupliquer D**, **Profils F6**, **Tunnels actifs F7**, **Sauvegardes F8**, **Alias regroupés A**, **Choisir un alias F3** et **Groupes g**. Modifier, Tunnel, Tester, Favori, Note, Dupliquer, Profils et Choisir un alias sont indisponibles sans hôte sélectionné ; Ajouter, Aide, Détails, Recharger, Tunnels actifs, Sauvegardes, Alias regroupés, Groupes et Favoris seuls restent accessibles avec une liste vide ; ce dernier permet donc de sortir d’un filtre sans résultats. Tester réutilise le contrôle de connectivité de tous les hôtes, comme `p`. La barre sous le tableau adapte ses rappels à la largeur ; sur un écran étroit, **F2**, puis **Aide**, donne accès aux raccourcis détaillés. Les lettres saisies dans la recherche restent du texte.
 
 **Alias regroupés** (`group_aliases: true`, absent/null : `false`) affiche une ligne
 par déclaration `Host`, sans modifier SSH. Seuls les alias du même fichier, de
@@ -172,6 +175,12 @@ notes et profils concernent toujours l’alias actif ; CLI et complétion conser
 tous les alias. La bascule relit les préférences avant sauvegarde pour conserver
 les autres réglages modifiés pendant la session ; une erreur laisse l’ancien mode
 actif et affiche le diagnostic.
+
+**Groupes repliables.** `g` depuis le tableau ou F2 → Groupes choisit la liste plate (`flat`, défaut, y compris champ absent/null), les fichiers (`files`) ou les fichiers puis leur tag principal (`file_tags`). Le tag principal est le premier tag propre, sinon le premier FileTag hérité, sinon « Sans tag ». Chaque hôte, ou chaque bloc si le regroupement d'alias est activé, apparaît une seule fois ; tous ses autres tags restent recherchables. Les favoris et le tri récent ordonnent les hôtes à l’intérieur de leur groupe. Les fichiers sont distincts par chemin exact ; un numéro de source les distingue même si le chemin est tronqué. `i` ouvre une fiche de groupe avec chemin complet, retour à la ligne et défilement sur petit écran ; F4 affiche aussi ces informations sur écran large.
+
+Sur un en-tête, Entrée/Espace déplie ou replie, ← replie ou remonte au parent, → déplie ou descend au premier enfant. Les actions hôte (SSH, édition, suppression, notes, favoris, profils, choix d’alias) sont indisponibles ; Entrée sur un hôte conserve la connexion. Dans la recherche, Espace et ←/→ restent des touches de saisie. Une nouvelle requête ouvre les parents et sélectionne le premier hôte correspondant ; les replis faits pendant cette recherche sont temporaires. Effacer la requête retrouve les replis manuels précédents. F5 et le retour de SSH conservent l’identité sélectionnée et les replis ; une sauvegarde ouvre les parents de l’hôte enregistré seulement si le filtre source exact l’autorise. Les compteurs distinguent hôtes/blocs, alias et groupes ; la pagination compte aussi les en-têtes.
+
+Seul le mode de vue est persisté, après écriture réussie des préférences relues ; les replis durent la session. Les modifications externes du lanceur, du regroupement d’alias et des champs inconnus sont préservées. Un échec laisse le mode et la sélection intacts et affiche son diagnostic dans le sélecteur. Aucun dossier virtuel ni changement de configuration SSH n’est créé par la vue.
 
 **Dupliquer** (`D` depuis le tableau ou F2 → Dupliquer depuis la recherche) demande toujours le fichier cible, y compris le fichier source, puis ouvre un ajout prérempli. Un nouveau nom concret est obligatoire : aucun alias de l’original, motif SSH ou nom déjà présent dans la configuration racine et ses Includes, même masqué et sans distinguer la casse, n’est accepté. La copie conserve les champs SSH représentés, les options et les identités supplémentaires déclarées ; la cible, l’utilisateur et le port viennent de la résolution de l’alias source par `ssh -G`, pour conserver les valeurs héritées. Les chemins de clés implicites de `ssh -G` ne deviennent pas des identités déclarées. Si cette résolution attend encore ou échoue, un message explique de réessayer après résolution ou F5 ; la navigation reste disponible. Avant toute écriture ou sauvegarde de secours, une copie privée du graphe Include permet à `ssh -G` de vérifier la cible, l’utilisateur et le port demandés. Le nouveau bloc est inséré avant le premier `Host`/`Match` du fichier cible, en gardant les commentaires et tags du bloc original ; les directives globales et Includes précédents restent en place, et le port 22 est écrit explicitement. Une destination dont les valeurs antérieures imposent une autre connexion est refusée : choisir un fichier plus tôt dans la configuration (souvent la racine), ou corriger les valeurs globales, puis réessayer. Les fichiers restent inchangés lors d’un refus. Cette vérification accepte les Includes littéraux, les globs, les chemins absolus, `~/` et les chemins relatifs natifs d’OpenSSH ; elle refuse prudemment les chemins Include avec variables `$`, tokens `%`, `~utilisateur`, ou des correspondances qui ne sont pas des fichiers. Hors Unix, cette vérification n’accepte que les Includes sans glob. Un fichier Include sans frontière `Host`/`Match` ne peut pas recevoir la copie ; choisir un autre fichier. L’original et ses alias restent inchangés. Une copie est un nouvel hôte ordinaire : ses favoris et notes personnelles ne sont pas clonés. Ctrl+S sauvegarde puis sélectionne la copie ; Échap annule avec les règles habituelles d’abandon.
 
@@ -253,10 +262,14 @@ cargo build --release
 python3 tests/pty_smoke.py target/release/ssho
 # Parcours ciblé du filtre par fichier
 python3 tests/pty_smoke.py target/release/ssho --source-filter-only
+# FileTags, héritage et mutation de destination
+python3 tests/pty_smoke.py target/release/ssho --file-tags-only
 # Parcours ciblé du lanceur et de son retour au terminal
 python3 tests/pty_smoke.py target/release/ssho --launcher-only
 # Parcours ciblé alias regroupés, choix de cible et préférences
 python3 tests/pty_smoke.py target/release/ssho --aliases-only
+# Groupes, sécurité des en-têtes, recherche, préférences et petit terminal
+python3 tests/pty_smoke.py target/release/ssho --groups-only
 
 # Comparaison facultative avec un exécutable SSHM
 python3 tests/reference_parity.py /path/to/sshm target/release/ssho

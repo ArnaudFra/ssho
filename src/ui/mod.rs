@@ -7,6 +7,9 @@ mod aliases_tests;
 mod changes;
 mod details;
 mod forms;
+mod groups;
+#[cfg(test)]
+mod groups_tests;
 mod notes;
 mod profiles;
 mod render;
@@ -20,7 +23,7 @@ use crate::{
     storage::{
         metadata::{HostMetadata, Metadata},
         tunnels::{HostModes, HostProfiles, LaunchMode, TunnelProfiles},
-        AppConfig, AppPaths, History,
+        AppConfig, AppPaths, GroupMode, History,
     },
     types::{ConnectionInfo, Forward, Host},
     version::{self, UpdateInfo},
@@ -66,6 +69,10 @@ enum View {
     },
     Host(Box<HostForm>),
     Info(Host),
+    GroupInfo {
+        key: groups::Key,
+        count: usize,
+    },
     Note(notes::Editor),
     Help,
     Forward(ForwardForm),
@@ -75,6 +82,9 @@ enum View {
     },
     Aliases {
         hosts: Vec<Host>,
+        selected: usize,
+    },
+    GroupMode {
         selected: usize,
     },
     SourceFiles {
@@ -110,6 +120,7 @@ enum Action {
     Reload,
     SourceFilter,
     ToggleAliases,
+    GroupMode(GroupMode),
     Favorite(Host),
     SaveNote(String, String),
     SaveProfile {
@@ -133,6 +144,8 @@ struct Model {
     // Unsorted raw search membership, independent of projected display rows.
     matching: Vec<usize>,
     alias_projection: aliases::Projection,
+    rows: Vec<groups::Row>,
+    group_projection: groups::Projection,
     selected: usize,
     offset: usize,
     query: Input,
@@ -178,6 +191,8 @@ impl Model {
             visible: vec![],
             matching: vec![],
             alias_projection: aliases::Projection::default(),
+            rows: Vec::new(),
+            group_projection: groups::Projection::default(),
             selected: 0,
             offset: 0,
             query: Input {
@@ -226,9 +241,10 @@ impl Model {
             .unwrap_or("")
     }
     fn selected_host(&self) -> Option<Host> {
-        self.visible
-            .get(self.selected)
-            .and_then(|&i| self.all.get(i).cloned())
+        match self.rows.get(self.selected) {
+            Some(groups::Row::Host(index)) => self.all.get(*index).cloned(),
+            _ => None,
+        }
     }
     fn filter(&mut self, reset: bool) {
         let identity = if reset { None } else { self.selected_host() };
@@ -238,6 +254,13 @@ impl Model {
             self.pending_preferred = None;
         }
         self.refilter(identity.as_ref(), fallback);
+        if reset {
+            self.selected = self
+                .rows
+                .iter()
+                .position(|row| matches!(row, groups::Row::Host(_)))
+                .unwrap_or(0);
+        }
     }
     fn matching_indices(&self) -> Vec<usize> {
         self.all
@@ -276,6 +299,7 @@ impl Model {
         })
     }
     fn refilter(&mut self, identity: Option<&Host>, fallback: usize) {
+        let group = self.selected_group();
         self.search = search::Query::parse(&self.query.value);
         self.matching = self.matching_indices();
         self.visible = if self.preferences.group_aliases {
@@ -305,15 +329,7 @@ impl Model {
                 }
             })
         });
-        self.selected = identity
-            .and_then(|host| {
-                self.visible.iter().position(|&i| {
-                    self.all[i].name == host.name && self.all[i].source_file == host.source_file
-                })
-            })
-            .unwrap_or(fallback)
-            .min(self.visible.len().saturating_sub(1));
-        self.offset = self.offset.min(self.selected);
+        self.rebuild_rows(identity, group, fallback);
     }
     /// Replace the backing collection only after capturing the old selection's identity.
     /// Prefer saved hosts within the exact source scope; retain existing text-search behavior.
@@ -397,7 +413,19 @@ impl Model {
     fn refresh_search_membership(&mut self) {
         let next = self.matching_indices();
         if next != self.matching {
+            let was_empty = self.rows.is_empty();
             self.filter(false);
+            if was_empty {
+                // First async results have no prior identity. Keep Enter targeting
+                // the first displayed host without opening deliberately closed groups.
+                if let Some(index) = self
+                    .rows
+                    .iter()
+                    .position(|row| matches!(row, groups::Row::Host(_)))
+                {
+                    self.selected = index;
+                }
+            }
         }
     }
     fn apply_inspection(&mut self, result: runtime::effective::Inspection) {
@@ -487,7 +515,7 @@ impl Model {
         self.selected = self
             .selected
             .saturating_add_signed(delta)
-            .min(self.visible.len().saturating_sub(1));
+            .min(self.rows.len().saturating_sub(1));
     }
     fn open_view(&mut self, view: View) {
         let parent = std::mem::replace(&mut self.view, view);
@@ -648,6 +676,7 @@ impl Model {
                 }
             }
             View::Aliases { .. } => return aliases::key(self, k),
+            View::GroupMode { .. } => return groups::key(self, k),
             View::Profiles(_) => return self.profile_key(k),
             View::Active { .. } => return self.active_key(k),
             View::Forward(f) => {
@@ -700,6 +729,16 @@ impl Model {
                     },
                     _ => Action::None,
                 };
+            }
+            View::GroupInfo { .. } => {
+                if matches!(k.code, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter)
+                    || (ctrl && k.code == KeyCode::Char('c'))
+                {
+                    self.back();
+                } else {
+                    self.scroll_key(k);
+                }
+                return Action::None;
             }
             View::Info(h) => {
                 if k.code == KeyCode::F(5) {
@@ -836,6 +875,7 @@ impl Model {
                 if let Some(h) = self.selected_host() {
                     return Action::Connect(h.name, None);
                 }
+                self.group_navigation(KeyCode::Enter);
             }
             KeyCode::Char('/') if !self.search_focus => self.search_focus = true,
             KeyCode::Char('f') if ctrl && !self.search_focus => self.search_focus = true,
@@ -847,6 +887,8 @@ impl Model {
                 }
             }
             KeyCode::Char('A') => return Action::ToggleAliases,
+            KeyCode::Char('g') => groups::open(self),
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => self.group_navigation(k.code),
             KeyCode::Char('c') => return Action::SourceFilter,
             KeyCode::Char('C') => {
                 self.source_filter = None;
@@ -857,7 +899,7 @@ impl Model {
             KeyCode::PageDown => self.navigate(self.page as isize),
             KeyCode::PageUp => self.navigate(-(self.page as isize)),
             KeyCode::Home => self.selected = 0,
-            KeyCode::End => self.selected = self.visible.len().saturating_sub(1),
+            KeyCode::End => self.selected = self.rows.len().saturating_sub(1),
             KeyCode::Char('*') => return self.activate_action(PaletteAction::Favorite),
             KeyCode::Char('N') => return self.activate_action(PaletteAction::Note),
             KeyCode::Char('D') => return self.activate_action(PaletteAction::Duplicate),
@@ -866,6 +908,13 @@ impl Model {
             KeyCode::Char('i') => {
                 if let Some(h) = self.selected_host() {
                     self.open_view(View::Info(h));
+                } else if let Some(groups::Row::Group { key, count, .. }) =
+                    self.rows.get(self.selected)
+                {
+                    self.open_view(View::GroupInfo {
+                        key: key.clone(),
+                        count: *count,
+                    });
                 }
             }
             KeyCode::Char('m') => {
@@ -902,8 +951,12 @@ impl Model {
         Action::None
     }
     fn activate_action(&mut self, action: PaletteAction) -> Action {
+        if !action.enabled(self.selected_host().is_some()) {
+            return Action::None;
+        }
         match action {
             PaletteAction::ToggleAliases => return Action::ToggleAliases,
+            PaletteAction::GroupMode => groups::open(self),
             PaletteAction::ChooseAlias => aliases::open(self),
             PaletteAction::SourceFilter => return Action::SourceFilter,
             PaletteAction::ClearSourceFilter => {
@@ -1352,6 +1405,7 @@ pub fn run(
                 false
             }),
             Action::ToggleAliases => aliases::toggle(&mut m, &paths.root).map(|_| false),
+            Action::GroupMode(mode) => groups::save(&mut m, &paths.root, mode).map(|_| false),
             Action::SourceFilter => source_filter::open(&mut m, config).map(|_| false),
             Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
             Action::Duplicate(host) => select_duplicate_files(&mut m, config, host).map(|_| false),

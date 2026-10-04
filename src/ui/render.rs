@@ -108,10 +108,12 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         View::Active { .. } => active::draw(f, m, area),
         View::Profiles(_) => profile_list(f, m, area),
         View::Info(_) => info(f, m, area),
+        View::GroupInfo { .. } => group_info(f, m, area),
         View::Help => help(f, m, area),
         View::Files { .. } => files(f, m, area),
         View::SourceFiles { .. } => source_files(f, m, area),
         View::Aliases { .. } => alias_chooser(f, m, area),
+        View::GroupMode { .. } => group_mode(f, m, area),
     }
 }
 fn list(f: &mut Frame, m: &mut Model, area: Rect) {
@@ -176,13 +178,9 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     let status_height = browser_status(
         m,
         area.width,
-        if m.visible.is_empty() {
-            0
-        } else {
-            m.selected + 1
-        },
-        m.visible.len(),
-        m.visible.len(),
+        if m.rows.is_empty() { 0 } else { m.selected + 1 },
+        m.rows.len(),
+        m.rows.len(),
     )
     .len() as u16;
     let chunks = Layout::default()
@@ -206,7 +204,11 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
                 .unwrap_or_default()
                 .label()
         })
-        .unwrap_or("No selection");
+        .unwrap_or(if m.selected_group().is_some() {
+            "Group • i: info • Enter: toggle"
+        } else {
+            "No selection"
+        });
     let title = if m.connection_result.is_empty() {
         "SSHO • F4: details"
     } else {
@@ -342,7 +344,58 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     .style(Style::default().fg(if m.search_focus { GRAY } else { CYAN }));
     let row_capacity = inner.height.saturating_sub(1) as usize;
     m.page = row_capacity.max(1);
-    let rows = m.visible.iter().enumerate().map(|(position, &index)| {
+    // A stable source ordinal disambiguates even identical truncated path tails.
+    let sources: BTreeMap<_, _> = m
+        .all
+        .iter()
+        .map(|host| &host.source_file)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .enumerate()
+        .map(|(index, path)| (path, index + 1))
+        .collect();
+    let rows = m.rows.iter().enumerate().map(|(position, row)| {
+        let index = match row {
+            groups::Row::Host(index) => *index,
+            groups::Row::Group { key, depth, count } => {
+                let marker = if m.group_projection.collapsed(key) {
+                    "▶"
+                } else {
+                    "▼"
+                };
+                let unit = if m.preferences.group_aliases {
+                    "blocks"
+                } else {
+                    "hosts"
+                };
+                let ordinal = match key {
+                    groups::Key::File(path) => format!("{} ", sources[path]),
+                    _ => String::new(),
+                };
+                let prefix = format!("{}{marker} {ordinal}", "  ".repeat(*depth));
+                let suffix = format!(" ({count})");
+                let available =
+                    usize::from(widths[0]).saturating_sub(prefix.width() + suffix.width());
+                let label = group_label(&key.label(), available);
+                return Row::new(
+                    vec![
+                        Cell::from(format!("{prefix}{label}{suffix}")),
+                        Cell::from(format!("{count} {unit}")),
+                    ]
+                    .into_iter()
+                    .take(widths.len()),
+                )
+                .style(
+                    Style::default()
+                        .fg(if position == m.selected {
+                            Color::Black
+                        } else {
+                            CYAN
+                        })
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+        };
         let h = &m.all[index];
         let (status, color) = match m.statuses.get(&h.name).map(|r| &r.status) {
             Some(PingStatus::Online) => ("+", Color::Green),
@@ -414,7 +467,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         Row::new(cells.into_iter().take(widths.len()))
     });
     let mut state = TableState::default()
-        .with_selected(if m.visible.is_empty() {
+        .with_selected(if m.rows.is_empty() {
             None
         } else {
             Some(m.selected)
@@ -430,7 +483,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         &mut state,
     );
     m.offset = state.offset();
-    if m.visible.is_empty() {
+    if m.rows.is_empty() {
         let empty = Rect::new(
             inner.x,
             inner.y.saturating_add(1),
@@ -451,7 +504,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             empty,
         );
     }
-    let (position, first, last) = if m.visible.is_empty() {
+    let (position, first, last) = if m.rows.is_empty() {
         (0, 0, 0)
     } else if row_capacity == 0 {
         (m.selected + 1, 0, 0)
@@ -459,7 +512,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         (
             m.selected + 1,
             m.offset + 1,
-            (m.offset + row_capacity).min(m.visible.len()),
+            (m.offset + row_capacity).min(m.rows.len()),
         )
     };
     let status = browser_status(m, chunks[4].width, position, first, last);
@@ -555,6 +608,39 @@ fn browser_status(
     first: usize,
     last: usize,
 ) -> Vec<Line<'static>> {
+    if m.preferences.group_mode != GroupMode::Flat {
+        let hosts = if m.preferences.group_aliases {
+            format!(
+                "{} blocks • {}/{} aliases",
+                m.visible.len(),
+                m.matching.len(),
+                m.all.len()
+            )
+        } else {
+            format!("Hosts: {}/{}", m.visible.len(), m.all.len())
+        };
+        let groups = format!("{} groups", m.group_projection.group_count);
+        let rows = format!(
+            "Selected: {position}/{} • Rows: {first}-{last}",
+            m.rows.len()
+        );
+        let full = format!("{hosts} • {groups} • {rows}");
+        if full.width() <= usize::from(width) {
+            return vec![Line::from(full)];
+        }
+        let counts = format!("{hosts} • {groups}");
+        if counts.width() <= usize::from(width) {
+            return vec![Line::from(counts), Line::from(rows)];
+        }
+        return if m.preferences.group_aliases {
+            vec![
+                Line::from(format!("{} blocks • {groups}", m.visible.len())),
+                Line::from(format!("{}/{} aliases", m.matching.len(), m.all.len())),
+            ]
+        } else {
+            vec![Line::from(hosts), Line::from(groups)]
+        };
+    }
     if !m.preferences.group_aliases {
         return list_status(width, m.visible.len(), m.all.len(), position, first, last);
     }
@@ -1362,7 +1448,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
     let left = [
         "Navigation & Connection",
-        "",
+        "Group Enter/Space: expand/collapse",
         "Enter  connect (also from search)",
         "SSH exit returns here with its result",
         "↑↓     select (Ctrl+P/N in search)",
@@ -1373,7 +1459,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "F4     toggle details (width >=110)",
         "F5     reload config and Includes",
         "Alt+↑↓ scroll details (Ctrl+PgUp/PgDn)",
-        "",
+        "g/F2 groups; ←/→ parent/open; i: info",
         "Host Management",
         "",
         "a      add new host",
@@ -1604,4 +1690,102 @@ fn profile_list(f: &mut Frame, m: &Model, area: Rect) {
         ]),
         parts[2],
     );
+}
+
+/// Keep the distinguishing path tail when headers have only one compact column.
+fn group_label(label: &str, width: usize) -> String {
+    if label.width() <= width {
+        return label.into();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut tail = String::new();
+    for c in label.chars().rev() {
+        let candidate = format!("{c}{tail}");
+        if candidate.width() + 1 > width {
+            break;
+        }
+        tail = candidate;
+    }
+    format!("…{tail}")
+}
+
+fn group_mode(f: &mut Frame, m: &Model, area: Rect) {
+    let View::GroupMode { selected } = &m.view else {
+        return;
+    };
+    let area = inset(area);
+    let parts = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(if m.error.is_empty() { 0 } else { 2 }),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    f.render_widget(
+        Paragraph::new("Groupes • Group view").style(accent()),
+        parts[0],
+    );
+    f.render_widget(
+        Paragraph::new(m.error.as_str())
+            .style(Style::default().fg(Color::LightRed))
+            .wrap(Wrap { trim: false }),
+        parts[1],
+    );
+    let capacity = usize::from(parts[2].height).max(1);
+    let offset = selected.saturating_sub(capacity - 1);
+    let lines: Vec<_> = groups::MODES
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .map(|(index, (_, label))| {
+            Line::styled(
+                format!("{} {label}", if index == *selected { "▶" } else { " " }),
+                if index == *selected {
+                    Style::default().bg(CYAN).fg(Color::Black)
+                } else {
+                    Style::default()
+                },
+            )
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines), parts[2]);
+    f.render_widget(Paragraph::new("↑/↓ • Enter: save • Esc: cancel"), parts[3]);
+}
+
+pub(super) fn group_content(key: &groups::Key, count: usize, aliases: bool) -> Vec<Line<'static>> {
+    let (path, tag) = match key {
+        groups::Key::File(path) => (path, None),
+        groups::Key::Tag(path, tag) => (path, Some(tag.as_deref().unwrap_or("Sans tag"))),
+    };
+    let mut lines = vec![
+        Line::from("Source:"),
+        Line::from(path.display().to_string()),
+    ];
+    if let Some(tag) = tag {
+        lines.push(Line::from(format!("Primary tag: {tag}")));
+    }
+    lines.extend([
+        Line::from(format!("{count} matching {}", if aliases { "blocks" } else { "hosts" })),
+        Line::from("In list: Enter/Space toggles group; Left closes or selects parent; Right opens or selects child."),
+        Line::from("Select a host for SSH and host actions."),
+    ]);
+    lines
+}
+fn group_info(f: &mut Frame, m: &mut Model, area: Rect) {
+    let View::GroupInfo { key, count } = &m.view else {
+        return;
+    };
+    let lines = group_content(key, *count, m.preferences.group_aliases);
+    let parts = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(inset(area));
+    f.render_widget(Paragraph::new("Group info").style(accent()), parts[0]);
+    m.page = usize::from(parts[1].height).max(1);
+    details::render_rows(f, parts[1], lines, &mut m.scroll);
+    f.render_widget(Paragraph::new("↑↓: scroll • Esc: back"), parts[2]);
 }

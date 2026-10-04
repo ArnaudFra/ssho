@@ -34,9 +34,15 @@ class Session:
         atexit.register(self.cleanup)
 
     def cleanup(self):
+        self.capture()
         if self.process.poll() is None:
             self.process.kill()
             self.process.wait()
+
+    def capture(self):
+        if "SSHM_TEST_FIXTURE_DIR" in os.environ:
+            root = Path(os.environ["SSHM_TEST_FIXTURE_DIR"])
+            (root / f"terminal-{self.process.pid}.raw").write_bytes(self.output)
 
     def drain(self, duration=0.25):
         deadline = time.monotonic() + duration
@@ -71,6 +77,7 @@ class Session:
         self.send(b"\r")
 
     def close(self, expected=0):
+        self.capture()
         try:
             code = self.process.wait(timeout=5)
             self.drain(0.05)
@@ -100,7 +107,7 @@ def cli(env, *args):
 
 
 with (nullcontext(os.environ["SSHM_TEST_FIXTURE_DIR"])
-      if any(flag in sys.argv[2:] for flag in ("--launcher-only", "--aliases-only")) and "SSHM_TEST_FIXTURE_DIR" in os.environ
+      if "SSHM_TEST_FIXTURE_DIR" in os.environ
       else tempfile.TemporaryDirectory(prefix="ssho-pty-")) as directory:
     home = Path(directory)
     (home/".ssh").mkdir()
@@ -144,6 +151,109 @@ sys.exit(int(mode))
     mode = home/"ssh-mode"
     mode.write_text("37")
     env["SSHM_TEST_MODE"] = str(mode)
+
+    if "--groups-only" in sys.argv[2:]:
+        first = home/"one/config"
+        second = home/"two/config"
+        first.parent.mkdir()
+        second.parent.mkdir()
+        first.write_text("# FileTags: inherited\n# Tags: own, other\nHost production prod\n HostName primary.target\n User deploy\n\nHost beta\n HostName beta.target\n")
+        second.write_text("Host gamma\n HostName gamma.target\n")
+        config.write_text(f'Include "{first}" "{second}"\n')
+        original = {path: path.read_bytes() for path in (config, first, second)}
+        (legacy/"config.json").write_text(json.dumps(dict(ping_on_start=False, check_for_updates=False, focus_search_on_start=False, group_aliases=True)))
+        session = Session(env)
+        session.expect("3 blocks")
+        session.send(b"g")
+        session.expect("Group view")
+        session.send(b"\x1b[B\r")
+        session.expect("2 groups")
+        app_config = home/".config/ssho/config.json"
+        assert json.loads(app_config.read_text())["group_mode"] == "files"
+        # Header Enter/Space toggle only; every host mutation and F3/F6 is inert.
+        session.send(b"\x1b[H\r")
+        session.expect("Selected: 1/3")
+        for sequence in (b"edmfN*Dp", b"\x1bOR", b"\x1b[17~"):
+            session.send(sequence)
+            session.expect("2 groups")
+        assert not (home/"ssh-args").exists()
+        session.send(b"\x1bOQ\x1b[B\r")  # F2 Edit is disabled
+        session.expect("Unavailable: no host")
+        session.send(b"\x1b")
+        session.send(b"/prod")
+        session.expect("1 blocks")
+        session.send(b"\r")
+        session.expect("SSH exit 37: production")
+        assert (home/"ssh-args").read_text().splitlines()[-1] == "production"
+        session.send(b"\x1bOR\x1b[B\r")
+        session.expect("→prod")
+        session.send(b"\r")
+        session.expect("SSH exit 37: prod")
+        assert (home/"ssh-args").read_text().splitlines()[-1] == "prod"
+        session.send(b"\x1b")  # standalone Esc clears query (Esc+Tab can encode Alt+Tab)
+        session.send(b"\t\x1b[H")  # table focus; manual first-file collapse restored
+        session.expect("Selected: 1/3")
+        session.send(b"\x1b[15~")  # F5 keeps selected header + collapse
+        session.expect("Selected: 1/3")
+        # Fresh preference write preserves launcher, alias mode and unknown fields.
+        latest = json.loads(app_config.read_text())
+        latest.update(ssh_command=["ssh", "-v"], future_setting={"preserve": [1, 2]})
+        app_config.write_text(json.dumps(latest))
+        session.send(b"\x1bOQ" + b"\x1b[B" * 18 + b"\r")
+        session.expect("Group view")
+        session.send(b"\x1b[F\r")
+        session.expect("5 groups")
+        saved = json.loads(app_config.read_text())
+        assert saved["group_mode"] == "file_tags"
+        assert saved["group_aliases"] is True
+        assert saved["ssh_command"] == ["ssh", "-v"]
+        assert saved["future_setting"] == {"preserve": [1, 2]}
+        session.send(b"\x1b[C")  # expand first file, then children use hierarchy
+        session.expect("inherited")
+        session.expect("own")
+        session.expect("Sans tag")
+        # Group info exposes the full path in a narrow terminal and never starts SSH.
+        fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 24, 0, 0))
+        os.kill(session.process.pid, signal.SIGWINCH)
+        session.expect("3 blocks • 5 groups")  # wait for compact redraw before keyboard input
+        session.send(b"i")
+        session.expect("Group info")
+        session.expect(str(first))
+        session.send(b"\r")
+        session.expect("groups")
+        assert (home/"ssh-args").read_text().splitlines()[-1] == "prod"
+        # Failed atomic write reports the error INSIDE the still-open picker.
+        fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 100, 0, 0))
+        os.kill(session.process.pid, signal.SIGWINCH)
+        session.expect("3 blocks • 4/4 aliases • 5 groups")
+        protected = home/"protected-config.json"
+        app_config.rename(protected)
+        app_config.symlink_to(protected)
+        session.send(b"g\x1b[H\r")
+        session.expect("Group view")
+        session.expect("refusing application file")
+        assert json.loads(protected.read_text())["group_mode"] == "file_tags"
+        app_config.unlink()
+        protected.rename(app_config)
+        session.send(b"\x1b")
+        session.expect("5 groups")
+        session.send(b"\x03")
+        session.close()
+        # Restart retains mode, but collapse is deliberately session-only.
+        session = Session(env)
+        session.expect("5 groups")
+        session.expect("production")
+        session.expect("gamma")
+        # Query always starts on a concrete host, even with file + tag parents.
+        session.send(b"/gamma\r")
+        session.expect("SSH exit 37: gamma")
+        assert (home/"ssh-args").read_text().splitlines() == ["-v", "-F", str(config), "gamma"]
+        session.send(b"\x03")
+        session.close()
+        assert all(path.read_bytes() == before for path, before in original.items())
+        assert set(cli(env, "search", "--format", "simple").splitlines()) == {"production", "prod", "beta", "gamma"}
+        print("Groups PTY passed: modes/F2, header safety, hierarchy/query/reload/SSH, alias targets, narrow full paths, fresh persistence and visible failure")
+        sys.exit(0)
 
     if "--aliases-only" in sys.argv[2:]:
         config.write_text("Match host production\n HostName primary.target\n User primary-user\n"
@@ -749,7 +859,8 @@ sys.exit(int(mode))
     session.expect("Port: 2211")
     reload_root.unlink()
     session.send(b"\x1b[15~")
-    session.expect("No such file")
+    session.expect("Error: reading SSH config")
+    session.expect("(os error 2)")  # No-such-file text may wrap across table borders
     session.expect("newest-user")
     reload_root.write_text(f"Include {reload_parts}/*\nHost reload-root\n HostName 127.0.0.4\n")
     reload_keep.unlink()

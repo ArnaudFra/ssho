@@ -293,6 +293,18 @@ fn nullable_ssh_command<'de, D: Deserializer<'de>>(
     Ok(command)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupMode {
+    #[default]
+    Flat,
+    Files,
+    FileTags,
+}
+fn nullable_group_mode<'de, D: Deserializer<'de>>(deserializer: D) -> Result<GroupMode, D::Error> {
+    Ok(Option::<GroupMode>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -308,6 +320,8 @@ pub struct AppConfig {
     pub ssh_command: Vec<String>,
     #[serde(deserialize_with = "nullable_false")]
     pub group_aliases: bool,
+    #[serde(deserialize_with = "nullable_group_mode")]
+    pub group_mode: GroupMode,
 }
 
 impl Default for AppConfig {
@@ -319,6 +333,7 @@ impl Default for AppConfig {
             key_bindings: KeyBindings::default(),
             ssh_command: default_ssh_command(),
             group_aliases: false,
+            group_mode: GroupMode::Flat,
         }
     }
 }

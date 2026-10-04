@@ -139,11 +139,12 @@ pub(super) fn key(m: &mut Model, key: KeyEvent) -> Action {
 }
 
 pub(super) fn toggle(m: &mut Model, root: &Path) -> Result<()> {
+    let identity = m.selected_host();
     let enabled = !m.preferences.group_aliases;
     // Fresh read protects settings edited externally since the browser was opened.
     let preferences = AppConfig::update(root, |config| config.group_aliases = enabled)?;
     m.preferences = preferences;
-    m.filter(false);
+    m.refilter(identity.as_ref(), m.selected);
     m.error.clear();
     Ok(())
 }
