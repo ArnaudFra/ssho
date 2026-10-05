@@ -12,6 +12,10 @@ pub(super) struct Review {
     rows: usize,
 }
 pub(super) fn open(m: &mut Model, action: Action, root: &Path) -> Result<()> {
+    // Native copy preflight may wait on ssh -G; keep batch deadlines and cancellation live.
+    if matches!(action, Action::SaveCopy(..)) {
+        m.batch.ensure_foreground_idle()?;
+    }
     let (plan, title) = match &action {
         Action::Save(Some(original), host, _) => (
             preview::prepare_update(original, host)?,

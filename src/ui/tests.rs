@@ -5073,3 +5073,21 @@ fn expanding_or_retaining_source_keeps_applicable_pending_save_resolution() {
         assert_eq!(m.source_filter.is_some(), selection == "same");
     }
 }
+
+#[test]
+fn batch_open_requires_explicit_targets_and_search_keeps_shortcuts_literal() {
+    let mut m = model();
+    typing(&mut m, "xB");
+    assert_eq!(m.query.value, "xB");
+    assert!(matches!(m.view, View::List));
+    m.query.set("");
+    m.filter(true);
+    m.search_focus = false;
+    m.key(key(KeyCode::Char('B')));
+    let text = screen(&mut m, 100, 25);
+    assert!(text.contains("Batch"), "{text}");
+    assert!(
+        text.contains("0 targets"),
+        "opening must not implicitly select: {text}"
+    );
+}

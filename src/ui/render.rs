@@ -77,7 +77,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     };
     if m.quit_tunnels {
         f.render_widget(
-            Paragraph::new(if m.has_unsaved_context() { "Discard unsaved edits and stop owned tunnels, then quit?\nEnter: discard + stop + quit • Esc: return" } else { "Stop owned tunnels and quit?\nEnter: stop + quit • Esc: return" })
+            Paragraph::new(if m.batch.manager.has_active() { "Cancel active batch, discard unsaved edits and stop owned tunnels, then quit?\nDetached remote work may continue.\nEnter: cancel + quit • Esc: return" } else if m.has_unsaved_context() { "Discard unsaved edits and stop owned tunnels, then quit?\nEnter: discard + stop + quit • Esc: return" } else { "Stop owned tunnels and quit?\nEnter: stop + quit • Esc: return" })
                 .block(block("Active tunnels", true))
                 .wrap(Wrap { trim: false }),
             panel(area, 66, 7),
@@ -97,6 +97,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     }
     match &m.view {
         View::List => list(f, m, area),
+        View::Batch(_) | View::BatchResults { .. } => batch::draw(f, m, area),
         View::Changes(_) | View::Backups { .. } => changes::draw(f, m, area),
         View::Actions { .. } => {
             list(f, m, area);
@@ -405,7 +406,8 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         };
         let mut name_spans = vec![Span::styled(
             format!(
-                "{status}{} ",
+                "{status}{}{}",
+                if m.batch.marked(h) { "x" } else { " " },
                 if m.metadata.get(&h.name).is_some_and(|entry| entry.favorite) {
                     "*"
                 } else {
@@ -1441,7 +1443,7 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     }
 }
 fn help(f: &mut Frame, m: &mut Model, area: Rect) {
-    let area = panel(area, 96, 30);
+    let area = panel(area, 96, 33);
     let border = block("SSHO - Commands", true);
     let inner = border.inner(area);
     f.render_widget(border, area);
@@ -1477,6 +1479,9 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "*      toggle favorite (pinned first)",
         "N      edit personal note",
         "F2     Favoris seuls: favorites filter",
+        "x      mark active alias; B: prepare / active batch",
+        "F2     batch: select filter results / clear / last results",
+        "Batch: Ctrl+L review, Enter confirm; s cancels results",
         "p      ping all hosts",
         "H      toggle hidden hosts visibility",
         "f      last forwarding draft (Ctrl+L launch, Ctrl+S save profile)",

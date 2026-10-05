@@ -20,10 +20,15 @@ pub(super) enum PaletteAction {
     ToggleAliases,
     ChooseAlias,
     GroupMode,
+    BatchMark,
+    BatchSelectVisible,
+    BatchClear,
+    BatchOpen,
+    BatchResults,
 }
 
 impl PaletteAction {
-    pub(super) const ALL: [Self; 19] = [
+    pub(super) const ALL: [Self; 24] = [
         Self::Add,
         Self::Edit,
         Self::Tunnel,
@@ -43,10 +48,20 @@ impl PaletteAction {
         Self::ToggleAliases,
         Self::ChooseAlias,
         Self::GroupMode,
+        Self::BatchMark,
+        Self::BatchSelectVisible,
+        Self::BatchClear,
+        Self::BatchOpen,
+        Self::BatchResults,
     ];
 
     pub(super) fn label(self) -> &'static str {
         match self {
+            Self::BatchMark => "Lot : marquer alias x",
+            Self::BatchSelectVisible => "Lot : sélectionner résultats du filtre",
+            Self::BatchClear => "Lot : effacer les marques",
+            Self::BatchOpen => "Lot : préparer / actif B",
+            Self::BatchResults => "Lot : derniers résultats",
             Self::GroupMode => "Groupes g",
             Self::ToggleAliases => "Alias regroupés A",
             Self::ChooseAlias => "Choisir un alias F3",
@@ -73,7 +88,11 @@ impl PaletteAction {
         has_host
             || matches!(
                 self,
-                Self::GroupMode
+                Self::BatchSelectVisible
+                    | Self::BatchClear
+                    | Self::BatchOpen
+                    | Self::BatchResults
+                    | Self::GroupMode
                     | Self::ToggleAliases
                     | Self::SourceFilter
                     | Self::ClearSourceFilter

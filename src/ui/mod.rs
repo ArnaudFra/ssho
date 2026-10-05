@@ -4,6 +4,9 @@ mod active;
 mod aliases;
 #[cfg(test)]
 mod aliases_tests;
+mod batch;
+#[cfg(test)]
+mod batch_tests;
 mod changes;
 mod details;
 mod forms;
@@ -59,6 +62,12 @@ pub enum InitialView {
 #[derive(Clone, Debug)]
 enum View {
     List,
+    Batch(batch::Editor),
+    BatchResults {
+        selected: usize,
+        stderr: bool,
+        offset: usize,
+    },
     Changes(changes::Review),
     Backups {
         entries: Vec<config::backups::Backup>,
@@ -109,6 +118,8 @@ enum Action {
     Connect(String, Option<Forward>),
     StartTunnel(String, Option<String>, Forward),
     StopTunnel(u64),
+    StartBatch,
+    CancelBatch,
     Add(String),
     Move(Host),
     Duplicate(Host),
@@ -139,6 +150,7 @@ struct PendingPreferred {
     provisional: Option<runtime::effective::EffectiveConfig>,
 }
 struct Model {
+    batch: batch::State,
     all: Vec<Host>,
     visible: Vec<usize>,
     // Unsorted raw search membership, independent of projected display rows.
@@ -187,6 +199,7 @@ impl Model {
     ) -> Self {
         let search_focus = force_search || preferences.focus_search_on_start;
         let mut m = Self {
+            batch: batch::State::default(),
             all,
             visible: vec![],
             matching: vec![],
@@ -228,6 +241,7 @@ impl Model {
             scroll: 0,
             details: details::State::default(),
         };
+        m.batch.cache_sources(&m.all);
         m.filter(false);
         m
     }
@@ -334,6 +348,7 @@ impl Model {
     /// Replace the backing collection only after capturing the old selection's identity.
     /// Prefer saved hosts within the exact source scope; retain existing text-search behavior.
     fn replace_hosts(&mut self, all: Vec<Host>, preferred: Option<Host>) {
+        self.batch.cache_sources(&all);
         let identity = preferred.clone().or_else(|| self.selected_host());
         let fallback = self.selected;
         let pending = self.pending_preferred.take();
@@ -539,7 +554,7 @@ impl Model {
             })
     }
     fn quit_action(&mut self) -> Action {
-        if self.has_unsaved_context() && !self.quit_tunnels {
+        if (self.has_unsaved_context() || self.batch.manager.has_active()) && !self.quit_tunnels {
             self.quit_tunnels = true;
             Action::None
         } else {
@@ -560,6 +575,10 @@ impl Model {
         let input = match &mut self.view {
             View::List if self.search_focus => &mut self.query,
             View::Note(editor) => &mut editor.input,
+            View::Batch(editor) => {
+                let Some(input) = editor.input() else { return };
+                input
+            }
             View::Host(form) => {
                 if form.name_focus {
                     &mut form.names[form.focus]
@@ -631,6 +650,7 @@ impl Model {
             return Action::Backups;
         }
         match &mut self.view {
+            View::Batch(_) | View::BatchResults { .. } => return batch::key(self, k),
             View::Changes(_) | View::Backups { .. } => return changes::key(self, k),
             View::Note(editor) => {
                 return match editor.key(k) {
@@ -886,6 +906,8 @@ impl Model {
                     self.filter(true);
                 }
             }
+            KeyCode::Char('x') => batch::mark(self),
+            KeyCode::Char('B') => batch::open(self),
             KeyCode::Char('A') => return Action::ToggleAliases,
             KeyCode::Char('g') => groups::open(self),
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => self.group_navigation(k.code),
@@ -955,6 +977,11 @@ impl Model {
             return Action::None;
         }
         match action {
+            PaletteAction::BatchMark => batch::mark(self),
+            PaletteAction::BatchSelectVisible => batch::select_visible(self),
+            PaletteAction::BatchClear => self.batch.marks.clear(),
+            PaletteAction::BatchOpen => batch::open(self),
+            PaletteAction::BatchResults => batch::show_results(self),
             PaletteAction::ToggleAliases => return Action::ToggleAliases,
             PaletteAction::GroupMode => groups::open(self),
             PaletteAction::ChooseAlias => aliases::open(self),
@@ -1287,6 +1314,8 @@ pub fn run(
         force_search,
     );
     m.metadata = metadata.hosts().clone();
+    m.batch.root = config.to_path_buf();
+    m.batch.history_root = Some(paths.root.clone());
     m.config_warnings = report.warnings;
     m.tunnel_profiles = profiles.hosts().clone();
     m.tunnel_modes = profiles.modes().clone();
@@ -1318,6 +1347,11 @@ pub fn run(
         Terminal::new(CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;
     loop {
+        match m.batch.poll() {
+            Ok(Some(history)) => m.history = history.connections,
+            Ok(None) => {}
+            Err(error) => m.error = format!("Warning: {error:#}"),
+        }
         tunnels.poll(&mut m, paths);
         while let Ok(result) = inspection.try_recv() {
             m.apply_inspection(result);
@@ -1356,12 +1390,25 @@ pub fn run(
             }),
             Action::Backups => changes::open_backups(&mut m, &paths.root).map(|_| false),
             Action::RestoreBackup(index) => changes::open_restore(&mut m, index).map(|_| false),
+            Action::StartBatch => batch::start(&mut m).map(|_| false),
+            Action::CancelBatch => {
+                m.batch.manager.cancel();
+                Ok(false)
+            }
             Action::None => Ok(false),
             Action::Quit => {
-                if (tunnels.manager.has_active() || m.has_unsaved_context()) && !m.quit_tunnels {
+                if (tunnels.manager.has_active()
+                    || m.batch.manager.has_active()
+                    || m.has_unsaved_context())
+                    && !m.quit_tunnels
+                {
                     m.quit_tunnels = true;
                     Ok(false)
                 } else {
+                    m.batch.manager.cancel();
+                    if let Err(error) = m.batch.poll() {
+                        m.error = format!("Warning: {error:#}");
+                    }
                     tunnels.manager.stop_all();
                     tunnels.poll(&mut m, paths);
                     guard.restore();
@@ -1375,6 +1422,9 @@ pub fn run(
                 .start(&mut m, paths, config, name, profile, forward)
                 .map(|_| false),
             Action::StopTunnel(id) => tunnels.manager.stop(id).map(|_| false),
+            Action::Connect(_, _) if m.batch.manager.has_active() => {
+                m.batch.ensure_foreground_idle().map(|_| false)
+            }
             Action::Connect(name, forward) => {
                 #[cfg(unix)]
                 let signals = SshSignals::enter()?;

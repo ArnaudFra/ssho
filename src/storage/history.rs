@@ -48,17 +48,26 @@ impl History {
 
     /// Call once at the same connection/tunnel attempt boundary as SSHM.
     pub fn record(&mut self, name: &str, forward: Option<&Forward>) -> Result<()> {
+        self.record_at(name, forward, Utc::now())
+    }
+
+    pub fn record_at(
+        &mut self,
+        name: &str,
+        forward: Option<&Forward>,
+        at: chrono::DateTime<Utc>,
+    ) -> Result<()> {
         let mut connections = self.connections.clone();
         let connection = connections
             .entry(name.to_owned())
             .or_insert_with(|| ConnectionInfo {
                 host_name: name.to_owned(),
-                last_connect: Utc::now(),
+                last_connect: at,
                 connect_count: 0,
                 port_forwarding: None,
                 ..ConnectionInfo::default()
             });
-        connection.last_connect = Utc::now();
+        connection.last_connect = at;
         connection.connect_count = connection
             .connect_count
             .checked_add(1)
@@ -75,11 +84,20 @@ impl History {
         exit_code: Option<i32>,
         launch_error: Option<String>,
     ) -> Result<()> {
+        self.complete_at(name, exit_code, launch_error, Utc::now())
+    }
+
+    pub fn complete_at(
+        &mut self,
+        name: &str,
+        exit_code: Option<i32>,
+        launch_error: Option<String>,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<()> {
         let mut connections = self.connections.clone();
         let connection = connections
             .get_mut(name)
             .context("connection attempt is absent from history")?;
-        let now = Utc::now();
         connection.last_result = Some(crate::types::ConnectionResult {
             completed_at: now,
             exit_code,
@@ -160,6 +178,30 @@ mod tests {
         assert_eq!(
             loaded.original["connections"]["prod"]["last_result"]["future_result"],
             true
+        );
+    }
+}
+
+#[cfg(test)]
+mod batch_timestamp_tests {
+    use super::*;
+    #[test]
+    fn batch_history_uses_event_time_not_ui_poll_time() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut h = History::load(tmp.path()).unwrap();
+        let attempted = "2020-01-01T00:00:00Z".parse().unwrap();
+        let completed = "2020-01-01T00:00:07Z".parse().unwrap();
+        h.record_at("frozen", None, attempted).unwrap();
+        h.complete_at("frozen", Some(0), None, completed).unwrap();
+        let h = History::load(tmp.path()).unwrap();
+        assert_eq!(h.connections["frozen"].last_connect, attempted);
+        assert_eq!(
+            h.connections["frozen"]
+                .last_result
+                .as_ref()
+                .unwrap()
+                .completed_at,
+            completed
         );
     }
 }
