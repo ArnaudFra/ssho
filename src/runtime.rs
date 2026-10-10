@@ -1,5 +1,6 @@
 pub mod batch;
 pub mod effective;
+pub mod keys;
 pub mod tunnels;
 use crate::{
     storage::{AppConfig, AppPaths, History},

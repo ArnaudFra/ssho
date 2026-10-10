@@ -62,7 +62,8 @@ pub(super) fn open_backups(m: &mut Model, app: &Path) -> Result<()> {
             .chain(m.parents.iter().map(|(view, _)| view))
             .any(|view| matches!(
                 view,
-                View::Host(_)
+                View::Keys(_)
+                    | View::Host(_)
                     | View::Forward(_)
                     | View::Note(_)
                     | View::Profiles(_)

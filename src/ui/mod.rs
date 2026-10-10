@@ -13,6 +13,9 @@ mod forms;
 mod groups;
 #[cfg(test)]
 mod groups_tests;
+mod keys;
+#[cfg(test)]
+mod keys_tests;
 mod notes;
 mod profiles;
 mod render;
@@ -62,6 +65,7 @@ pub enum InitialView {
 #[derive(Clone, Debug)]
 enum View {
     List,
+    Keys(keys::Editor),
     Batch(batch::Editor),
     BatchResults {
         selected: usize,
@@ -111,6 +115,12 @@ enum View {
 #[derive(Clone, Debug, PartialEq)]
 enum Action {
     None,
+    OpenKeys(bool),
+    RefreshKeys,
+    GenerateKey,
+    AddKey,
+    AttachKey,
+    DeployKey,
     ConfirmChanges,
     Backups,
     RestoreBackup(usize),
@@ -150,6 +160,7 @@ struct PendingPreferred {
     provisional: Option<runtime::effective::EffectiveConfig>,
 }
 struct Model {
+    keys: keys::State,
     batch: batch::State,
     all: Vec<Host>,
     visible: Vec<usize>,
@@ -199,6 +210,7 @@ impl Model {
     ) -> Self {
         let search_focus = force_search || preferences.focus_search_on_start;
         let mut m = Self {
+            keys: keys::State::default(),
             batch: batch::State::default(),
             all,
             visible: vec![],
@@ -550,6 +562,10 @@ impl Model {
                 View::Forward(form) => form.dirty(),
                 View::Note(editor) => editor.dirty(),
                 View::Changes(_) => true,
+                View::Keys(keys::Editor {
+                    mode: keys::Mode::Generate { path, comment, .. },
+                    ..
+                }) => !path.value.is_empty() || !comment.value.is_empty(),
                 _ => false,
             })
     }
@@ -575,6 +591,12 @@ impl Model {
         let input = match &mut self.view {
             View::List if self.search_focus => &mut self.query,
             View::Note(editor) => &mut editor.input,
+            View::Keys(editor) => {
+                let Some(input) = keys::input(editor) else {
+                    return;
+                };
+                input
+            }
             View::Batch(editor) => {
                 let Some(input) = editor.input() else { return };
                 input
@@ -649,7 +671,11 @@ impl Model {
             }
             return Action::Backups;
         }
+        if k.code == KeyCode::F(9) && matches!(self.view, View::Host(_)) {
+            return Action::OpenKeys(true);
+        }
         match &mut self.view {
+            View::Keys(_) => return keys::key(self, k),
             View::Batch(_) | View::BatchResults { .. } => return batch::key(self, k),
             View::Changes(_) | View::Backups { .. } => return changes::key(self, k),
             View::Note(editor) => {
@@ -899,6 +925,7 @@ impl Model {
             }
             KeyCode::Char('/') if !self.search_focus => self.search_focus = true,
             KeyCode::Char('f') if ctrl && !self.search_focus => self.search_focus = true,
+            KeyCode::Char('K') if !self.search_focus => return Action::OpenKeys(false),
             _ if self.search_focus => {
                 let old = self.query.value.clone();
                 self.query.key(k);
@@ -1007,6 +1034,7 @@ impl Model {
                 self.favorites_only = !self.favorites_only;
                 self.filter(false);
             }
+            PaletteAction::Keys => return Action::OpenKeys(false),
             PaletteAction::Add => return Action::Add(String::new()),
             PaletteAction::Duplicate => {
                 if let Some(host) = self.selected_host() {
@@ -1347,6 +1375,7 @@ pub fn run(
         Terminal::new(CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;
     loop {
+        keys::poll(&mut m);
         match m.batch.poll() {
             Ok(Some(history)) => m.history = history.connections,
             Ok(None) => {}
@@ -1394,6 +1423,33 @@ pub fn run(
             Action::CancelBatch => {
                 m.batch.manager.cancel();
                 Ok(false)
+            }
+            Action::OpenKeys(picker) => {
+                keys::open_view(&mut m, picker);
+                keys::refresh(&mut m);
+                Ok(false)
+            }
+            Action::RefreshKeys => {
+                keys::refresh(&mut m);
+                Ok(false)
+            }
+            Action::AttachKey => keys::attach(&mut m, config).map(|_| false),
+            Action::GenerateKey | Action::AddKey | Action::DeployKey
+                if m.batch.manager.has_active() =>
+            {
+                m.batch.ensure_foreground_idle().map(|_| false)
+            }
+            Action::GenerateKey | Action::AddKey | Action::DeployKey => {
+                m.batch.ensure_foreground_idle()?;
+                #[cfg(unix)]
+                let signals = SshSignals::enter()?;
+                guard.restore();
+                let result = keys::native(&mut m, &action, config);
+                guard = TerminalGuard::enter()?;
+                #[cfg(unix)]
+                drop(signals);
+                terminal.clear()?;
+                result.map(|_| false)
             }
             Action::None => Ok(false),
             Action::Quit => {

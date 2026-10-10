@@ -97,6 +97,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     }
     match &m.view {
         View::List => list(f, m, area),
+        View::Keys(_) => keys::draw(f, m, area),
         View::Batch(_) | View::BatchResults { .. } => batch::draw(f, m, area),
         View::Changes(_) | View::Backups { .. } => changes::draw(f, m, area),
         View::Actions { .. } => {
@@ -1081,7 +1082,7 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
         Style::default().fg(GRAY),
     ));
     footer.push(Line::styled(
-        "Enter on last field: submit • Ctrl+S: save • Ctrl+C/Esc: cancel • * Required fields",
+        "F9: key picker • Ctrl+S: save • Ctrl+C/Esc: cancel • * Required fields",
         Style::default().fg(GRAY),
     ));
     f.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), parts[2]);
@@ -1473,6 +1474,9 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "tag:work ET is:online",
         "file:\"Team Hosts\" is:favorite",
         "Quotes: phrases; fields/words use AND",
+        "K/F2   Keys: native OpenSSH assistant",
+        "F9     key picker in host forms",
+        "Keys: F4 full details/error; ↑↓ PgUp/Dn Home/End scroll",
     ];
     let right = [
         "Advanced Features",
