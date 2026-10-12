@@ -29,7 +29,7 @@ use crate::{
     storage::{
         metadata::{HostMetadata, Metadata},
         tunnels::{HostModes, HostProfiles, LaunchMode, TunnelProfiles},
-        AppConfig, AppPaths, GroupMode, History,
+        AppConfig, AppPaths, AvailabilityMethod, GroupMode, History,
     },
     types::{ConnectionInfo, Forward, Host},
     version::{self, UpdateInfo},
@@ -64,6 +64,9 @@ pub enum InitialView {
 }
 #[derive(Clone, Debug)]
 enum View {
+    Availability {
+        selected: usize,
+    },
     List,
     Keys(keys::Editor),
     Batch(batch::Editor),
@@ -114,6 +117,7 @@ enum View {
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Action {
+    Availability(AvailabilityMethod),
     None,
     OpenKeys(bool),
     RefreshKeys,
@@ -456,6 +460,13 @@ impl Model {
         }
     }
     fn apply_inspection(&mut self, result: runtime::effective::Inspection) {
+        if result
+            .ping
+            .as_ref()
+            .is_some_and(|ping| ping.method != self.preferences.availability_method)
+        {
+            return;
+        }
         if let Some(ping) = result.ping {
             self.statuses.insert(result.name.clone(), ping);
         }
@@ -722,6 +733,23 @@ impl Model {
                 }
             }
             View::Aliases { .. } => return aliases::key(self, k),
+            View::Availability { selected } => {
+                match k.code {
+                    KeyCode::Esc => self.back(),
+                    KeyCode::Char('c') if ctrl => self.back(),
+                    KeyCode::Up | KeyCode::Home => *selected = 0,
+                    KeyCode::Down | KeyCode::End => *selected = 1,
+                    KeyCode::Enter => {
+                        return Action::Availability(if *selected == 0 {
+                            AvailabilityMethod::Ssh
+                        } else {
+                            AvailabilityMethod::Icmp
+                        })
+                    }
+                    _ => {}
+                }
+                return Action::None;
+            }
             View::GroupMode { .. } => return groups::key(self, k),
             View::Profiles(_) => return self.profile_key(k),
             View::Active { .. } => return self.active_key(k),
@@ -933,6 +961,7 @@ impl Model {
                     self.filter(true);
                 }
             }
+            KeyCode::Char('P') => self.open_availability(),
             KeyCode::Char('x') => batch::mark(self),
             KeyCode::Char('B') => batch::open(self),
             KeyCode::Char('A') => return Action::ToggleAliases,
@@ -999,6 +1028,11 @@ impl Model {
         }
         Action::None
     }
+    fn open_availability(&mut self) {
+        self.open_view(View::Availability {
+            selected: usize::from(self.preferences.availability_method == AvailabilityMethod::Icmp),
+        });
+    }
     fn activate_action(&mut self, action: PaletteAction) -> Action {
         if !action.enabled(self.selected_host().is_some()) {
             return Action::None;
@@ -1010,6 +1044,7 @@ impl Model {
             PaletteAction::BatchOpen => batch::open(self),
             PaletteAction::BatchResults => batch::show_results(self),
             PaletteAction::ToggleAliases => return Action::ToggleAliases,
+            PaletteAction::Availability => self.open_availability(),
             PaletteAction::GroupMode => groups::open(self),
             PaletteAction::ChooseAlias => aliases::open(self),
             PaletteAction::SourceFilter => return Action::SourceFilter,
@@ -1217,12 +1252,24 @@ fn start_inspection(
     probe: bool,
 ) -> Receiver<runtime::effective::Inspection> {
     m.effective.clear();
+    start_availability_inspection(inspector, m, config, probe)
+}
+
+/// Changing methods keeps the last resolved values while their replacements
+/// arrive, so effective-value searches and concrete selection do not disappear.
+fn start_availability_inspection(
+    inspector: &runtime::effective::Inspector,
+    m: &mut Model,
+    config: &Path,
+    probe: bool,
+) -> Receiver<runtime::effective::Inspection> {
     m.statuses.clear();
     let hosts = m.all.clone();
     for h in &hosts {
         m.statuses.insert(
             h.name.clone(),
             PingResult {
+                method: m.preferences.availability_method,
                 name: h.name.clone(),
                 status: if probe {
                     PingStatus::Connecting
@@ -1235,7 +1282,12 @@ fn start_inspection(
         );
     }
     m.refresh_search_membership();
-    inspector.inspect(hosts, config.to_path_buf(), probe)
+    inspector.inspect_with_method(
+        hosts,
+        config.to_path_buf(),
+        probe,
+        m.preferences.availability_method,
+    )
 }
 /// Load completely before changing the browser or discarding its diagnostic generation.
 fn reload_hosts(
@@ -1510,8 +1562,17 @@ pub fn run(
                 inspection = receiver;
                 false
             }),
-            Action::ToggleAliases => aliases::toggle(&mut m, &paths.root).map(|_| false),
-            Action::GroupMode(mode) => groups::save(&mut m, &paths.root, mode).map(|_| false),
+            Action::ToggleAliases | Action::Availability(_) | Action::GroupMode(_) => {
+                apply_preference_action(
+                    &inspector,
+                    &mut m,
+                    &paths.root,
+                    config,
+                    &mut inspection,
+                    &action,
+                )
+                .map(|_| false)
+            }
             Action::SourceFilter => source_filter::open(&mut m, config).map(|_| false),
             Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
             Action::Duplicate(host) => select_duplicate_files(&mut m, config, host).map(|_| false),
@@ -1578,3 +1639,37 @@ fn time_ago(time: chrono::DateTime<Utc>) -> String {
 
 #[cfg(test)]
 mod file_tags_tests;
+
+fn save_availability(m: &mut Model, root: &Path, method: AvailabilityMethod) -> Result<()> {
+    let preferences = AppConfig::update(root, |config| config.availability_method = method)?;
+    m.preferences = preferences;
+    m.error.clear();
+    m.back();
+    Ok(())
+}
+
+/// Shared dispatch for every action that adopts a fresh complete AppConfig.
+fn apply_preference_action(
+    inspector: &runtime::effective::Inspector,
+    m: &mut Model,
+    root: &Path,
+    config: &Path,
+    inspection: &mut Receiver<runtime::effective::Inspection>,
+    action: &Action,
+) -> Result<()> {
+    let previous_method = m.preferences.availability_method;
+    match action {
+        Action::ToggleAliases => aliases::toggle(m, root),
+        Action::GroupMode(mode) => groups::save(m, root, *mode),
+        Action::Availability(method) => save_availability(m, root, *method),
+        _ => unreachable!("only preference adoption actions reach this dispatcher"),
+    }?;
+    // Alias/group saves also adopt the entire fresh config, including external
+    // method edits. Never publish that choice with the old diagnostic generation.
+    if previous_method != m.preferences.availability_method
+        || matches!(action, Action::Availability(_))
+    {
+        *inspection = start_availability_inspection(inspector, m, config, true);
+    }
+    Ok(())
+}

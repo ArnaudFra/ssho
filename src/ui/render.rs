@@ -116,6 +116,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         View::SourceFiles { .. } => source_files(f, m, area),
         View::Aliases { .. } => alias_chooser(f, m, area),
         View::GroupMode { .. } => group_mode(f, m, area),
+        View::Availability { .. } => availability(f, m, area),
     }
 }
 fn list(f: &mut Frame, m: &mut Model, area: Rect) {
@@ -216,10 +217,13 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
     } else {
         &m.connection_result
     };
-    f.render_widget(
-        Paragraph::new(format!("{selected_state} • {title}")).style(accent()),
-        chunks[0],
-    );
+    let method = m.preferences.availability_method.label();
+    let heading = if m.connection_result.is_empty() {
+        format!("{method} • {selected_state} • {title}")
+    } else {
+        format!("{method} • {title} • {selected_state}")
+    };
+    f.render_widget(Paragraph::new(heading).style(accent()), chunks[0]);
     let mut notices = vec![];
     if let Some(error) = search_error {
         notices.push(Line::styled(
@@ -748,7 +752,7 @@ fn list_footer(width: u16, search_focus: bool) -> Vec<Line<'static>> {
         } else {
             vec![
                 "F2: actions • ↑↓: select • Enter: connect • Tab: search • q: quit",
-                "c/C: file/all • a/e/d/m: manage • f: tunnel • p: test • h: help",
+                "c/C: file/all • a/e/d/m: manage • f: tunnel • p: test • P: method • h: help",
             ]
         }
     } else {
@@ -1477,6 +1481,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "K/F2   Keys: native OpenSSH assistant",
         "F9     key picker in host forms",
         "Keys: F4 full details/error; ↑↓ PgUp/Dn Home/End scroll",
+        "ICMP local: no bastion / SSH auth",
     ];
     let right = [
         "Advanced Features",
@@ -1486,7 +1491,8 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "x      mark active alias; B: prepare / active batch",
         "F2     batch: select filter results / clear / last results",
         "Batch: Ctrl+L review, Enter confirm; s cancels results",
-        "p      ping all hosts",
+        "p      test all hosts with selected method",
+        "P      availability method (also in F2)",
         "H      toggle hidden hosts visibility",
         "f      last forwarding draft (Ctrl+L launch, Ctrl+S save profile)",
         "F7     owned tunnels: state, cause and explicit stop",
@@ -1497,7 +1503,6 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "s      cycle sort modes",
         "n      sort by name",
         "r      sort by recent connection",
-        "       Tester: check all hosts",
         "Forms: Ctrl+S save, Ctrl+L launch tunnel",
         "Ctrl+J/K tabs; Alt+A/D aliases",
         "A: group aliases • F3: choose active alias (also F2)",
@@ -1797,4 +1802,43 @@ fn group_info(f: &mut Frame, m: &mut Model, area: Rect) {
     m.page = usize::from(parts[1].height).max(1);
     details::render_rows(f, parts[1], lines, &mut m.scroll);
     f.render_widget(Paragraph::new("↑↓: scroll • Esc: back"), parts[2]);
+}
+
+fn availability(f: &mut Frame, m: &Model, area: Rect) {
+    let View::Availability { selected } = m.view else {
+        return;
+    };
+    let parts = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(3),
+        Constraint::Min(2),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    f.render_widget(
+        Paragraph::new("Availability method").style(accent()),
+        parts[0],
+    );
+    f.render_widget(
+        Paragraph::new(m.error.as_str())
+            .style(Style::default().fg(Color::LightRed))
+            .wrap(Wrap { trim: false }),
+        parts[1],
+    );
+    let lines = [AvailabilityMethod::Ssh, AvailabilityMethod::Icmp]
+        .into_iter()
+        .enumerate()
+        .map(|(index, method)| {
+            Line::styled(
+                method.scope(),
+                if index == selected {
+                    Style::default().bg(CYAN).fg(Color::Black)
+                } else {
+                    Style::default()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), parts[2]);
+    f.render_widget(Paragraph::new("↑/↓ • Enter: save • Esc: cancel"), parts[3]);
 }

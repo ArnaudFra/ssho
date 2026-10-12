@@ -305,9 +305,38 @@ fn nullable_group_mode<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Gro
     Ok(Option::<GroupMode>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AvailabilityMethod {
+    #[default]
+    Ssh,
+    Icmp,
+}
+impl AvailabilityMethod {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ssh => "SSH",
+            Self::Icmp => "ICMP local",
+        }
+    }
+    pub fn scope(self) -> &'static str {
+        match self {
+            Self::Ssh => "SSH: direct handshake or configured proxy check",
+            Self::Icmp => "ICMP local: network availability; no bastion, no SSH authentication",
+        }
+    }
+}
+fn nullable_availability_method<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<AvailabilityMethod, D::Error> {
+    Ok(Option::<AvailabilityMethod>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    #[serde(deserialize_with = "nullable_availability_method")]
+    pub availability_method: AvailabilityMethod,
     #[serde(deserialize_with = "nullable_true")]
     pub check_for_updates: bool,
     #[serde(deserialize_with = "nullable_true")]
@@ -327,6 +356,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            availability_method: AvailabilityMethod::Ssh,
             check_for_updates: true,
             focus_search_on_start: true,
             ping_on_start: true,
@@ -938,5 +968,21 @@ mod tests {
         fs::write(&paths.root, b"keep").unwrap();
         assert!(paths.initialize().is_err());
         assert_eq!(fs::read(&paths.root).unwrap(), b"keep");
+    }
+}
+
+#[cfg(test)]
+mod availability_tests {
+    use super::*;
+    #[test]
+    fn availability_defaults_and_null_are_ssh_and_invalid_is_rejected() {
+        for json in ["{}", r#"{"availability_method":null}"#] {
+            let config: AppConfig = serde_json::from_str(json).unwrap();
+            assert_eq!(
+                serde_json::to_value(config).unwrap()["availability_method"],
+                "ssh"
+            );
+        }
+        assert!(serde_json::from_str::<AppConfig>(r#"{"availability_method":"tcp"}"#).is_err());
     }
 }

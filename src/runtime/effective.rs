@@ -1,6 +1,8 @@
 //! OpenSSH owns configuration precedence, includes, Match, and local defaults.
 use super::*;
+use crate::storage::AvailabilityMethod;
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::BTreeMap,
     io::{Read, Seek, SeekFrom},
@@ -85,11 +87,19 @@ impl EffectiveConfig {
 }
 
 pub fn resolve(config: &Path, alias: &str) -> Result<EffectiveConfig> {
+    resolve_controlled(config, alias, Duration::from_secs(5), None)
+}
+fn resolve_controlled(
+    config: &Path,
+    alias: &str,
+    timeout: Duration,
+    cancel: Option<&AtomicBool>,
+) -> Result<EffectiveConfig> {
     // Reuse connection validation, but never run a connection for configuration resolution.
     super::ssh_arguments(config, alias, false, &[], None)?;
     let mut command = Command::new("ssh");
     command.arg("-G").arg("-F").arg(config).arg(alias);
-    let (status, stdout, stderr) = capture(&mut command, Duration::from_secs(5))
+    let (status, stdout, stderr) = capture_controlled(&mut command, timeout, cancel)
         .context("resolve configuration with ssh -G")?;
     anyhow::ensure!(
         status.success(),
@@ -167,6 +177,21 @@ pub(super) fn capture(
     command: &mut Command,
     timeout: Duration,
 ) -> Result<(std::process::ExitStatus, String, String)> {
+    capture_controlled(command, timeout, None)
+}
+
+/// ICMP adds cancellation and a hard per-stream file limit; historical SSH callers retain behavior.
+pub(super) fn capture_controlled(
+    command: &mut Command,
+    timeout: Duration,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<(std::process::ExitStatus, String, String)> {
+    use std::sync::atomic::Ordering;
+    anyhow::ensure!(
+        !cancel.is_some_and(|c| c.load(Ordering::Relaxed)),
+        "native diagnostic cancelled"
+    );
+    const OUTPUT_LIMIT: u64 = 256 * 1024;
     let mut stdout = tempfile::tempfile()?;
     let mut stderr = tempfile::tempfile()?;
     command
@@ -177,6 +202,21 @@ pub(super) fn capture(
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
+        if cancel.is_some() {
+            // SAFETY: only async-signal-safe setrlimit is used between fork and exec.
+            unsafe {
+                command.pre_exec(|| {
+                    let limit = libc::rlimit {
+                        rlim_cur: OUTPUT_LIMIT as libc::rlim_t,
+                        rlim_max: OUTPUT_LIMIT as libc::rlim_t,
+                    };
+                    if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
     }
     let child = command.spawn()?;
     #[cfg(unix)]
@@ -187,6 +227,7 @@ pub(super) fn capture(
     #[cfg(not(unix))]
     let mut child = child;
     let deadline = Instant::now() + timeout;
+    let mut cancelled = false;
     let (status, timed_out) = loop {
         #[cfg(unix)]
         if child.exited()? {
@@ -196,7 +237,8 @@ pub(super) fn capture(
         if let Some(status) = child.try_wait()? {
             break (status, false);
         }
-        if Instant::now() >= deadline {
+        cancelled = cancel.is_some_and(|c| c.load(Ordering::Relaxed));
+        if cancelled || Instant::now() >= deadline {
             #[cfg(unix)]
             break (child.finish()?, true);
             #[cfg(not(unix))]
@@ -213,8 +255,20 @@ pub(super) fn capture(
         file.take(256 * 1024).read_to_end(&mut bytes)?;
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
+    anyhow::ensure!(!cancelled, "native diagnostic cancelled");
+    if cancel.is_some() {
+        anyhow::ensure!(
+            stdout.metadata()?.len() < OUTPUT_LIMIT && stderr.metadata()?.len() < OUTPUT_LIMIT,
+            "native diagnostic output limit (256 KiB per stream) reached"
+        );
+    }
     let stderr = read(&mut stderr)?;
-    anyhow::ensure!(!timed_out, "SSH command timed out: {}", stderr.trim());
+    let label = if cancel.is_some() {
+        "native diagnostic"
+    } else {
+        "SSH command"
+    };
+    anyhow::ensure!(!timed_out, "{label} timed out: {}", stderr.trim());
     Ok((status, read(&mut stdout)?, stderr))
 }
 
@@ -228,12 +282,30 @@ struct Job {
     host: Host,
     config: PathBuf,
     probe: bool,
+    method: AvailabilityMethod,
+    cancel: Arc<AtomicBool>,
     sender: mpsc::Sender<Inspection>,
 }
 #[derive(Default)]
 struct Work {
+    active_icmp: usize,
+    cancel: Arc<AtomicBool>,
     queue: VecDeque<Job>,
     stopped: bool,
+}
+
+/// Registered under the queue lock before a job can leave it. Every return and
+/// unwind releases the count after the owned native child has been cleaned up.
+struct ActiveIcmp(Option<Arc<(Mutex<Work>, std::sync::Condvar)>>);
+impl Drop for ActiveIcmp {
+    fn drop(&mut self) {
+        if let Some(work) = &self.0 {
+            let (lock, ready) = &**work;
+            let mut state = lock.lock().unwrap_or_else(|error| error.into_inner());
+            state.active_icmp -= 1;
+            ready.notify_all();
+        }
+    }
 }
 
 /// One fixed pool per browser; refresh replaces queued work without spawning more workers.
@@ -247,7 +319,7 @@ impl Default for Inspector {
         for _ in 0..8 {
             let work = Arc::clone(&work);
             thread::spawn(move || loop {
-                let job = {
+                let (job, _active) = {
                     let (lock, ready) = &*work;
                     let Ok(mut state) = lock.lock() else { return };
                     while state.queue.is_empty() && !state.stopped {
@@ -257,15 +329,42 @@ impl Default for Inspector {
                     if state.stopped {
                         return;
                     }
-                    state.queue.pop_front().expect("nonempty job queue")
+                    let job = state.queue.pop_front().expect("nonempty job queue");
+                    let active = if job.method == AvailabilityMethod::Icmp {
+                        state.active_icmp += 1;
+                        Some(Arc::clone(&work))
+                    } else {
+                        None
+                    };
+                    (job, ActiveIcmp(active))
                 };
                 let Job {
                     host,
                     config,
                     probe,
+                    method,
+                    cancel,
                     sender,
                 } = job;
-                let effective = resolve(&config, &host.name).map_err(|error| format!("{error:#}"));
+                if cancel.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let started = Instant::now();
+                let deadline = started + Duration::from_secs(5);
+                let effective = if method == AvailabilityMethod::Icmp {
+                    resolve_controlled(
+                        &config,
+                        &host.name,
+                        deadline.saturating_duration_since(Instant::now()),
+                        Some(&cancel),
+                    )
+                } else {
+                    resolve(&config, &host.name)
+                }
+                .map_err(|error| format!("{error:#}"));
+                if cancel.load(Ordering::Relaxed) {
+                    continue;
+                }
                 if sender
                     .send(Inspection {
                         name: host.name.clone(),
@@ -278,11 +377,25 @@ impl Default for Inspector {
                 }
                 if probe {
                     let ping = match &effective {
+                        Ok(value) if method == AvailabilityMethod::Icmp => {
+                            let mut ping = super::availability::probe(
+                                &value.host(&host),
+                                deadline.saturating_duration_since(Instant::now()),
+                                &cancel,
+                            );
+                            ping.duration = started.elapsed();
+                            ping
+                        }
                         Ok(value) => super::ping_host(&value.host(&host), &config),
                         Err(error) => PingResult {
+                            method,
                             name: host.name.clone(),
                             status: PingStatus::Unknown,
-                            duration: Duration::ZERO,
+                            duration: if method == AvailabilityMethod::Icmp {
+                                started.elapsed()
+                            } else {
+                                Duration::ZERO
+                            },
                             error: Some(error.clone()),
                         },
                     };
@@ -298,16 +411,30 @@ impl Default for Inspector {
     }
 }
 impl Inspector {
+    /// Compatibility entry point: CLI and existing callers keep SSH diagnostics.
     pub fn inspect(&self, hosts: Vec<Host>, config: PathBuf, probe: bool) -> Receiver<Inspection> {
+        self.inspect_with_method(hosts, config, probe, AvailabilityMethod::Ssh)
+    }
+    pub fn inspect_with_method(
+        &self,
+        hosts: Vec<Host>,
+        config: PathBuf,
+        probe: bool,
+        method: AvailabilityMethod,
+    ) -> Receiver<Inspection> {
         let (sender, receiver) = mpsc::channel();
         let (lock, ready) = &*self.work;
         if let Ok(mut state) = lock.lock() {
+            state.cancel.store(true, Ordering::Relaxed);
+            state.cancel = Arc::new(AtomicBool::new(false));
             state.queue = hosts
                 .into_iter()
                 .map(|host| Job {
                     host,
                     config: config.clone(),
                     probe,
+                    method,
+                    cancel: Arc::clone(&state.cancel),
                     sender: sender.clone(),
                 })
                 .collect();
@@ -320,9 +447,15 @@ impl Drop for Inspector {
     fn drop(&mut self) {
         let (lock, ready) = &*self.work;
         if let Ok(mut state) = lock.lock() {
+            state.cancel.store(true, Ordering::Relaxed);
             state.stopped = true;
             state.queue.clear();
             ready.notify_all();
+            // The terminal guard is restored before Inspector is dropped. Waiting
+            // here prevents process exit from abandoning ICMP workers mid-cleanup.
+            while state.active_icmp > 0 {
+                state = ready.wait(state).unwrap_or_else(|error| error.into_inner());
+            }
         }
     }
 }
@@ -553,5 +686,48 @@ mod tests {
         let error = capture(&mut command, Duration::from_millis(100)).unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(2));
         assert!(error.to_string().contains("timed out: timeout-cause"));
+    }
+}
+
+#[cfg(test)]
+mod availability_generation_tests {
+    use super::*;
+    use crate::storage::AvailabilityMethod;
+    #[test]
+    fn availability_inspector_method_and_generation_replace_stale_receiver() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        std::fs::write(&config, "Host old new\n HostName\n User fixture\n").unwrap();
+        let inspector = Inspector::default();
+        let old = inspector.inspect_with_method(
+            vec![Host {
+                name: "old".into(),
+                ..Host::default()
+            }],
+            config.clone(),
+            false,
+            AvailabilityMethod::Ssh,
+        );
+        let old_result = old.recv_timeout(Duration::from_secs(2)).unwrap();
+        let receiver = inspector.inspect_with_method(
+            vec![Host {
+                name: "new".into(),
+                ..Host::default()
+            }],
+            config,
+            true,
+            AvailabilityMethod::Icmp,
+        );
+        let results: Vec<_> = receiver.into_iter().collect();
+        assert!(results.iter().all(|result| result.name == "new"));
+        let ping = results.into_iter().find_map(|result| result.ping).unwrap();
+        assert_eq!(ping.method, AvailabilityMethod::Icmp);
+        assert_eq!(ping.status, PingStatus::Unknown);
+        assert!(
+            !ping.duration.is_zero(),
+            "failed resolution is still timed diagnostic work"
+        );
+        assert!(ping.error.unwrap().contains("ssh -G"));
+        assert_eq!(old_result.name, "old");
     }
 }

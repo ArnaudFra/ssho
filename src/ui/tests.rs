@@ -968,6 +968,7 @@ fn details_f4_from_search_tracks_selection_and_keeps_list() {
     m.statuses.insert(
         "alpha".into(),
         PingResult {
+            method: crate::storage::AvailabilityMethod::Ssh,
             name: "alpha".into(),
             status: PingStatus::Offline,
             duration: Duration::ZERO,
@@ -1949,6 +1950,7 @@ fn diagnostic_symbols_text_latency_and_failure_are_color_independent() {
     ] {
         let host = Host::default();
         let result = PingResult {
+            method: crate::storage::AvailabilityMethod::Ssh,
             name: String::new(),
             status,
             duration: Duration::from_millis(123),
@@ -2107,6 +2109,7 @@ fn manual_reload_read_errors_leave_hosts_cache_view_and_selection_intact() {
     m.statuses.insert(
         "keep".into(),
         PingResult {
+            method: crate::storage::AvailabilityMethod::Ssh,
             name: "keep".into(),
             status: PingStatus::Online,
             duration: Duration::from_millis(12),
@@ -2925,6 +2928,7 @@ fn inspection(name: &str, user: &str, status: PingStatus) -> runtime::effective:
         ))
         .unwrap()),
         ping: Some(PingResult {
+            method: crate::storage::AvailabilityMethod::Ssh,
             name: name.into(),
             status,
             duration: Duration::ZERO,
@@ -5090,4 +5094,313 @@ fn batch_open_requires_explicit_targets_and_search_keeps_shortcuts_literal() {
         text.contains("0 targets"),
         "opening must not implicitly select: {text}"
     );
+}
+
+#[test]
+fn availability_p_opens_selector_but_remains_search_text_and_f2_is_palette() {
+    let mut m = model();
+    m.key(key(KeyCode::Char('P')));
+    assert_eq!(m.query.value, "P");
+    assert!(matches!(m.view, View::List));
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Char('P')));
+    let rendered = screen(&mut m, 80, 24);
+    assert!(rendered.contains("Availability method"), "{rendered}");
+    assert!(rendered.contains("ICMP local"));
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::F(2)));
+    assert!(matches!(m.view, View::Actions { .. }));
+}
+
+#[test]
+fn availability_save_adopts_fresh_settings_preserves_selection_and_external_fields() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join("config.json"),
+        r#"{"availability_method":"ssh","focus_search_on_start":false,"future":{"x":7}}"#,
+    )
+    .unwrap();
+    let mut m = model();
+    m.search_focus = false;
+    m.selected = 1;
+    m.open_availability();
+    save_availability(&mut m, temp.path(), AvailabilityMethod::Icmp).unwrap();
+    assert_eq!(m.preferences.availability_method, AvailabilityMethod::Icmp);
+    assert!(!m.preferences.focus_search_on_start);
+    assert_eq!(m.selected_host().unwrap().name, "beta");
+    assert!(matches!(m.view, View::List));
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(temp.path().join("config.json")).unwrap()).unwrap();
+    assert_eq!(saved["future"]["x"], 7);
+    assert_eq!(saved["availability_method"], "icmp");
+}
+
+#[test]
+fn availability_failed_save_keeps_method_selector_and_existing_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    // A directory cannot be atomically replaced by config.json.
+    fs::create_dir(temp.path().join("config.json")).unwrap();
+    let mut m = model();
+    m.open_availability();
+    assert!(save_availability(&mut m, temp.path(), AvailabilityMethod::Icmp).is_err());
+    assert_eq!(m.preferences.availability_method, AvailabilityMethod::Ssh);
+    assert!(matches!(m.view, View::Availability { .. }));
+}
+
+#[test]
+fn availability_method_visible_in_list_details_and_help_and_filters_use_selected_method() {
+    let mut m = model();
+    m.preferences.availability_method = AvailabilityMethod::Icmp;
+    m.statuses.insert(
+        "alpha".into(),
+        PingResult {
+            name: "alpha".into(),
+            method: AvailabilityMethod::Icmp,
+            status: PingStatus::Online,
+            duration: Duration::from_millis(42),
+            error: None,
+        },
+    );
+    assert!(screen(&mut m, 80, 24).contains("ICMP local"));
+    let lines = details::content(&m.all[0], m.statuses.get("alpha"), None, None, "");
+    let text = lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("ICMP local") && text.contains("network availability"),
+        "{text}"
+    );
+    assert!(
+        text.contains("diagnostic 42 ms") && text.contains("no SSH authentication"),
+        "{text}"
+    );
+    typing(&mut m, "is:online");
+    assert_eq!(m.visible, [0]);
+    m.apply_inspection(runtime::effective::Inspection {
+        name: "alpha".into(),
+        effective: Err("stale SSH resolution".into()),
+        ping: Some(PingResult {
+            name: "alpha".into(),
+            method: AvailabilityMethod::Ssh,
+            status: PingStatus::Offline,
+            duration: Duration::ZERO,
+            error: None,
+        }),
+    });
+    assert_eq!(m.statuses["alpha"].status, PingStatus::Online);
+    assert!(!m.effective.contains_key("alpha"));
+    m.view = View::Help;
+    assert!(screen(&mut m, 110, 60).contains("P      availability method"));
+}
+
+#[test]
+fn availability_switch_keeps_effective_search_selection_and_group_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config");
+    fs::write(
+        &config,
+        "Host alpha beta\n HostName 127.0.0.1\n User inherited\n",
+    )
+    .unwrap();
+    let mut m = model();
+    m.preferences.group_mode = GroupMode::Files;
+    for name in ["alpha", "beta"] {
+        m.effective.insert(
+            name.into(),
+            Ok(runtime::effective::EffectiveConfig::parse(
+                "hostname 127.0.0.1\nuser inherited\nport 22\n",
+            )
+            .unwrap()),
+        );
+    }
+    typing(&mut m, "user:inherited");
+    m.search_focus = false;
+    m.key(key(KeyCode::End));
+    assert_eq!(m.selected_host().unwrap().name, "beta");
+    let rows = m.rows.clone();
+    m.preferences.availability_method = AvailabilityMethod::Icmp;
+    let inspector = runtime::effective::Inspector::default();
+    // Resolve only: this regression must not perform even loopback probes.
+    let receiver = start_availability_inspection(&inspector, &mut m, &config, false);
+    assert_eq!(m.query.value, "user:inherited");
+    assert_eq!(m.selected_host().map(|host| host.name), Some("beta".into()));
+    assert_eq!(m.rows, rows);
+    drop(receiver);
+}
+
+#[test]
+fn availability_selected_option_remains_visible_in_tiny_terminal() {
+    let mut m = model();
+    m.open_availability();
+    m.key(key(KeyCode::Down));
+    let rendered = screen(&mut m, 28, 8);
+    assert!(rendered.contains("ICMP local"), "{rendered}");
+    assert!(rendered.contains("Enter: save"), "{rendered}");
+}
+
+fn availability_external_preference_action(group_action: bool) {
+    for (old_method, new_method) in [
+        (AvailabilityMethod::Ssh, AvailabilityMethod::Icmp),
+        (AvailabilityMethod::Icmp, AvailabilityMethod::Ssh),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("ssh-config");
+        // Native resolution fails before any connection or ping can run.
+        fs::write(&config, "Host alpha beta secret\n HostName\n").unwrap();
+        let mut m = model();
+        m.preferences.availability_method = old_method;
+        m.preferences.group_mode = GroupMode::Files;
+        for host in &mut m.all {
+            host.source_file = config.clone();
+        }
+        m.source_filter = Some(config.clone());
+        for name in ["alpha", "beta"] {
+            let mut result = inspection(name, "inherited", PingStatus::Online);
+            result.ping.as_mut().unwrap().method = old_method;
+            m.apply_inspection(result);
+        }
+        typing(&mut m, "user:inherited");
+        m.search_focus = false;
+        m.key(key(KeyCode::End));
+        assert_eq!(m.selected_host().unwrap().name, "beta");
+        let mut external = m.preferences.clone();
+        external.availability_method = new_method;
+        external.save(temp.path()).unwrap();
+        let action = if group_action {
+            m.key(key(KeyCode::Char('g')));
+            m.key(key(KeyCode::Down));
+            m.key(key(KeyCode::Enter))
+        } else {
+            m.key(key(KeyCode::Char('A')))
+        };
+        assert_eq!(
+            action,
+            if group_action {
+                Action::GroupMode(GroupMode::FileTags)
+            } else {
+                Action::ToggleAliases
+            }
+        );
+        let inspector = runtime::effective::Inspector::default();
+        let (old_sender, mut receiver) = std::sync::mpsc::channel();
+        let mut stale = inspection("beta", "stale-user", PingStatus::Offline);
+        stale.ping.as_mut().unwrap().method = old_method;
+        old_sender.send(stale).unwrap();
+        apply_preference_action(
+            &inspector,
+            &mut m,
+            temp.path(),
+            &config,
+            &mut receiver,
+            &action,
+        )
+        .unwrap();
+        assert_eq!(m.preferences.availability_method, new_method);
+        assert!(
+            m.statuses
+                .values()
+                .all(|ping| ping.method == new_method && ping.status == PingStatus::Connecting),
+            "cached results must switch with adopted method"
+        );
+        assert!(
+            old_sender
+                .send(inspection("beta", "stale-user", PingStatus::Online))
+                .is_err(),
+            "old generation receiver must be dropped"
+        );
+        assert_eq!(m.query.value, "user:inherited");
+        assert_eq!(m.source_filter, Some(config.clone()));
+        assert_eq!(m.selected_host().unwrap().name, "beta");
+        assert_eq!(
+            m.preferences.group_mode,
+            if group_action {
+                GroupMode::FileTags
+            } else {
+                GroupMode::Files
+            }
+        );
+        assert!(matches!(m.view, View::List));
+        m.query.set("is:online");
+        m.filter(true);
+        assert!(
+            m.visible.is_empty(),
+            "old Online verdict cannot satisfy the new method filter"
+        );
+        for result in receiver {
+            if let Some(ping) = &result.ping {
+                assert_eq!(ping.method, new_method);
+            }
+            m.apply_inspection(result);
+        }
+        assert!(m
+            .statuses
+            .values()
+            .all(|ping| ping.method == new_method && ping.status == PingStatus::Unknown));
+        assert!(m.visible.is_empty());
+        let mut fresh = inspection("beta", "inherited", PingStatus::Online);
+        fresh.ping.as_mut().unwrap().method = new_method;
+        m.apply_inspection(fresh);
+        assert_eq!(m.selected_host().unwrap().name, "beta");
+        let mut stale = inspection("beta", "stale-user", PingStatus::Offline);
+        stale.ping.as_mut().unwrap().method = old_method;
+        m.apply_inspection(stale);
+        assert_eq!(m.statuses["beta"].status, PingStatus::Online);
+        assert_eq!(m.effective["beta"].as_ref().unwrap().user, "inherited");
+        assert_eq!(m.selected_host().unwrap().name, "beta");
+    }
+}
+
+#[test]
+fn availability_alias_dispatch_renews_external_method_generation() {
+    availability_external_preference_action(false);
+}
+
+#[test]
+fn availability_group_dispatch_renews_external_method_generation() {
+    availability_external_preference_action(true);
+}
+
+#[test]
+fn availability_preference_dispatch_failure_preserves_preferences_cache_and_receiver() {
+    for group_action in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("config.json")).unwrap();
+        let mut m = model();
+        m.search_focus = false;
+        m.apply_inspection(inspection("alpha", "inherited", PingStatus::Online));
+        let action = if group_action {
+            m.key(key(KeyCode::Char('g')));
+            m.key(key(KeyCode::Down));
+            m.key(key(KeyCode::Enter))
+        } else {
+            m.key(key(KeyCode::Char('A')))
+        };
+        let preferences = m.preferences.clone();
+        let rows = m.rows.clone();
+        let inspector = runtime::effective::Inspector::default();
+        let (sender, mut receiver) = std::sync::mpsc::channel();
+        let error = apply_preference_action(
+            &inspector,
+            &mut m,
+            temp.path(),
+            &temp.path().join("unused"),
+            &mut receiver,
+            &action,
+        )
+        .unwrap_err();
+        m.error = format!("{error:#}");
+        assert_eq!(m.preferences, preferences);
+        assert_eq!(m.rows, rows);
+        assert_eq!(m.statuses["alpha"].status, PingStatus::Online);
+        assert!(matches!(m.view, View::GroupMode { .. }) == group_action);
+        sender
+            .send(inspection("alpha", "still-current", PingStatus::Offline))
+            .unwrap();
+        m.apply_inspection(receiver.try_recv().unwrap());
+        assert_eq!(m.statuses["alpha"].status, PingStatus::Offline);
+        assert!(screen(&mut m, 100, 24).contains("config.json"));
+    }
 }

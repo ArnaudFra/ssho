@@ -91,14 +91,17 @@ pub(super) fn content(
         identities.push(host.identity.clone());
     }
     identities.extend(host.extra_identities.iter().cloned());
+    let scope = diagnostic
+        .map(|result| result.method.scope())
+        .unwrap_or("Not checked");
     let diagnostic = diagnostic
         .map(|result| {
-            let status = result.status.label();
-            let latency = format!("{} ms", result.duration.as_millis());
+            let status = format!("{} • {}", result.method.label(), result.status.label());
+            let latency = format!("diagnostic {} ms", result.duration.as_millis());
             result
                 .error
                 .as_ref()
-                .map(|error| format!("{status} ({latency}): {error}"))
+                .map(|error| format!("{status} ({latency})\nCause: {error}"))
                 .unwrap_or_else(|| format!("{status} ({latency})"))
         })
         .unwrap_or_else(|| "? Unknown (not checked)".into());
@@ -126,6 +129,7 @@ pub(super) fn content(
             ),
         ),
         ("Diagnostic", diagnostic),
+        ("Availability scope", scope.into()),
         ("Declared SSH Options", optional(&declared.options)),
         ("RemoteCommand", optional(&host.remote_command)),
         ("RequestTTY", optional(&host.request_tty)),

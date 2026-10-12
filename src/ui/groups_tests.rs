@@ -537,6 +537,7 @@ fn groups_async_first_online_probe_result_connects() {
         assert!(m.rows.is_empty());
         let mut result = native_inspection("gamma", "resolved-user");
         result.ping = Some(PingResult {
+            method: crate::storage::AvailabilityMethod::Ssh,
             name: "gamma".into(),
             status: PingStatus::Online,
             duration: Duration::ZERO,

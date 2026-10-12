@@ -1,3 +1,4 @@
+pub mod availability;
 pub mod batch;
 pub mod effective;
 pub mod keys;
@@ -40,6 +41,7 @@ impl PingStatus {
 }
 #[derive(Clone, Debug)]
 pub struct PingResult {
+    pub method: crate::storage::AvailabilityMethod,
     pub name: String,
     pub status: PingStatus,
     pub duration: Duration,
@@ -140,6 +142,7 @@ fn ping_host(host: &Host, config: &Path) -> PingResult {
         proxy_ping(host, config)
     };
     PingResult {
+        method: crate::storage::AvailabilityMethod::Ssh,
         name: host.name.clone(),
         status: if check.is_ok() {
             PingStatus::Online

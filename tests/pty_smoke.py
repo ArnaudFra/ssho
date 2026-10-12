@@ -72,6 +72,23 @@ class Session:
                 return
         raise AssertionError(f"did not see {text!r} on terminal screen:\n{self.screen.text()}")
 
+    def resize_and_wait(self, width, height, compact_footer, timeout=5):
+        # Drain the old geometry before marking output. A text match alone could
+        # be from the previous frame; Ratatui must clear and draw the new layout.
+        self.drain(0.1)
+        mark = len(self.output)
+        self.screen = Screen(width, height)
+        fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
+        os.kill(self.process.pid, signal.SIGWINCH)
+        deadline = time.monotonic() + timeout
+        border = "╭" + "─" * (width - 4) + "╮"
+        while time.monotonic() < deadline:
+            current = self.drain(0.05)
+            if (b"\x1b[2J" in self.output[mark:] and border in current
+                    and compact_footer in current):
+                return
+        raise AssertionError(f"no fresh {width}x{height} frame after resize:\n{self.screen.text()}")
+
     def confirm_changes(self):
         self.expect("Enter: confirm exact changes")
         self.send(b"\r")
@@ -300,12 +317,13 @@ sys.exit(int(mode))
         session.send(b"\tA")
         session.expect("1 blocks")
         # A compact terminal must keep an explicit primary -> active alias label.
-        fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 24, 0, 0))
-        os.kill(session.process.pid, signal.SIGWINCH)
+        session.resize_and_wait(24, 20, "F2: actions")
         session.send(b"/secondary.target")
         session.expect("→prod")
-        session.expect("aliases")
-        session.send(b"\x1b\t")  # clear query, then table focus
+        session.expect("1/2 aliases")
+        session.send(b"\x1b")  # bare Esc is a separate event, with a visible boundary
+        session.expect("2/2 aliases")
+        session.send(b"\t")  # table focus only after the cleared-query frame
         protected = home/"protected-config.json"
         app_config.rename(protected)
         app_config.symlink_to(protected)

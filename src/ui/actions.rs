@@ -26,10 +26,11 @@ pub(super) enum PaletteAction {
     BatchOpen,
     BatchResults,
     Keys,
+    Availability,
 }
 
 impl PaletteAction {
-    pub(super) const ALL: [Self; 25] = [
+    pub(super) const ALL: [Self; 26] = [
         Self::Add,
         Self::Edit,
         Self::Tunnel,
@@ -55,10 +56,12 @@ impl PaletteAction {
         Self::BatchOpen,
         Self::BatchResults,
         Self::Keys,
+        Self::Availability,
     ];
 
     pub(super) fn label(self) -> &'static str {
         match self {
+            Self::Availability => "Availability method P (SSH / ICMP local)",
             Self::Keys => "Keys K (OpenSSH assistant)",
             Self::BatchMark => "Lot : marquer alias x",
             Self::BatchSelectVisible => "Lot : sélectionner résultats du filtre",
@@ -92,6 +95,7 @@ impl PaletteAction {
             || matches!(
                 self,
                 Self::Keys
+                    | Self::Availability
                     | Self::BatchSelectVisible
                     | Self::BatchClear
                     | Self::BatchOpen
