@@ -8,6 +8,9 @@ mod batch;
 #[cfg(test)]
 mod batch_tests;
 mod changes;
+mod columns;
+#[cfg(test)]
+mod columns_tests;
 mod details;
 mod forms;
 mod groups;
@@ -29,7 +32,7 @@ use crate::{
     storage::{
         metadata::{HostMetadata, Metadata},
         tunnels::{HostModes, HostProfiles, LaunchMode, TunnelProfiles},
-        AppConfig, AppPaths, AvailabilityMethod, GroupMode, History,
+        AppConfig, AppPaths, AvailabilityMethod, GroupMode, History, HostColumn,
     },
     types::{ConnectionInfo, Forward, Host},
     version::{self, UpdateInfo},
@@ -64,6 +67,7 @@ pub enum InitialView {
 }
 #[derive(Clone, Debug)]
 enum View {
+    Columns(columns::Editor),
     Availability {
         selected: usize,
     },
@@ -117,6 +121,7 @@ enum View {
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Action {
+    Columns(Vec<HostColumn>),
     Availability(AvailabilityMethod),
     None,
     OpenKeys(bool),
@@ -686,6 +691,7 @@ impl Model {
             return Action::OpenKeys(true);
         }
         match &mut self.view {
+            View::Columns(_) => return columns::key(self, k),
             View::Keys(_) => return keys::key(self, k),
             View::Batch(_) | View::BatchResults { .. } => return batch::key(self, k),
             View::Changes(_) | View::Backups { .. } => return changes::key(self, k),
@@ -961,6 +967,7 @@ impl Model {
                     self.filter(true);
                 }
             }
+            KeyCode::Char('v') => columns::open(self),
             KeyCode::Char('P') => self.open_availability(),
             KeyCode::Char('x') => batch::mark(self),
             KeyCode::Char('B') => batch::open(self),
@@ -1044,6 +1051,7 @@ impl Model {
             PaletteAction::BatchOpen => batch::open(self),
             PaletteAction::BatchResults => batch::show_results(self),
             PaletteAction::ToggleAliases => return Action::ToggleAliases,
+            PaletteAction::Columns => columns::open(self),
             PaletteAction::Availability => self.open_availability(),
             PaletteAction::GroupMode => groups::open(self),
             PaletteAction::ChooseAlias => aliases::open(self),
@@ -1562,17 +1570,18 @@ pub fn run(
                 inspection = receiver;
                 false
             }),
-            Action::ToggleAliases | Action::Availability(_) | Action::GroupMode(_) => {
-                apply_preference_action(
-                    &inspector,
-                    &mut m,
-                    &paths.root,
-                    config,
-                    &mut inspection,
-                    &action,
-                )
-                .map(|_| false)
-            }
+            Action::ToggleAliases
+            | Action::Availability(_)
+            | Action::GroupMode(_)
+            | Action::Columns(_) => apply_preference_action(
+                &inspector,
+                &mut m,
+                &paths.root,
+                config,
+                &mut inspection,
+                &action,
+            )
+            .map(|_| false),
             Action::SourceFilter => source_filter::open(&mut m, config).map(|_| false),
             Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
             Action::Duplicate(host) => select_duplicate_files(&mut m, config, host).map(|_| false),
@@ -1659,6 +1668,7 @@ fn apply_preference_action(
 ) -> Result<()> {
     let previous_method = m.preferences.availability_method;
     match action {
+        Action::Columns(value) => columns::save(m, root, value),
         Action::ToggleAliases => aliases::toggle(m, root),
         Action::GroupMode(mode) => groups::save(m, root, *mode),
         Action::Availability(method) => save_availability(m, root, *method),

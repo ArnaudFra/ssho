@@ -332,9 +332,49 @@ fn nullable_availability_method<'de, D: Deserializer<'de>>(
     Ok(Option::<AvailabilityMethod>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+/// Ordered host table fields; Name is mandatory and always first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostColumn {
+    Name,
+    Hostname,
+    User,
+    Port,
+    Tags,
+    LastAttempt,
+}
+pub fn default_host_columns() -> Vec<HostColumn> {
+    use HostColumn::*;
+    vec![Name, Hostname, Tags, LastAttempt]
+}
+fn validate_host_columns(columns: &[HostColumn]) -> Result<()> {
+    anyhow::ensure!(
+        columns.first() == Some(&HostColumn::Name),
+        "host_columns must start with name and cannot be empty"
+    );
+    for (index, column) in columns.iter().enumerate() {
+        anyhow::ensure!(
+            !columns[..index].contains(column),
+            "host_columns contains duplicate {column:?}"
+        );
+    }
+    Ok(())
+}
+fn nullable_host_columns<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<HostColumn>, D::Error> {
+    let columns = Option::<Vec<HostColumn>>::deserialize(deserializer)
+        .map_err(|error| serde::de::Error::custom(format!("host_columns: {error}")))?
+        .unwrap_or_else(default_host_columns);
+    validate_host_columns(&columns).map_err(serde::de::Error::custom)?;
+    Ok(columns)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    #[serde(deserialize_with = "nullable_host_columns")]
+    pub host_columns: Vec<HostColumn>,
     #[serde(deserialize_with = "nullable_availability_method")]
     pub availability_method: AvailabilityMethod,
     #[serde(deserialize_with = "nullable_true")]
@@ -356,6 +396,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            host_columns: default_host_columns(),
             availability_method: AvailabilityMethod::Ssh,
             check_for_updates: true,
             focus_search_on_start: true,
@@ -400,6 +441,7 @@ impl AppConfig {
 
     pub fn save(&self, root: &Path) -> Result<()> {
         validate_ssh_command(&self.ssh_command)?;
+        validate_host_columns(&self.host_columns)?;
         ensure_root(root)?;
         let mut value =
             read_json(root, "config.json")?.unwrap_or_else(|| Value::Object(Map::new()));

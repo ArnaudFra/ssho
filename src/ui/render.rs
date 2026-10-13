@@ -96,7 +96,13 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         return;
     }
     match &m.view {
-        View::List => list(f, m, area),
+        View::List => {
+            list(f, m, area);
+        }
+        View::Columns(_) => {
+            let width = list(f, m, area);
+            columns_selector(f, m, area, width);
+        }
         View::Keys(_) => keys::draw(f, m, area),
         View::Batch(_) | View::BatchResults { .. } => batch::draw(f, m, area),
         View::Changes(_) | View::Backups { .. } => changes::draw(f, m, area),
@@ -119,7 +125,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         View::Availability { .. } => availability(f, m, area),
     }
 }
-fn list(f: &mut Frame, m: &mut Model, area: Rect) {
+fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
     if let Some(h) = &m.delete {
         let area = panel(area, 72, 11);
         f.render_widget(Clear, area);
@@ -147,7 +153,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
                 .wrap(Wrap { trim: false }),
             area,
         );
-        return;
+        return 0;
     }
     let viewport_width = area.width;
     let area = if area.height >= 12 { inset(area) } else { area };
@@ -332,21 +338,16 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         block("", !m.search_focus)
     };
     let inner = border.inner(table_area);
-    let widths = list_column_widths(inner.width);
-    let header = Row::new(
-        vec![
-            if m.recent { "Name" } else { "Name ↓" },
-            "Hostname",
-            "Tags",
-            if m.recent {
-                "Last Attempt ↓"
-            } else {
-                "Last Attempt"
-            },
-        ]
-        .into_iter()
-        .take(widths.len()),
-    )
+    let plan = columns::layout(&m.preferences.host_columns, inner.width);
+    let widths: Vec<_> = plan.iter().map(|(_, width)| *width).collect();
+    let header = Row::new(plan.iter().map(|(column, _)| {
+        let sorted = match column {
+            HostColumn::Name => !m.recent,
+            HostColumn::LastAttempt => m.recent,
+            _ => false,
+        };
+        format!("{}{}", column.label(), if sorted { " ↓" } else { "" })
+    }))
     .style(Style::default().fg(if m.search_focus { GRAY } else { CYAN }));
     let row_capacity = inner.height.saturating_sub(1) as usize;
     m.page = row_capacity.max(1);
@@ -369,11 +370,6 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
                 } else {
                     "▼"
                 };
-                let unit = if m.preferences.group_aliases {
-                    "blocks"
-                } else {
-                    "hosts"
-                };
                 let ordinal = match key {
                     groups::Key::File(path) => format!("{} ", sources[path]),
                     _ => String::new(),
@@ -383,14 +379,13 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
                 let available =
                     usize::from(widths[0]).saturating_sub(prefix.width() + suffix.width());
                 let label = group_label(&key.label(), available);
-                return Row::new(
-                    vec![
-                        Cell::from(format!("{prefix}{label}{suffix}")),
-                        Cell::from(format!("{count} {unit}")),
-                    ]
-                    .into_iter()
-                    .take(widths.len()),
-                )
+                return Row::new(plan.iter().map(|(column, _)| {
+                    if *column == HostColumn::Name {
+                        Cell::from(format!("{prefix}{label}{suffix}"))
+                    } else {
+                        Cell::from("")
+                    }
+                }))
                 .style(
                     Style::default()
                         .fg(if position == m.selected {
@@ -445,33 +440,46 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
             .get(&h.name)
             .map(|c| time_ago(c.last_connect))
             .unwrap_or_default();
-        let cells = vec![
-            name,
-            Cell::from(highlight(
-                m,
-                &ellipsize(
-                    m.effective
-                        .get(&h.name)
-                        .and_then(|result| result.as_ref().ok())
-                        .map(|value| value.hostname.as_str())
+        let effective = m
+            .effective
+            .get(&h.name)
+            .and_then(|result| result.as_ref().ok());
+        let cells = plan.iter().map(|(column, width)| {
+            if *column == HostColumn::Name {
+                return name.clone();
+            }
+            let (text, field) = match column {
+                HostColumn::Hostname => (
+                    effective
+                        .map(|v| v.hostname.as_str())
                         .unwrap_or(&h.hostname),
-                    widths.get(1).copied().unwrap_or(0) as usize,
+                    search::Field::Any,
                 ),
-                search::Field::Any,
-                position == m.selected,
-            )),
+                HostColumn::User => (
+                    effective.map(|v| v.user.as_str()).unwrap_or(&h.user),
+                    search::Field::User,
+                ),
+                HostColumn::Port => (
+                    effective.map(|v| v.port.as_str()).unwrap_or(&h.port),
+                    search::Field::Any,
+                ),
+                HostColumn::Tags => (tags.as_str(), search::Field::Tag),
+                HostColumn::LastAttempt => (time.as_str(), search::Field::Any),
+                HostColumn::Name => unreachable!(),
+            };
+            let text = if text.is_empty() && matches!(column, HostColumn::User | HostColumn::Port) {
+                "—"
+            } else {
+                text
+            };
             Cell::from(highlight(
                 m,
-                &ellipsize(&tags, widths.get(2).copied().unwrap_or(0) as usize),
-                search::Field::Tag,
+                &ellipsize(text, *width as usize),
+                field,
                 position == m.selected,
-            )),
-            Cell::from(ellipsize(
-                &time,
-                widths.get(3).copied().unwrap_or(0) as usize,
-            )),
-        ];
-        Row::new(cells.into_iter().take(widths.len()))
+            ))
+        });
+        Row::new(cells)
     });
     let mut state = TableState::default()
         .with_selected(if m.rows.is_empty() {
@@ -531,6 +539,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) {
         Paragraph::new(help).style(Style::default().fg(GRAY)),
         chunks[5],
     );
+    inner.width
 }
 
 fn highlight(m: &Model, text: &str, field: search::Field, selected: bool) -> Line<'static> {
@@ -695,23 +704,6 @@ fn list_status(
             Line::from(range),
         ]
     }
-}
-
-fn list_column_widths(width: u16) -> Vec<u16> {
-    let percentages: &[u16] = match width {
-        0..=36 => &[100],
-        37..=64 => &[45, 55],
-        65..=94 => &[40, 38, 22],
-        _ => &[26, 30, 23, 21],
-    };
-    let available = width.saturating_sub(percentages.len() as u16 - 1);
-    let mut widths: Vec<_> = percentages
-        .iter()
-        .map(|p| (u32::from(available) * u32::from(*p) / 100) as u16)
-        .collect();
-    let remainder = available - widths.iter().sum::<u16>();
-    *widths.last_mut().unwrap() += remainder;
-    widths
 }
 
 fn ellipsize(text: &str, width: usize) -> String {
@@ -1448,7 +1440,7 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     }
 }
 fn help(f: &mut Frame, m: &mut Model, area: Rect) {
-    let area = panel(area, 96, 33);
+    let area = panel(area, 96, 34);
     let border = block("SSHO - Commands", true);
     let inner = border.inner(area);
     f.render_widget(border, area);
@@ -1493,6 +1485,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         "Batch: Ctrl+L review, Enter confirm; s cancels results",
         "p      test all hosts with selected method",
         "P      availability method (also in F2)",
+        "v/F2   columns: Space toggle, Shift+↑↓ order, r reset",
         "H      toggle hidden hosts visibility",
         "f      last forwarding draft (Ctrl+L launch, Ctrl+S save profile)",
         "F7     owned tunnels: state, cause and explicit stop",
@@ -1841,4 +1834,83 @@ fn availability(f: &mut Frame, m: &Model, area: Rect) {
         .collect::<Vec<_>>();
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), parts[2]);
     f.render_widget(Paragraph::new("↑/↓ • Enter: save • Esc: cancel"), parts[3]);
+}
+
+fn columns_selector(f: &mut Frame, m: &Model, area: Rect, table_width: u16) {
+    let View::Columns(editor) = &m.view else {
+        return;
+    };
+    let area = panel(area, 76, 17);
+    f.render_widget(Clear, area);
+    let border = if area.height >= 10 {
+        block("Columns", true)
+    } else {
+        Block::default()
+    };
+    let inner = border.inner(area);
+    f.render_widget(border, area);
+    let error_height = if m.error.is_empty() {
+        0
+    } else {
+        2.min(inner.height.saturating_sub(5))
+    };
+    let parts = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(error_height),
+        Constraint::Length(3),
+    ])
+    .split(inner);
+    let target = m
+        .selected_host()
+        .map(|h| h.name)
+        .unwrap_or_else(|| "group / no host".into());
+    f.render_widget(
+        Paragraph::new(ellipsize(
+            &format!("Columns • {target}"),
+            parts[0].width as usize,
+        ))
+        .style(accent()),
+        parts[0],
+    );
+    let plan = columns::layout(&editor.draft, table_width);
+    let items = editor.items();
+    let rows = items.iter().map(|column| {
+        let active = editor.draft.contains(column);
+        let hidden = active && !plan.iter().any(|(visible, _)| visible == column);
+        let state = if *column == HostColumn::Name {
+            "fixed"
+        } else if hidden {
+            "hidden: width"
+        } else if active {
+            "shown"
+        } else {
+            "off"
+        };
+        Row::new([format!(
+            "{} {} ({state})",
+            if active { "[x]" } else { "[ ]" },
+            column.label()
+        )])
+    });
+    let mut state = TableState::default().with_selected(Some(editor.selected));
+    f.render_stateful_widget(
+        Table::new(rows, [Constraint::Min(0)])
+            .highlight_symbol("› ")
+            .row_highlight_style(Style::default().bg(CYAN).fg(Color::Black)),
+        parts[1],
+        &mut state,
+    );
+    f.render_widget(
+        Paragraph::new(m.error.as_str())
+            .style(Style::default().fg(Color::Red))
+            .wrap(Wrap { trim: false }),
+        parts[2],
+    );
+    f.render_widget(
+        Paragraph::new(
+            "↑↓ select • Space toggle\nShift+↑↓ move • r reset\nEnter save • Esc cancel",
+        ),
+        parts[3],
+    );
 }

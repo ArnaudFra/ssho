@@ -27,10 +27,11 @@ pub(super) enum PaletteAction {
     BatchResults,
     Keys,
     Availability,
+    Columns,
 }
 
 impl PaletteAction {
-    pub(super) const ALL: [Self; 26] = [
+    pub(super) const ALL: [Self; 27] = [
         Self::Add,
         Self::Edit,
         Self::Tunnel,
@@ -57,10 +58,12 @@ impl PaletteAction {
         Self::BatchResults,
         Self::Keys,
         Self::Availability,
+        Self::Columns,
     ];
 
     pub(super) fn label(self) -> &'static str {
         match self {
+            Self::Columns => "Columns v (order / visibility)",
             Self::Availability => "Availability method P (SSH / ICMP local)",
             Self::Keys => "Keys K (OpenSSH assistant)",
             Self::BatchMark => "Lot : marquer alias x",
@@ -94,7 +97,8 @@ impl PaletteAction {
         has_host
             || matches!(
                 self,
-                Self::Keys
+                Self::Columns
+                    | Self::Keys
                     | Self::Availability
                     | Self::BatchSelectVisible
                     | Self::BatchClear
