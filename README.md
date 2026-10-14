@@ -22,6 +22,23 @@ cargo install --path . --locked
 ssho
 ```
 
+## Installation depuis un binaire
+
+`install.sh` installe un binaire compilé localement ou une archive de release,
+sans privilège :
+
+```sh
+sh install.sh --binary ./target/release/ssho
+sh install.sh --archive ./ssho-x86_64-unknown-linux-gnu.tar.gz --version 0.1.0
+sh install.sh --uninstall
+```
+
+Destination : `--bin-dir`, puis `--prefix` + `/bin`, puis `SSHO_INSTALL_DIR`,
+sinon `$HOME/.local/bin`. Un remplacement exige `--replace`. Aucun privilège ni
+changement de profil ; la désinstallation conserve SSH, clés et données.
+Le [guide d'installation](docs/INSTALLATION.md) décrit les checksums, le packaging,
+le PATH, le dépôt de téléchargement et les limites Linux/macOS.
+
 ## Configuration et premier lancement
 
 Les hôtes restent dans `~/.ssh/config`, avec leurs éventuels fichiers `Include`. L'option `-c` sélectionne une autre configuration SSH.
