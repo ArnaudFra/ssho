@@ -704,3 +704,96 @@ fn no_filetags_preserves_legacy_duplicate_tags_and_omits_provenance() {
         assert!(out.stderr.is_empty());
     }
 }
+
+#[test]
+fn initial_query_completion_consumes_values_and_suppresses_incompatible_targets() {
+    let f = Fixture::new();
+    for words in [
+        vec!["__complete", "--query", "pro"],
+        vec!["__complete", "--query=pro"],
+        vec!["__complete", "--query", "tag:work", ""],
+        vec!["__complete", "--query=tag:work", "pro"],
+        vec!["__complete", "--query", "", "ed"],
+        vec!["__complete", "--query=", ""],
+    ] {
+        let out = f.run(&words);
+        assert!(out.status.success());
+        assert_eq!(out.stdout, b":4\n", "{words:?}");
+    }
+    let out = f.run(&["__complete", "--qu"]);
+    assert_eq!(out.stdout, b"--query\n:4\n");
+    for words in [
+        vec!["__complete", "search", "--qu"],
+        vec!["__complete", "prod", "--qu"],
+    ] {
+        assert_eq!(f.run(&words).stdout, b":4\n");
+    }
+    assert_eq!(
+        f.run(&["__complete", "--query=", "--se"]).stdout,
+        b"--search\n:4\n"
+    );
+    assert!(!f.config_root().exists());
+}
+
+#[test]
+fn initial_query_invalid_input_fails_before_application_initialization() {
+    let f = Fixture::new();
+    for words in [
+        vec!["--query", "bad\nquery"],
+        vec!["--query", "prod", "prod"],
+        vec!["--query"],
+        vec!["search", "--query=prod"],
+    ] {
+        let out = f.run(&words);
+        assert!(!out.status.success());
+        let error = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            error.contains("control") || error.contains("root") || error.contains("requires"),
+            "{words:?}: {error}"
+        );
+        assert!(!f.config_root().exists());
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn initial_query_bash_word_breaks_and_relative_invocation() {
+    let f = Fixture::new();
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_ssho"), f.dir.path().join("ssho")).unwrap();
+    fs::write(
+        f.dir.path().join("completion.bash"),
+        f.run(&["completion", "bash"]).stdout,
+    )
+    .unwrap();
+    let out = Command::new("bash")
+        .args([
+            "--noprofile",
+            "--norc",
+            "-c",
+            r#"
+source ./completion.bash
+COMP_WORDS=(./ssho ed); COMP_CWORD=1; _ssho
+[[ ${COMPREPLY[*]} == edit ]] || exit 10
+COMP_WORDS=(./ssho --qu); COMP_CWORD=1; _ssho
+[[ ${COMPREPLY[*]} == --query ]] || exit 11
+COMP_WORDS=(./ssho --query = --se); COMP_CWORD=3; _ssho
+[[ ${#COMPREPLY[@]} == 0 ]] || exit 12
+COMP_WORDS=(./ssho --query 'tag:work' ''); COMP_CWORD=3; _ssho
+[[ ${#COMPREPLY[@]} == 0 ]] || exit 13
+COMP_WORDS=(./ssho --query 'tag:work' --se); COMP_CWORD=3; _ssho
+[[ ${COMPREPLY[*]} == --search ]] || exit 14
+"#,
+        ])
+        .current_dir(f.dir.path())
+        .env("HOME", f.dir.path())
+        .env("XDG_CONFIG_HOME", f.dir.path().join(".config"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{:?}: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!f.config_root().exists());
+}

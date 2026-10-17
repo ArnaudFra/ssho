@@ -6,6 +6,7 @@ pub struct Invocation {
     pub config: Option<PathBuf>,
     pub tty: bool,
     pub search: bool,
+    pub initial_query: Option<String>,
     pub no_update_check: bool,
     pub command: Command,
 }
@@ -68,10 +69,18 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
         };
         match flag {
             "-h" | "--help" => {
+                anyhow::ensure!(
+                    result.initial_query.is_none() || mode.is_none(),
+                    "--query is only valid at the root, without an alias or subcommand"
+                );
                 result.command = Command::Help(mode.map(str::to_owned));
                 return Ok(result);
             }
             "-v" | "--version" => {
+                anyhow::ensure!(
+                    result.initial_query.is_none() || mode.is_none(),
+                    "--query is only valid at the root, without an alias or subcommand"
+                );
                 result.command = Command::Version;
                 return Ok(result);
             }
@@ -88,6 +97,27 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
             }
             "-t" | "--tty" => result.tty = boolean()?,
             "-s" | "--search" => result.search = boolean()?,
+            "--query" => {
+                anyhow::ensure!(
+                    mode.is_none(),
+                    "--query is only valid at the root, without an alias or subcommand"
+                );
+                let value = if let Some(value) = inline {
+                    value.to_owned()
+                } else {
+                    i += 1;
+                    args.get(i).cloned().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "--query requires search text (use --query '' for an empty search)"
+                        )
+                    })?
+                };
+                anyhow::ensure!(
+                    !value.chars().any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')),
+                    "--query requires single-line text without control characters or line separators"
+                );
+                result.initial_query = Some(value);
+            }
             "--no-update-check" => result.no_update_check = boolean()?,
             "--pretty" if mode == Some("info") => pretty = boolean()?,
             "--tags" if mode == Some("search") => tags = boolean()?,
@@ -121,6 +151,10 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
     let Some(first) = positional.first() else {
         return Ok(result);
     };
+    anyhow::ensure!(
+        result.initial_query.is_none(),
+        "--query is only valid at the root, without an alias or subcommand"
+    );
     let tail = &positional[1..];
     let exactly_one = || -> Result<String> {
         anyhow::ensure!(tail.len() == 1, "{first} requires exactly one argument");
@@ -453,7 +487,10 @@ pub fn run(args: &[String]) -> Result<i32> {
                 Command::Add(seed) => InitialView::Add(seed),
                 Command::Edit(name) => InitialView::Edit(name),
                 Command::Move(name) => InitialView::Move(name),
-                _ => InitialView::List,
+                _ => match invocation.initial_query {
+                    Some(query) => InitialView::ListQuery(query),
+                    None => InitialView::List,
+                },
             };
             let report = config::load_report(path)?;
             if matches!(initial, InitialView::List) && report.hosts.is_empty() {
@@ -527,6 +564,7 @@ fn complete_words(
     let mut positional = Vec::new();
     let mut value_for = None;
     let mut options = true;
+    let mut initial_query = false;
     for word in prior {
         if let Some(flag) = value_for.take() {
             if flag == "config" {
@@ -538,6 +576,11 @@ fn complete_words(
             options = false;
         } else if options && matches!(word.as_str(), "-c" | "--config") {
             value_for = Some("config");
+        } else if options && word == "--query" {
+            initial_query = true;
+            value_for = Some("query");
+        } else if options && word.starts_with("--query=") {
+            initial_query = true;
         } else if options && config_value(word).is_some() {
             config = completion_path(config_value(word).unwrap().1);
         } else if options
@@ -548,6 +591,9 @@ fn complete_words(
         } else if !options || !word.starts_with('-') {
             positional.push(word.as_str());
         }
+    }
+    if value_for == Some("query") || (options && prefix.starts_with("--query=")) {
+        return Ok(Vec::new());
     }
     if value_for == Some("config") {
         return Ok(complete_files(prefix, ""));
@@ -585,6 +631,9 @@ fn complete_words(
                 "-v",
                 "--version",
             ];
+            if positional.is_empty() {
+                flags.push("--query");
+            }
             match command {
                 Some("search") => flags.extend(["-f", "--format", "--names", "--tags"]),
                 Some("info") => flags.push("--pretty"),
@@ -592,6 +641,9 @@ fn complete_words(
             }
             return Ok(complete_values(&flags, prefix, ""));
         }
+    }
+    if initial_query {
+        return Ok(Vec::new());
     }
     if command == Some("completion") && positional.len() == 1 {
         return Ok(complete_values(SHELLS, prefix, ""));
@@ -694,7 +746,7 @@ pub fn help(command: Option<&str>) -> String {
         Some("completion") => "ssho completion bash|zsh|fish|powershell",
         _ => "ssho [host] [command...]",
     };
-    format!("SSH Organizer - A modern SSH connection manager\n\nssho is a modern SSH manager for your terminal, implemented in Rust.\n\nUsage:\n  {usage}\n\nCommands:\n  add [hostname]       Add a host using an interactive form\n  edit <host>          Edit a host and its aliases\n  move <host>          Move a host to another included configuration\n  search [query]       Search by name, hostname or tags\n  info <host>          Print effective SSH JSON (--pretty to indent)\n  completion <shell>   Generate Bash, Zsh, Fish or PowerShell completion\n  help [command]       Show help\n\nOptions:\n  -c, --config <file>   SSH configuration file (default: ~/.ssh/config)\n  -t, --tty             Force a pseudo-TTY for the remote command\n  -s, --search          Focus search at startup\n      --no-update-check  Disable automatic update checking\n  -h, --help            Show help\n  -v, --version         Show version\n\nSearch options:\n  -f, --format <format>  table, json or simple (default: table)\n      --tags            Search tags only\n      --names           Search names only\n\nExamples:\n  ssho\n  ssho prod-server uptime\n  ssho -t prod-server sudo systemctl restart nginx\n  ssho search --tags work --format json\n\nApplication data: ~/.config/ssho/ (respects XDG_CONFIG_HOME).\n")
+    format!("SSH Organizer - A modern SSH connection manager\n\nssho is a modern SSH manager for your terminal, implemented in Rust.\n\nUsage:\n  {usage}\n\nCommands:\n  add [hostname]       Add a host using an interactive form\n  edit <host>          Edit a host and its aliases\n  move <host>          Move a host to another included configuration\n  search [query]       Search by name, hostname or tags\n  info <host>          Print effective SSH JSON (--pretty to indent)\n  completion <shell>   Generate Bash, Zsh, Fish or PowerShell completion\n  help [command]       Show help\n\nOptions:\n  -c, --config <file>   SSH configuration file (default: ~/.ssh/config)\n  -t, --tty             Force a pseudo-TTY for the remote command\n  -s, --search          Focus search at startup\n      --query <text>     Open TUI with editable initial search (root only)\n      --no-update-check  Disable automatic update checking\n  -h, --help            Show help\n  -v, --version         Show version\n\nSearch options:\n  -f, --format <format>  table, json or simple (default: table)\n      --tags            Search tags only\n      --names           Search names only\n\nExamples:\n  ssho\n  ssho --query 'tag:prod AND user:deploy'\n  ssho --query ''\n  ssho prod-server uptime\n  ssho -t prod-server sudo systemctl restart nginx\n  ssho search --tags work --format json\n\nApplication data: ~/.config/ssho/ (respects XDG_CONFIG_HOME).\n")
 }
 
 pub fn completion_script(shell: &str) -> Result<&'static str> {
@@ -727,7 +779,7 @@ _ssho() {
     local -a args=()
     for word in "${COMP_WORDS[@]:1:COMP_CWORD}"; do
         i=$((i + 1))
-        if [[ "$word" == '=' && ( "$previous" == '--config' || "$previous" == '-c' || "$previous" == '--format' || "$previous" == '-f' ) ]]; then
+        if [[ "$word" == '=' && ( "$previous" == '--config' || "$previous" == '-c' || "$previous" == '--format' || "$previous" == '-f' || "$previous" == '--query' ) ]]; then
             if ((i == COMP_CWORD)); then args+=(''); fi
             continue
         fi
@@ -791,6 +843,77 @@ mod tests {
     fn args(s: &[&str]) -> Vec<String> {
         s.iter().map(|v| v.to_string()).collect()
     }
+    #[test]
+    fn initial_query_accepts_empty_unicode_inline_and_legacy_search_boolean() {
+        for words in [args(&["--query", ""]), args(&["--query="])] {
+            let invocation = parse(&words).expect("empty query opens editable TUI");
+            assert_eq!(invocation.command, Command::List);
+            assert_eq!(invocation.initial_query.as_deref(), Some(""));
+        }
+        for (words, expected) in [
+            (
+                args(&["--query", "tag:prod AND café 東京", "--search=false"]),
+                "tag:prod AND café 東京",
+            ),
+            (
+                args(&["-c", "custom", "--query=tag:prod AND café 東京"]),
+                "tag:prod AND café 東京",
+            ),
+            (args(&["--query", "--literal"]), "--literal"),
+        ] {
+            let invocation = parse(&words).unwrap();
+            assert_eq!(invocation.command, Command::List);
+            assert_eq!(invocation.initial_query.as_deref(), Some(expected));
+        }
+        assert!(!parse(&args(&["--search=false"])).unwrap().search);
+        assert!(parse(&args(&["--search", "prod"])).is_ok());
+    }
+
+    #[test]
+    fn initial_query_rejects_missing_controls_and_non_root_combinations() {
+        assert!(parse(&args(&["--query"]))
+            .unwrap_err()
+            .to_string()
+            .contains("requires"));
+        for value in [
+            "a\nb", "a\rb", "a\tb", "a\0b", "a\u{1b}b", "a\u{7f}b", "a\u{85}b",
+        ] {
+            let error = parse(&args(&["--query", value])).unwrap_err().to_string();
+            assert!(error.contains("control"), "{value:?}: {error}");
+        }
+        for words in [
+            args(&["--query", "prod", "prod"]),
+            args(&["prod", "--query", "prod"]),
+            args(&["--query=prod", "search", "prod"]),
+            args(&["search", "--query=prod"]),
+            args(&["add", "--query=prod"]),
+            args(&["--query=prod", "edit", "prod"]),
+            args(&["--query=prod", "move", "prod"]),
+            args(&["--query=prod", "info", "prod"]),
+            args(&["--query=prod", "completion", "bash"]),
+            args(&["--query=prod", "help", "search"]),
+        ] {
+            let error = parse(&words).unwrap_err().to_string();
+            assert!(error.contains("root"), "{words:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn initial_query_remote_argv_stays_literal_after_command_starts() {
+        for words in [
+            args(&["prod", "echo", "--query", "café\ntext"]),
+            args(&["prod", "--", "echo", "--query", "café\ntext"]),
+        ] {
+            assert_eq!(
+                parse(&words).unwrap().command,
+                Command::Connect {
+                    host: "prod".into(),
+                    remote: args(&["echo", "--query", "café\ntext"])
+                }
+            );
+        }
+    }
+
     #[test]
     fn direct_command_keeps_remote_flags_and_arguments() {
         let p = parse(&args(&[

@@ -98,6 +98,8 @@ lancement indique l’exécutable configuré et est conservée dans l’historiq
 
 ```sh
 ssho                            # Interface terminal
+ssho --query 'tag:prod AND user:deploy'
+ssho --query ''                  # Recherche vide, focus forcé
 ssho production                 # Connexion directe
 ssho production uptime          # Commande distante et code de sortie SSH
 ssho -t production sudo -v       # Allocation TTY
@@ -111,6 +113,10 @@ ssho search --format simple
 ssho info production --pretty
 ssho --no-update-check
 ```
+
+`--query TEXT` ou `--query=TEXT` ouvre la liste interactive avec la recherche avancée déjà saisie et le curseur actif, même si `focus_search_on_start` est désactivé ou `--search=false` est fourni. La chaîne vide et Unicode sont acceptées ; les caractères de contrôle et séparateurs de ligne sont refusés avant l’initialisation applicative. Une syntaxe de recherche incorrecte ou aucun résultat reste éditable. Cette option appartient à la racine et refuse tout alias direct ou sous-commande ; `--search` garde son rôle booléen historique. Après le début d’une commande distante, `--query` reste un argument littéral de cette commande.
+
+La recherche initiale utilise les notes/favoris chargés et les valeurs effectives natives dès leur arrivée. Elle conserve le navigateur habituel : F2, F5, groupes, colonnes, méthode de disponibilité et retour après SSH. Elle ne déclenche aucune connexion interactive ni écriture d’historique avant un choix explicite, même avec un seul résultat. Les résolutions `ssh -G` et diagnostics suivent les préférences habituelles. Une configuration vide ouvre une liste éditable avec F2 ; le lancement sans `--query` garde sa proposition historique d’ajouter un hôte. La complétion consomme le texte de `--query` et ne propose ensuite ni alias ni sous-commande incompatible ; l’invocation Bash relative reste prise en charge.
 
 `info` conserve le schéma JSON `sshm.info.v1` et les valeurs déclarées (avec leurs valeurs nulles) dans `declared`, les champs historiques et `source`. `target` utilise désormais les valeurs effectives résolues par `ssh -G -F <config> <alias>` ; `effective` contient notamment toutes les identités et les directives répétées. `resolution` distingue réussite et erreur. Codes de sortie : 0 pour une résolution réussie, 2 pour un hôte absent, 1 pour une erreur de configuration ou de résolution. Une erreur de résolution conserve les valeurs déclarées, avec `effective: null` et `RESOLUTION_ERROR`. Cette commande ne migre ni ne crée les données applicatives. La recherche CLI propose les formats `table`, `json` et `simple`.
 

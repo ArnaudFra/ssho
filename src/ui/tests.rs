@@ -5404,3 +5404,84 @@ fn availability_preference_dispatch_failure_preserves_preferences_cache_and_rece
         assert!(screen(&mut m, 100, 24).contains("config.json"));
     }
 }
+
+#[test]
+fn initial_query_filters_loaded_metadata_and_forces_editable_unicode_caret() {
+    let mut m = model();
+    m.preferences.focus_search_on_start = false;
+    m.search_focus = false;
+    m.metadata.insert(
+        "alpha".into(),
+        HostMetadata {
+            favorite: true,
+            note: "Release café 東京".into(),
+        },
+    );
+    let query = "is:favorite tag:work AND \"café 東京\"";
+    m.initialize_query(query);
+    assert!(matches!(m.view, View::List));
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    assert!(m.search_focus);
+    assert_eq!(m.query.cursor, query.chars().count());
+    assert_eq!(m.key(key(KeyCode::F(5))), Action::Reload);
+    assert_eq!(m.query.value, query);
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut m)).unwrap();
+    use ratatui::backend::Backend;
+    let position = terminal.backend_mut().get_cursor_position().unwrap();
+    assert_eq!(
+        terminal.backend().buffer()[(position.x - 1, position.y)].symbol(),
+        "\""
+    );
+    assert_eq!(
+        m.key(key(KeyCode::Enter)),
+        Action::Connect("alpha".into(), None)
+    );
+    m.resume_connection(
+        "alpha",
+        Ok(37),
+        History::load(tempfile::tempdir().unwrap().path()),
+    );
+    assert_eq!(m.query.value, query);
+    assert!(m.search_focus);
+}
+
+#[test]
+fn initial_query_empty_invalid_and_no_match_remain_editable_browser() {
+    for query in ["", "tag:", "no-such-host", "東京"] {
+        let mut m = model();
+        m.search_focus = false;
+        m.initialize_query(query);
+        assert!(m.search_focus && matches!(m.view, View::List));
+        assert_eq!(m.query.value, query);
+        if !query.is_empty() {
+            assert!(m.visible.is_empty());
+            assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+        }
+        m.key(key(KeyCode::F(2)));
+        assert!(screen(&mut m, 100, 30).contains("Actions"));
+        m.key(key(KeyCode::Esc));
+        assert!(m.search_focus && matches!(m.view, View::List));
+        m.key(ctrl('u'));
+        typing(&mut m, "alpha");
+        assert_eq!(m.selected_host().unwrap().name, "alpha");
+    }
+}
+
+#[test]
+fn initial_query_native_user_arrives_without_erasing_expression() {
+    let mut m = model();
+    m.initialize_query("user:inherited AND tag:work");
+    assert!(m.visible.is_empty());
+    m.apply_inspection(runtime::effective::Inspection {
+        name: "alpha".into(),
+        effective: Ok(runtime::effective::EffectiveConfig::parse(
+            "hostname native.example\nuser inherited\nport 22\n",
+        )
+        .unwrap()),
+        ping: None,
+    });
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    assert_eq!(m.query.value, "user:inherited AND tag:work");
+    assert!(m.search_focus);
+}

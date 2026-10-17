@@ -61,6 +61,7 @@ use std::{
 #[derive(Clone, Debug)]
 pub enum InitialView {
     List,
+    ListQuery(String),
     Add(String),
     Edit(String),
     Move(String),
@@ -265,6 +266,12 @@ impl Model {
         m.batch.cache_sources(&m.all);
         m.filter(false);
         m
+    }
+    /// Apply explicit startup text after loading metadata, before the first frame.
+    fn initialize_query(&mut self, query: &str) {
+        self.query.set(query);
+        self.search_focus = true;
+        self.filter(true);
     }
     fn is_favorite(&self, name: &str) -> bool {
         self.metadata.get(name).is_some_and(|entry| entry.favorite)
@@ -1394,7 +1401,7 @@ pub fn run(
     let report = config::load_report(config)?;
     let mut metadata = Metadata::load(&paths.root, config)?;
     let mut profiles = TunnelProfiles::load(&paths.root, config)?;
-    let standalone = !matches!(initial, InitialView::List);
+    let standalone = !matches!(initial, InitialView::List | InitialView::ListQuery(_));
     let mut m = Model::new(
         report.hosts,
         preferences,
@@ -1410,6 +1417,7 @@ pub fn run(
     m.filter(false);
     match initial {
         InitialView::List => {}
+        InitialView::ListQuery(query) => m.initialize_query(&query),
         InitialView::Add(seed) => select_files(&mut m, config, None, seed)?,
         InitialView::Edit(name) => {
             m.view = View::Host(Box::new(HostForm::edit(config::find_host(config, &name)?)))
