@@ -55,7 +55,10 @@ fn search_k_is_text_palette_and_global_picker_remain_available() {
     for _ in 0..PaletteAction::ALL.len() - 1 {
         m.key(key(KeyCode::Down));
     }
-    assert!(screen(&mut m, 100, 40).contains("Keys"));
+    let text = screen(&mut m, 100, 40);
+    assert!(text.contains("Clés OpenSSH"), "{text}");
+    // The shortcut sits in its own column and follows the keymap.
+    assert!(text.contains("Raccourci") && text.contains(" K "), "{text}");
 }
 #[test]
 fn generation_error_keeps_path_comment_and_form_parent() {

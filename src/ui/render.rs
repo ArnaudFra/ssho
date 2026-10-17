@@ -179,7 +179,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         notice_count
     };
     let search_height = if area.height < 12 { 1 } else { 3 };
-    let mut help = list_footer(area.width, m.search_focus);
+    let mut help = list_footer(area.width, m.search_focus, &m.keymap());
     if m.details.shown && viewport_width < 110 {
         help.push(Line::from(details::narrow_hint(area.width, m.search_focus)));
     }
@@ -728,27 +728,54 @@ fn ellipsize(text: &str, width: usize) -> String {
     result
 }
 
-fn list_footer(width: u16, search_focus: bool) -> Vec<Line<'static>> {
-    let lines: Vec<&str> = if width >= 105 {
+fn list_footer(width: u16, search_focus: bool, keymap: &Keymap) -> Vec<Line<'static>> {
+    use PaletteAction as A;
+    let k = |action| keymap.hint(action);
+    let lines = if width >= 105 {
         if search_focus {
-            vec!["F2: actions • F5: reload • ↑/↓: select • Enter: connect • Tab: table • Esc: clear/unfocus"]
+            vec![format!(
+                "{}: actions • {}: reload • ↑/↓: select • {}: connect • Tab: table • Esc: clear/unfocus",
+                k(A::Palette), k(A::Reload), k(A::Connect)
+            )]
         } else {
             vec![
-                "F2: actions • F5: reload • ↑/↓: navigate • Enter: connect • Tab: search • i: info • h: help • q: quit",
-                "*: favorite • a: add • e: edit • d: del • m: move • f: tunnel • p: test • c/C: file/all",
+                format!(
+                    "{}: actions • {}: reload • ↑/↓: navigate • {}: connect • Tab: search • {}: info • {}: help • {}: quit",
+                    k(A::Palette), k(A::Reload), k(A::Connect), k(A::Info), k(A::Help), k(A::Quit)
+                ),
+                format!(
+                    "{}: favorite • {}: add • {}: edit • {}: del • {}: move • {}: tunnel • {}: test • {}/{}: file/all",
+                    k(A::Favorite), k(A::Add), k(A::Edit), k(A::Delete), k(A::Move),
+                    k(A::Tunnel), k(A::Test), k(A::SourceFilter), k(A::ClearSourceFilter)
+                ),
             ]
         }
     } else if width >= 65 {
         if search_focus {
-            vec!["F2: actions • ↑↓: select • Enter: connect • Tab: table • Esc: clear"]
+            vec![format!(
+                "{}: actions • ↑↓: select • {}: connect • Tab: table • Esc: clear",
+                k(A::Palette),
+                k(A::Connect)
+            )]
         } else {
             vec![
-                "F2: actions • ↑↓: select • Enter: connect • Tab: search • q: quit",
-                "c/C: file/all • a/e/d/m: manage • f: tunnel • p: test • P: method • h: help",
+                format!(
+                    "{}: actions • ↑↓: select • {}: connect • Tab: search • {}: quit",
+                    k(A::Palette), k(A::Connect), k(A::Quit)
+                ),
+                format!(
+                    "{}/{}: file/all • {}/{}/{}/{}: manage • {}: tunnel • {}: test • {}: method • {}: help",
+                    k(A::SourceFilter), k(A::ClearSourceFilter), k(A::Add), k(A::Edit),
+                    k(A::Delete), k(A::Move), k(A::Tunnel), k(A::Test), k(A::Availability), k(A::Help)
+                ),
             ]
         }
     } else {
-        vec!["F2: actions • ↑↓ • Enter"]
+        vec![format!(
+            "{}: actions • ↑↓ • {}",
+            k(A::Palette),
+            k(A::Connect)
+        )]
     };
     lines.into_iter().map(Line::from).collect()
 }
@@ -756,7 +783,7 @@ fn actions(f: &mut Frame, m: &Model, area: Rect) {
     let View::Actions { selected } = m.view else {
         return;
     };
-    let area = panel(area, 62, 17);
+    let area = panel(area, 76, 17);
     f.render_widget(Clear, area);
     let border = block("Actions", true);
     let inner = border.inner(area);
@@ -776,13 +803,16 @@ fn actions(f: &mut Frame, m: &Model, area: Rect) {
         ),
         parts[0],
     );
+    let keymap = m.keymap();
+    // Shortcuts have their own column: a label never carries a key.
     let rows = PaletteAction::ALL.into_iter().map(|action| {
-        let enabled = action.enabled(host.is_some());
+        let availability = action.availability(host.is_some());
         Row::new(vec![
             Cell::from(action.label()),
-            Cell::from(if enabled { "" } else { "Unavailable: no host" }),
+            Cell::from(keymap.hint(action)),
+            Cell::from(availability.err().unwrap_or("")),
         ])
-        .style(if enabled {
+        .style(if availability.is_ok() {
             Style::default()
         } else {
             Style::default().fg(GRAY)
@@ -790,14 +820,22 @@ fn actions(f: &mut Frame, m: &Model, area: Rect) {
     });
     let mut state = TableState::default().with_selected(Some(selected));
     f.render_stateful_widget(
-        Table::new(rows, [Constraint::Length(24), Constraint::Min(0)])
-            .highlight_symbol("▶ ")
-            .row_highlight_style(
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(CYAN)
-                    .add_modifier(Modifier::BOLD),
-            ),
+        Table::new(
+            rows,
+            [
+                Constraint::Min(20),
+                Constraint::Length(9),
+                Constraint::Length(20),
+            ],
+        )
+        .header(Row::new(["Action", "Raccourci", "État"]).style(Style::default().fg(GRAY)))
+        .highlight_symbol("▶ ")
+        .row_highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(CYAN)
+                .add_modifier(Modifier::BOLD),
+        ),
         parts[1],
         &mut state,
     );
@@ -1440,88 +1478,83 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     }
 }
 fn help(f: &mut Frame, m: &mut Model, area: Rect) {
-    let area = panel(area, 96, 34);
+    let area = panel(area, 96, 44);
     let border = block("SSHO - Commands", true);
     let inner = border.inner(area);
     f.render_widget(border, area);
     let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
-    let left = [
-        "Navigation & Connection",
-        "Group Enter/Space: expand/collapse",
-        "Enter  connect (also from search)",
-        "SSH exit returns here with its result",
-        "↑↓     select (Ctrl+P/N in search)",
-        "i      show host information",
-        "/      search words/phrases (AND/ET)",
-        "Tab/Shift+Tab switch search / table",
-        "F2     actions; c/C: source / all files",
-        "F4     toggle details (width >=110)",
-        "F5     reload config and Includes",
-        "Alt+↑↓ scroll details (Ctrl+PgUp/PgDn)",
-        "g/F2 groups; ←/→ parent/open; i: info",
-        "Host Management",
-        "",
-        "a      add new host",
-        "e      edit selected host",
-        "D      duplicate to a new name/config",
-        "m      move host to another config",
-        "d      delete selected host",
-        "tag:work AND user:deploy",
-        "tag:work ET is:online",
-        "file:\"Team Hosts\" is:favorite",
-        "Quotes: phrases; fields/words use AND",
-        "K/F2   Keys: native OpenSSH assistant",
-        "F9     key picker in host forms",
-        "Keys: F4 full details/error; ↑↓ PgUp/Dn Home/End scroll",
-        "ICMP local: no bastion / SSH auth",
-    ];
-    let right = [
-        "Advanced Features",
-        "*      toggle favorite (pinned first)",
-        "N      edit personal note",
-        "F2     Favoris seuls: favorites filter",
-        "x      mark active alias; B: prepare / active batch",
-        "F2     batch: select filter results / clear / last results",
-        "Batch: Ctrl+L review, Enter confirm; s cancels results",
-        "p      test all hosts with selected method",
-        "P      availability method (also in F2)",
-        "v/F2   columns: Space toggle, Shift+↑↓ order, r reset",
-        "H      toggle hidden hosts visibility",
-        "f      last forwarding draft (Ctrl+L launch, Ctrl+S save profile)",
-        "F7     owned tunnels: state, cause and explicit stop",
-        "F8     backups: destination, diff, restore",
-        "Review: Enter confirms, Esc returns",
-        "Ctrl+T forwarding form: shell session / tunnel only",
-        "F6     named tunnel profiles (add/edit/rename/delete/launch)",
-        "s      cycle sort modes",
-        "n      sort by name",
-        "r      sort by recent connection",
-        "Forms: Ctrl+S save, Ctrl+L launch tunnel",
-        "Ctrl+J/K tabs; Alt+A/D aliases",
-        "A: group aliases • F3: choose active alias (also F2)",
-        "Ctrl+A/E start/end of input",
-        "Discard: Enter discard, Esc resume",
-        "System",
-        "",
-        "h      show this help",
-        "q      quit application",
-        "Esc    clear search / leave search / exit view",
-    ];
+    // Action lines come from the catalogue and the active keymap; only screen
+    // conventions that are not catalogue actions remain written here.
+    let keymap = m.keymap();
+    let section = |categories: &[actions::Category]| {
+        let mut lines = Vec::new();
+        for category in categories {
+            lines.push(category.label().to_owned());
+            for action in PaletteAction::CATALOGUE {
+                if action.category() == *category {
+                    let keys = keymap.keys(action);
+                    let keys = if keys.is_empty() {
+                        "F2 only".to_owned()
+                    } else {
+                        keys.join(", ")
+                    };
+                    lines.push(format!("{keys:<9} {}", action.label()));
+                }
+            }
+            lines.push(String::new());
+        }
+        lines
+    };
+    use actions::Category as C;
+    let mut left = section(&[C::Connection, C::Host, C::Organization]);
+    left.extend(
+        [
+            "Search",
+            "Words/phrases and fields combine with AND/ET",
+            "tag:work AND user:deploy",
+            "tag:work ET is:online",
+            "file:\"Team Hosts\" is:favorite",
+            "Tab/Shift+Tab switch search / table",
+            "Esc    clear search / leave search / exit view",
+        ]
+        .map(String::from),
+    );
+    let mut right = section(&[C::Tools, C::Application]);
+    right.extend(
+        [
+            "Navigation",
+            "↑↓     select (Ctrl+P/N in search)",
+            "Group Enter/Space: expand/collapse; ←/→ parent/open",
+            "SSH exit returns here with its result",
+            "Alt+↑↓ scroll details (Ctrl+PgUp/PgDn; width >=110)",
+            "",
+            "Forms and reviews",
+            "Ctrl+S save • Ctrl+L launch tunnel/batch review",
+            "Ctrl+J/K tabs; Alt+A/D aliases; F9 key picker",
+            "Ctrl+T forwarding: shell session / tunnel only",
+            "Ctrl+A/E start/end of input",
+            "Review: Enter confirms, Esc returns",
+            "Discard: Enter discard, Esc resume",
+            "Columns: Space toggle, Shift+↑↓ order, r reset",
+            "Batch results: s cancels the batch",
+            "Keys: F4 full details/error; ↑↓ PgUp/Dn Home/End scroll",
+            "ICMP local: no bastion / SSH auth",
+        ]
+        .map(String::from),
+    );
+    let blank = String::new();
     let mut text = if inner.width >= 77 {
         (0..left.len().max(right.len()))
             .map(|i| {
                 format!(
-                    "{:<39}  {}",
-                    left.get(i).unwrap_or(&""),
-                    right.get(i).unwrap_or(&"")
+                    "{:<45} {}",
+                    left.get(i).unwrap_or(&blank),
+                    right.get(i).unwrap_or(&blank)
                 )
             })
             .collect::<Vec<_>>()
     } else {
-        left.iter()
-            .chain(right.iter())
-            .map(|s| s.to_string())
-            .collect()
+        left.into_iter().chain(right).collect()
     };
     if let Some(path) = &m.source_filter {
         text.insert(0, format!("File: {} • C/F2: clear", path.display()));
@@ -1548,7 +1581,11 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         parts[0],
     );
     f.render_widget(
-        Paragraph::new("Press ESC, h, q or Enter to close").style(Style::default().fg(GRAY)),
+        Paragraph::new(format!(
+            "↑↓/PgUp/PgDn: scroll • Esc, {}, q or Enter: close",
+            keymap.hint(PaletteAction::Help)
+        ))
+        .style(Style::default().fg(GRAY)),
         parts[1],
     );
 }

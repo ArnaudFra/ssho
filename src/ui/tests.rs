@@ -396,12 +396,7 @@ fn secondary_views_render_and_scroll_without_panics() {
     assert!(info.contains("Actions:"));
     m.view = View::Help;
     let help = screen(&mut m, 100, 30);
-    for section in [
-        "Navigation & Connection",
-        "Advanced Features",
-        "Host Management",
-        "System",
-    ] {
+    for section in ["Connexion", "Organisation", "Outils", "Application"] {
         assert!(help.contains(section));
     }
     for view in [
@@ -940,8 +935,8 @@ fn palette_selected_actions_and_selector_have_explicit_high_contrast_colors() {
         assert!(text.contains(label), "wrong selected action: {text}");
         let mut selected_text = vec![label, "▶"];
         if !has_host {
-            assert!(text.contains("Unavailable: no host"));
-            selected_text.push("Unavailable: no host");
+            assert!(text.contains("Sélectionnez un hôte"));
+            selected_text.push("Sélectionnez un hôte");
         }
         for text in selected_text {
             let first = text.chars().next().unwrap().to_string();
@@ -1769,13 +1764,13 @@ fn forward_unicode_caret_survives_wrapped_errors_and_tiny_terminals() {
 fn help_keeps_existing_system_keys_after_form_shortcuts() {
     let mut m = model();
     m.open_view(View::Help);
-    let text = screen(&mut m, 120, 40);
+    let text = screen(&mut m, 120, 50);
     for shortcut in [
         "Ctrl+S",
         "Alt+A/D",
         "Ctrl+A/E",
         "Discard:",
-        "q      quit application",
+        "q, Ctrl+C Quitter",
         "exit view",
     ] {
         assert!(text.contains(shortcut), "missing {shortcut}: {text}");
@@ -3492,7 +3487,11 @@ fn duplication_shortcut_and_palette_offer_selected_host() {
         m.key(key(KeyCode::Char('D'))),
         Action::Duplicate(m.all[0].clone())
     );
-    assert_eq!(PaletteAction::ALL[10].label(), "Dupliquer D");
+    assert_eq!(PaletteAction::ALL[10].label(), "Dupliquer");
+    assert_eq!(
+        m.keymap().shortcut(PaletteAction::Duplicate).as_deref(),
+        Some("D")
+    );
     assert!(!PaletteAction::Duplicate.enabled(false));
     m.query.set("alpha");
     m.filter(true);
@@ -5193,7 +5192,7 @@ fn availability_method_visible_in_list_details_and_help_and_filters_use_selected
     assert_eq!(m.statuses["alpha"].status, PingStatus::Online);
     assert!(!m.effective.contains_key("alpha"));
     m.view = View::Help;
-    assert!(screen(&mut m, 110, 60).contains("P      availability method"));
+    assert!(screen(&mut m, 110, 60).contains("P         Méthode de disponibilité"));
 }
 
 #[test]

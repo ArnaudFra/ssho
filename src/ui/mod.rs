@@ -37,7 +37,7 @@ use crate::{
     types::{ConnectionInfo, Forward, Host},
     version::{self, UpdateInfo},
 };
-use actions::PaletteAction;
+use actions::{Keymap, PaletteAction};
 use anyhow::Result;
 use chrono::Utc;
 use crossterm::{
@@ -918,22 +918,6 @@ impl Model {
             }
             return Action::None;
         }
-        if k.code == KeyCode::F(2) {
-            self.open_view(View::Actions { selected: 0 });
-            return Action::None;
-        }
-        if k.code == KeyCode::F(3) {
-            return self.activate_action(PaletteAction::ChooseAlias);
-        }
-        if k.code == KeyCode::F(5) {
-            return Action::Reload;
-        }
-        if k.code == KeyCode::F(6) {
-            return self.activate_action(PaletteAction::Profiles);
-        }
-        if k.code == KeyCode::F(4) {
-            return self.activate_action(PaletteAction::Details);
-        }
         if self.details.key(k) {
             return Action::None;
         }
@@ -946,9 +930,17 @@ impl Model {
             }
             return Action::None;
         }
-        // Every printable key is text while search is focused, including configured quit letters.
-        if (!self.search_focus || !matches!(k.code, KeyCode::Char(_)) || ctrl) && self.quit_key(k) {
-            return Action::Quit;
+        // Every printable key and editing chord is text while search is focused;
+        // only the configured Ctrl quit chord keeps its meaning there.
+        let text_key = self.search_focus && matches!(k.code, KeyCode::Char(_));
+        if k.code == KeyCode::Esc {
+            if self.quit_key(k) {
+                return Action::Quit;
+            }
+        } else if let Some(action) = self.keymap().action(&key_name(k)) {
+            if !text_key || (ctrl && action == PaletteAction::Quit) {
+                return self.activate_action(action);
+            }
         }
         match k.code {
             KeyCode::Tab | KeyCode::BackTab => {
@@ -958,15 +950,6 @@ impl Model {
             KeyCode::Down => self.navigate(1),
             KeyCode::Char('p') if ctrl => self.navigate(-1),
             KeyCode::Char('n') if ctrl => self.navigate(1),
-            KeyCode::Enter => {
-                if let Some(h) = self.selected_host() {
-                    return Action::Connect(h.name, None);
-                }
-                self.group_navigation(KeyCode::Enter);
-            }
-            KeyCode::Char('/') if !self.search_focus => self.search_focus = true,
-            KeyCode::Char('f') if ctrl && !self.search_focus => self.search_focus = true,
-            KeyCode::Char('K') if !self.search_focus => return Action::OpenKeys(false),
             _ if self.search_focus => {
                 let old = self.query.value.clone();
                 self.query.key(k);
@@ -974,73 +957,20 @@ impl Model {
                     self.filter(true);
                 }
             }
-            KeyCode::Char('v') => columns::open(self),
-            KeyCode::Char('P') => self.open_availability(),
-            KeyCode::Char('x') => batch::mark(self),
-            KeyCode::Char('B') => batch::open(self),
-            KeyCode::Char('A') => return Action::ToggleAliases,
-            KeyCode::Char('g') => groups::open(self),
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => self.group_navigation(k.code),
-            KeyCode::Char('c') => return Action::SourceFilter,
-            KeyCode::Char('C') => {
-                self.source_filter = None;
-                self.filter(false);
-            }
             KeyCode::Char('j') => self.navigate(1),
             KeyCode::Char('k') => self.navigate(-1),
             KeyCode::PageDown => self.navigate(self.page as isize),
             KeyCode::PageUp => self.navigate(-(self.page as isize)),
             KeyCode::Home => self.selected = 0,
             KeyCode::End => self.selected = self.rows.len().saturating_sub(1),
-            KeyCode::Char('*') => return self.activate_action(PaletteAction::Favorite),
-            KeyCode::Char('N') => return self.activate_action(PaletteAction::Note),
-            KeyCode::Char('D') => return self.activate_action(PaletteAction::Duplicate),
-            KeyCode::Char('a') => return self.activate_action(PaletteAction::Add),
-            KeyCode::Char('e') => return self.activate_action(PaletteAction::Edit),
-            KeyCode::Char('i') => {
-                if let Some(h) = self.selected_host() {
-                    self.open_view(View::Info(h));
-                } else if let Some(groups::Row::Group { key, count, .. }) =
-                    self.rows.get(self.selected)
-                {
-                    self.open_view(View::GroupInfo {
-                        key: key.clone(),
-                        count: *count,
-                    });
-                }
-            }
-            KeyCode::Char('m') => {
-                if let Some(h) = self.selected_host() {
-                    return Action::Move(h);
-                }
-            }
-            KeyCode::Char('d') => {
-                if let Some(host) = self.selected_host() {
-                    return Action::Delete(host);
-                }
-            }
-            KeyCode::Char('f') => return self.activate_action(PaletteAction::Tunnel),
-            KeyCode::Char('p') => return self.activate_action(PaletteAction::Test),
-            KeyCode::Char('H') => {
-                self.show_hidden = !self.show_hidden;
-                self.filter(false);
-            }
-            KeyCode::Char('s') => {
-                self.recent = !self.recent;
-                self.filter(false);
-            }
-            KeyCode::Char('n') => {
-                self.recent = false;
-                self.filter(false);
-            }
-            KeyCode::Char('r') => {
-                self.recent = true;
-                self.filter(false);
-            }
-            KeyCode::Char('h') => return self.activate_action(PaletteAction::Help),
             _ => {}
         }
         Action::None
+    }
+    /// Shortcuts of the host list, resolved from the current preferences.
+    fn keymap(&self) -> Keymap {
+        Keymap::new(&self.preferences.key_bindings)
     }
     fn open_availability(&mut self) {
         self.open_view(View::Availability {
@@ -1118,6 +1048,53 @@ impl Model {
             PaletteAction::Help => {
                 self.open_view(View::Help);
             }
+            PaletteAction::Connect => {
+                if let Some(host) = self.selected_host() {
+                    return Action::Connect(host.name, None);
+                }
+                self.group_navigation(KeyCode::Enter);
+            }
+            PaletteAction::Info => {
+                if let Some(host) = self.selected_host() {
+                    self.open_view(View::Info(host));
+                } else if let Some(groups::Row::Group { key, count, .. }) =
+                    self.rows.get(self.selected)
+                {
+                    self.open_view(View::GroupInfo {
+                        key: key.clone(),
+                        count: *count,
+                    });
+                }
+            }
+            PaletteAction::Move => {
+                if let Some(host) = self.selected_host() {
+                    return Action::Move(host);
+                }
+            }
+            PaletteAction::Delete => {
+                if let Some(host) = self.selected_host() {
+                    return Action::Delete(host);
+                }
+            }
+            PaletteAction::ToggleHidden => {
+                self.show_hidden = !self.show_hidden;
+                self.filter(false);
+            }
+            PaletteAction::SortToggle => {
+                self.recent = !self.recent;
+                self.filter(false);
+            }
+            PaletteAction::SortName => {
+                self.recent = false;
+                self.filter(false);
+            }
+            PaletteAction::SortRecent => {
+                self.recent = true;
+                self.filter(false);
+            }
+            PaletteAction::Search => self.search_focus = true,
+            PaletteAction::Palette => self.open_view(View::Actions { selected: 0 }),
+            PaletteAction::Quit => return Action::Quit,
         }
         Action::None
     }
