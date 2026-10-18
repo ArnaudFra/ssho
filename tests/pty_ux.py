@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Common keyboard, focus and return journeys in a real terminal.
+
+Usage: pty_ux.py BINARY NEW_FIXTURE_DIRECTORY. Only owned SSH/config fixtures.
+"""
+import atexit
+import fcntl
+import json
+import os
+from pathlib import Path
+import pty
+import select
+import struct
+import subprocess
+import sys
+import termios
+import time
+
+from pty_screen import Screen
+
+BINARY = Path(sys.argv[1]).resolve()
+ROOT = Path(sys.argv[2]).resolve()
+ROOT.mkdir(parents=True, exist_ok=True)
+(ROOT / '.ssh').mkdir(exist_ok=True)
+(ROOT / 'bin').mkdir(exist_ok=True)
+APP = ROOT / '.config/ssho'
+APP.mkdir(parents=True, exist_ok=True)
+CONFIG = ROOT / '.ssh/config'
+CONFIG.write_text('Host alpha\n HostName 127.0.0.1\n User declared\n\nHost beta\n HostName 127.0.0.2\n')
+ORIGINAL_CONFIG = CONFIG.read_bytes()
+BASE = {'ping_on_start': False, 'check_for_updates': False, 'focus_search_on_start': False}
+ssh = ROOT / 'bin/ssh'
+ssh.write_text('#!' + sys.executable + '\n' + r'''
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with (Path(os.environ['HOME']) / 'ssh.jsonl').open('a') as out:
+    out.write(json.dumps(args) + '\n')
+if '-G' in args:
+    print('hostname 127.0.0.1\nuser native-' + args[-1] + '\nport 2222')
+    sys.exit(0)
+print('fixture SSH return')
+sys.exit(0)
+''')
+ssh.chmod(0o700)
+ENV = dict(os.environ, HOME=str(ROOT), USERPROFILE=str(ROOT),
+           XDG_CONFIG_HOME=str(ROOT / '.config'), APPDATA=str(ROOT / '.config'),
+           SSH_AUTH_SOCK=str(ROOT / 'absent-agent'), TERM='xterm-256color',
+           PATH=str(ROOT / 'bin') + os.pathsep + os.environ['PATH'])
+F1, F2, ESC, CTRL_G, CTRL_C, DOWN, UP = b'\x1bOP', b'\x1bOQ', b'\x1b', b'\x07', b'\x03', b'\x1b[B', b'\x1b[A'
+
+
+def preferences(**key_bindings):
+    (APP / 'config.json').write_text(json.dumps(dict(BASE, key_bindings=key_bindings)))
+
+
+def connections():
+    log = ROOT / 'ssh.jsonl'
+    return [a for a in map(json.loads, log.read_text().splitlines()) if '-G' not in a] if log.exists() else []
+
+
+class Session:
+    def __init__(self, name, *args, width=120, height=40):
+        self.name = name
+        self.master, self.slave = pty.openpty()
+        self.original = termios.tcgetattr(self.slave)
+        fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack('HHHH', height, width, 0, 0))
+        self.screen = Screen(width, height)
+        self.raw = bytearray()
+        self.process = subprocess.Popen([str(BINARY), '--no-update-check', *args],
+                                        stdin=self.slave, stdout=self.slave, stderr=self.slave,
+                                        env=ENV, start_new_session=True,
+                                        preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
+        atexit.register(self.cleanup)
+
+    def cleanup(self):
+        if self.process.poll() is None:
+            self.process.kill()
+            self.process.wait()
+        (ROOT / (self.name + '.raw')).write_bytes(self.raw)
+
+    def drain(self, duration=.12):
+        end = time.monotonic() + duration
+        while time.monotonic() < end:
+            ready, _, _ = select.select([self.master], [], [], max(0, end - time.monotonic()))
+            if ready:
+                try:
+                    data = os.read(self.master, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                self.raw.extend(data)
+                self.screen.feed(data)
+        return self.screen.text()
+
+    def expect(self, text, timeout=5):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if ''.join(text.split()) in ''.join(self.drain(.05).split()):
+                return
+        raise AssertionError(f'{self.name}: missing {text!r}:\n{self.screen.text()}')
+
+    def absent(self, text):
+        screen = self.drain(.3)
+        assert ''.join(text.split()) not in ''.join(screen.split()), f'{self.name}: unexpected {text!r}:\n{screen}'
+
+    def send(self, data):
+        os.write(self.master, data)
+        self.drain()
+
+    def alive(self):
+        self.drain(.2)
+        assert self.process.poll() is None, f'{self.name}: the application closed unexpectedly'
+
+    def close(self, code=0):
+        try:
+            assert self.process.wait(timeout=5) == code
+            self.drain()
+            assert termios.tcgetattr(self.slave) == self.original, f'{self.name}: terminal not restored'
+        finally:
+            self.cleanup()
+            os.close(self.master)
+            os.close(self.slave)
+
+
+def scenario_shortcuts():
+    # Default profile: the prefix opens a panel that stays until a choice or Esc.
+    preferences()
+    s = Session('shortcuts-default')
+    s.expect('Ctrl+G: quick')
+    s.expect('?: help')
+    s.send(CTRL_G)
+    s.expect('Actions rapides — alpha')
+    s.expect('d Dupliquer')
+    s.send(b'z')                      # unknown letter: nothing runs, no timeout
+    time.sleep(1.2)
+    s.expect('Actions rapides — alpha')
+    s.send(ESC)
+    s.absent('Actions rapides')
+    s.send(CTRL_G + b'i')             # sequence letter runs its named action
+    s.expect('SSH Host Information: alpha')
+    s.send(ESC)
+    s.send(CTRL_G + b'?')
+    s.expect('Commands')
+    s.expect('Ctrl+G    Actions rapides')
+    s.send(b'?')                      # the key that opens the help closes it
+    s.absent('Commands')
+    s.send(F1)
+    s.expect('Commands')
+    s.send(F1)
+    # From the search input the prefix keeps query and focus; letters stay text.
+    s.send(b'/alp' + CTRL_G)
+    s.expect('Actions rapides — alpha')
+    s.send(ESC)                       # alone: ESC followed by a byte would be Alt+key
+    s.send(b'ha?')
+    s.expect('Search: > alpha?')
+    assert not connections()
+    s.send(CTRL_C)
+    s.close()
+
+    # A configured shortcut updates dispatch, palette, footer and help together;
+    # a conflicting preference is refused and explained, never applied silently.
+    preferences(prefix_key='', shortcuts={'host.edit': ['E'], 'host.note': ['d']})
+    s = Session('shortcuts-custom')
+    s.expect('E: edit')
+    s.expect('Raccourcis : 1 préférence(s) refusée(s)')
+    s.absent('quick')
+    s.send(CTRL_G)
+    s.absent('Actions rapides')
+    s.send(b'e')                      # released historical key
+    s.absent('Edit SSH Host')
+    s.send(b'E')
+    s.expect('Edit SSH Host')
+    s.send(ESC)
+    s.send(F2 + DOWN)
+    s.expect('Raccourci')
+    row = next(line for line in s.screen.text().splitlines() if '▶' in line)
+    assert 'Modifier' in row and ' E ' in row, row
+    s.send(ESC)
+    s.send(b'd')                      # `d` keeps its historical meaning
+    s.expect('DELETE SSH HOST — review')
+    s.send(ESC)
+    s.send(b'?' + DOWN * 45)
+    s.expect('d sert déjà à « Supprimer »')
+    s.send(ESC)
+    s.send(CTRL_C)
+    s.close()
+    assert CONFIG.read_bytes() == ORIGINAL_CONFIG
+    print('PTY PASS [shortcuts]: prefix panel without timeout, unknown letter, sequence letters, '
+          'F1/? help toggle, search text preserved, disabled prefix, configured shortcut in '
+          'dispatch/palette/footer/help, explained conflict, terminal restored')
+
+
+SCENARIOS = {'shortcuts': scenario_shortcuts}
+selected = sys.argv[3:] or list(SCENARIOS)
+for name in selected:
+    SCENARIOS[name]()
+print('UX PTY PASS: ' + ', '.join(selected))

@@ -220,13 +220,24 @@ pub struct KeyBindings {
     pub quit_keys: Vec<String>,
     #[serde(deserialize_with = "nullable_false")]
     pub disable_esc_quit: bool,
+    /// Two-step prefix opening the quick actions panel; an empty string disables it.
+    #[serde(deserialize_with = "nullable_prefix")]
+    pub prefix_key: String,
+    /// Direct list shortcuts by stable action identifier, replacing the historical
+    /// keys of that action. An empty list leaves the action to the palette.
+    #[serde(deserialize_with = "nullable_shortcuts")]
+    pub shortcuts: BTreeMap<String, Vec<String>>,
 }
+
+pub const DEFAULT_PREFIX_KEY: &str = "ctrl+g";
 
 impl Default for KeyBindings {
     fn default() -> Self {
         Self {
             quit_keys: vec!["q".into(), "ctrl+c".into()],
             disable_esc_quit: false,
+            prefix_key: DEFAULT_PREFIX_KEY.into(),
+            shortcuts: BTreeMap::new(),
         }
     }
 }
@@ -245,6 +256,16 @@ fn nullable_vec<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Vec<String>, D::Error> {
     Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
+}
+fn nullable_prefix<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_else(|| DEFAULT_PREFIX_KEY.into()))
+}
+fn nullable_shortcuts<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, Vec<String>>, D::Error> {
+    Ok(Option::<BTreeMap<String, Vec<String>>>::deserialize(deserializer)?.unwrap_or_default())
 }
 fn nullable_true<'de, D: Deserializer<'de>>(
     deserializer: D,
@@ -679,6 +700,7 @@ mod tests {
         for input in [
             r#"{"key_bindings":null}"#,
             r#"{"key_bindings":{"quit_keys":null,"disable_esc_quit":null}}"#,
+            r#"{"key_bindings":{"prefix_key":null,"shortcuts":null}}"#,
             "null",
         ] {
             fs::write(temp.path().join("config.json"), input).unwrap();

@@ -66,7 +66,9 @@ Exemple de préférences, dans `ssho/config.json` :
   "group_mode": "flat",
   "key_bindings": {
     "quit_keys": ["q", "ctrl+c"],
-    "disable_esc_quit": false
+    "disable_esc_quit": false,
+    "prefix_key": "ctrl+g",
+    "shortcuts": {}
   }
 }
 ```
@@ -152,6 +154,28 @@ Les directives tardives sont ignorées et signalées avec fichier et ligne : une
 En JSON, `tags` contient l’union sans préfixes graphiques. Lorsqu’un hôte hérite de tags, les clés additives `host_tags` et `file_tags` indiquent la provenance, dans chaque résultat de recherche et dans `info.result` ; `sshm.info.v1` est conservé. Sans héritage, les champs et valeurs historiques sont inchangés, notamment les valeurs nulles de `info`. Avec une directive FileTags reconnue dans le graphe chargé (même vide ou ignorée), une recherche JSON vide renvoie `[]` ; sans FileTags, les anciens messages textuels de recherche vide restent conservés. Les codes de sortie historiques restent inchangés : 1 si aucun hôte n’est déclaré, 0 si le filtre ne trouve rien.
 
 ## Navigation au clavier
+
+### Raccourcis, séquence à préfixe et personnalisation
+
+F2 reste l'accès principal à toutes les actions. Trois compléments s'y ajoutent :
+
+- **Aide** : `?` ou F1 depuis le tableau (F1 aussi depuis la recherche) ; `h` reste disponible. La touche qui ouvre l'aide la referme.
+- **Séquence à préfixe** : Ctrl+G, relâché, puis une lettre. Un panneau « Actions rapides » liste les lettres et reste ouvert jusqu'à un choix ou Échap, sans délai. Une lettre inconnue n'exécute rien ; une action indisponible affiche son motif. Ces lettres n'appartiennent qu'à la séquence : `d` y duplique, alors que `d` direct supprime toujours depuis le tableau. Lettres : `a` Ajouter, `e` Modifier, `d` Dupliquer, `m` Déplacer, `n` Note, `i` Informations, `t` Profils de tunnels, `k` Clés, `b` Lots, `f` Fichier source, `g` Groupes, `c` Colonnes, `r` Recharger, `?` Aide, `q` Quitter.
+- **Raccourcis directs historiques** : inchangés par défaut, actifs seulement lorsque le tableau a le focus. Dans la recherche, chaque caractère et chaque geste d'édition (Ctrl+A/E/K…) reste du texte.
+
+`key_bindings` de `ssho/config.json` règle ces choix :
+
+| Champ | Effet |
+| --- | --- |
+| `prefix_key` | Touche du préfixe, par exemple `"ctrl+g"` (défaut, aussi pour `null`) ou `"alt+x"`. `""` désactive la séquence. Une touche de navigation, un caractère simple ou une touche déjà attribuée sont refusés. Un geste d'édition comme `"ctrl+a"` est accepté mais reste réservé au texte dans les champs : le préfixe n'agit alors que hors saisie. Ctrl+A et Ctrl+B sont souvent capturés par tmux ou screen. |
+| `shortcuts` | Table `identifiant d'action → liste de touches`, qui remplace les touches historiques de cette seule action. `{"host.edit": ["E"]}` libère `e` ; `[]` laisse l'action à F2. Deux actions peuvent échanger leurs touches. |
+| `quit_keys` | Touches de sortie depuis la liste (inchangé). |
+
+Les touches s'écrivent `a`, `D` (la casse compte pour un caractère), `f6`, `ctrl+f`, `alt+x`, `enter`. Une préférence en conflit n'est jamais appliquée en silence : elle est ignorée, un bandeau « Raccourcis : n préférence(s) refusée(s) » apparaît dans la liste et l'aide en donne le motif (« d sert déjà à « Supprimer » »). La palette F2, le pied de page et l'aide affichent toujours les touches réellement actives. Ces préférences se modifient dans le fichier JSON.
+
+Identifiants d'action : `host.connect`, `host.add`, `host.edit`, `host.duplicate`, `host.move`, `host.delete`, `host.info`, `host.details`, `host.favorite`, `host.note`, `host.alias`, `tunnel.form`, `tunnel.profiles`, `tunnel.active`, `availability.test`, `availability.method`, `search.focus`, `filter.favorites`, `filter.hidden`, `filter.source`, `filter.source.clear`, `view.aliases`, `view.groups`, `view.columns`, `sort.toggle`, `sort.name`, `sort.recent`, `batch.mark`, `batch.select_visible`, `batch.clear`, `batch.open`, `batch.results`, `keys.open`, `app.backups`, `app.reload`, `app.palette`, `app.help`. La sortie se règle par `quit_keys`.
+
+La reconnaissance d'une combinaison dépend du terminal et d'un éventuel multiplexeur : si le préfixe choisi n'arrive pas jusqu'à l'application, en choisir un autre ou le désactiver ; toutes les actions restent accessibles par F2.
 
 L'écran principal utilise un titre compact et toute la hauteur disponible pour la liste. **Name** reste visible ; **Hostname**, **Tags**, puis **Last Attempt** s'ajoutent selon la largeur. Les textes trop longs se terminent par une ellipse `…`, mesurée en colonnes Unicode. Sous le tableau figurent le nombre d'hôtes filtrés/total (y compris les hôtes masqués), la position sélectionnée et la plage de lignes affichée. Les formulaires reprennent les onglets **General / Advanced** et leurs groupes de champs.
 
@@ -324,6 +348,9 @@ python3 tests/pty_smoke.py target/release/ssho --launcher-only
 python3 tests/pty_smoke.py target/release/ssho --aliases-only
 # Groupes, sécurité des en-têtes, recherche, préférences et petit terminal
 python3 tests/pty_smoke.py target/release/ssho --groups-only
+
+# Parcours ergonomiques UX (clavier, focus, retour) dans un dossier de fixture neuf
+python3 tests/pty_ux.py target/release/ssho "$(mktemp -d)/ux"
 
 # Comparaison facultative avec un exécutable SSHM
 python3 tests/reference_parity.py /path/to/sshm target/release/ssho

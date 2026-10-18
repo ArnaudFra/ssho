@@ -142,7 +142,6 @@ impl PaletteAction {
     ];
 
     /// Stable identifier, independent of language and display order.
-    #[allow(dead_code)] // Read by configurable shortcuts; the catalogue owns it.
     pub(super) fn id(self) -> &'static str {
         match self {
             Self::Add => "host.add",
@@ -299,7 +298,7 @@ impl PaletteAction {
 
 /// Historical direct shortcuts of the host list. Printable keys only apply while
 /// the table has the focus; function keys also apply from the search input.
-const HISTORICAL: [(&str, PaletteAction); 34] = [
+const HISTORICAL: [(&str, PaletteAction); 36] = [
     ("enter", PaletteAction::Connect),
     ("f2", PaletteAction::Palette),
     ("f3", PaletteAction::ChooseAlias),
@@ -333,13 +332,66 @@ const HISTORICAL: [(&str, PaletteAction); 34] = [
     ("s", PaletteAction::SortToggle),
     ("n", PaletteAction::SortName),
     ("r", PaletteAction::SortRecent),
+    ("?", PaletteAction::Help),
+    ("f1", PaletteAction::Help),
     ("h", PaletteAction::Help),
 ];
+
+/// Keys owned by navigation: no action may take them.
+const RESERVED: [&str; 16] = [
+    "up", "down", "left", "right", "tab", "backtab", "esc", "pageup", "pagedown", "home", "end",
+    " ", "j", "k", "ctrl+p", "ctrl+n",
+];
+
+/// Chords a text input edits with; an action bound to one stays out of inputs.
+const EDITING: [&str; 9] = [
+    "ctrl+a", "ctrl+e", "ctrl+b", "ctrl+f", "ctrl+h", "ctrl+d", "ctrl+u", "ctrl+k", "ctrl+w",
+];
+
+/// Letters of the two-step sequence. They belong to the sequence only and never
+/// change the meaning of the direct shortcuts (`d` deletes there, duplicates here).
+pub(super) const QUICK: [(char, PaletteAction); 15] = [
+    ('a', PaletteAction::Add),
+    ('e', PaletteAction::Edit),
+    ('d', PaletteAction::Duplicate),
+    ('m', PaletteAction::Move),
+    ('n', PaletteAction::Note),
+    ('i', PaletteAction::Info),
+    ('t', PaletteAction::Profiles),
+    ('k', PaletteAction::Keys),
+    ('b', PaletteAction::BatchOpen),
+    ('f', PaletteAction::SourceFilter),
+    ('g', PaletteAction::GroupMode),
+    ('c', PaletteAction::Columns),
+    ('r', PaletteAction::Reload),
+    ('?', PaletteAction::Help),
+    ('q', PaletteAction::Quit),
+];
+
+pub(super) fn quick_action(letter: char) -> Option<PaletteAction> {
+    QUICK
+        .iter()
+        .find(|(bound, _)| *bound == letter)
+        .map(|(_, action)| *action)
+}
+
+/// Preferences accept `Ctrl+G` or `F6`; one-character keys keep their case.
+fn normalize_key(key: &str) -> String {
+    let key = key.trim_matches(|c: char| c != ' ' && c.is_whitespace());
+    if key.chars().count() == 1 {
+        key.to_owned()
+    } else {
+        key.to_lowercase()
+    }
+}
 
 /// Resolved shortcuts of the host list: the single source for dispatch and display.
 #[derive(Clone, Debug)]
 pub(super) struct Keymap {
     bindings: Vec<(String, PaletteAction)>,
+    prefix: Option<String>,
+    /// Refused preferences, each with its reason; shown in the list and the help.
+    pub(super) conflicts: Vec<String>,
 }
 
 impl Keymap {
@@ -348,12 +400,85 @@ impl Keymap {
             .iter()
             .map(|(key, action)| ((*key).to_owned(), *action))
             .collect();
+        let mut conflicts = Vec::new();
+        // An override replaces the historical keys of its own action only. Release
+        // them all first, so two actions may exchange their keys.
+        let mut overrides = Vec::new();
+        for (id, keys) in &preferences.shortcuts {
+            match PaletteAction::CATALOGUE
+                .into_iter()
+                .find(|action| action.id() == id)
+            {
+                Some(PaletteAction::Quit) => conflicts.push(format!(
+                    "shortcuts.{id} : utilisez key_bindings.quit_keys pour Quitter"
+                )),
+                Some(action) => {
+                    bindings.retain(|(_, bound)| *bound != action);
+                    overrides.push((action, keys));
+                }
+                None => conflicts.push(format!("shortcuts.{id} : action inconnue")),
+            }
+        }
+        for (action, keys) in overrides {
+            for key in keys {
+                let key = normalize_key(key);
+                if key.is_empty() {
+                    continue;
+                }
+                let shown = display_key(&key);
+                if RESERVED.contains(&key.as_str()) {
+                    conflicts.push(format!(
+                        "{shown} est réservé à la navigation : ignoré pour « {} »",
+                        action.label()
+                    ));
+                } else if let Some((_, holder)) = bindings.iter().find(|(bound, _)| *bound == key) {
+                    if *holder != action {
+                        conflicts.push(format!(
+                            "{shown} sert déjà à « {} » : ignoré pour « {} »",
+                            holder.label(),
+                            action.label()
+                        ));
+                    }
+                } else {
+                    bindings.push((key, action));
+                }
+            }
+        }
         // Configured quit keys keep their precedence over a historical letter.
         for key in &preferences.quit_keys {
             bindings.retain(|(bound, _)| bound != key);
             bindings.push((key.clone(), PaletteAction::Quit));
         }
-        Self { bindings }
+        let prefix = normalize_key(&preferences.prefix_key);
+        let prefix = if prefix.is_empty() {
+            None
+        } else if RESERVED.contains(&prefix.as_str()) || prefix.chars().count() == 1 {
+            conflicts.push(format!(
+                "Préfixe {} refusé : touche de navigation ou caractère de saisie",
+                display_key(&prefix)
+            ));
+            None
+        } else if let Some((_, holder)) = bindings.iter().find(|(bound, _)| *bound == prefix) {
+            conflicts.push(format!(
+                "Préfixe {} désactivé : sert déjà à « {} »",
+                display_key(&prefix),
+                holder.label()
+            ));
+            None
+        } else {
+            if EDITING.contains(&prefix.as_str()) {
+                conflicts.push(format!(
+                    "Préfixe {} : édite le texte dans les champs, actif hors saisie seulement",
+                    display_key(&prefix)
+                ));
+            }
+            Some(prefix)
+        };
+        Self {
+            bindings,
+            prefix,
+            conflicts,
+        }
     }
 
     /// `key` uses the same spelling as the preferences: `a`, `D`, `f6`, `ctrl+f`.
@@ -362,6 +487,17 @@ impl Keymap {
             .iter()
             .find(|(bound, _)| bound == key)
             .map(|(_, action)| *action)
+    }
+
+    /// Whether `key` opens the quick actions panel; text inputs keep their chords.
+    pub(super) fn is_prefix(&self, key: &str, text_focus: bool) -> bool {
+        self.prefix
+            .as_deref()
+            .is_some_and(|prefix| prefix == key && !(text_focus && EDITING.contains(&prefix)))
+    }
+
+    pub(super) fn prefix(&self) -> Option<String> {
+        self.prefix.as_deref().map(display_key)
     }
 
     pub(super) fn keys(&self, action: PaletteAction) -> Vec<String> {
@@ -452,5 +588,71 @@ mod tests {
         assert_eq!(custom.action("x"), Some(PaletteAction::Quit));
         assert_eq!(custom.action("q"), None);
         assert_eq!(custom.shortcut(PaletteAction::BatchMark), None);
+    }
+
+    fn bindings(prefix: &str, shortcuts: &[(&str, &[&str])]) -> KeyBindings {
+        KeyBindings {
+            prefix_key: prefix.into(),
+            shortcuts: shortcuts
+                .iter()
+                .map(|(id, keys)| {
+                    (
+                        (*id).to_owned(),
+                        keys.iter().map(|k| (*k).to_owned()).collect(),
+                    )
+                })
+                .collect(),
+            ..KeyBindings::default()
+        }
+    }
+
+    #[test]
+    fn overrides_replace_only_their_action_and_explain_conflicts() {
+        let keymap = Keymap::new(&bindings(
+            "Ctrl+G",
+            &[
+                ("host.edit", &["E", "d", "j"]),
+                ("host.note", &[]),
+                ("nope", &["z"]),
+                ("app.quit", &["z"]),
+            ],
+        ));
+        // The historical `e` is released; `d` still deletes and `j` still navigates.
+        assert_eq!(keymap.action("e"), None);
+        assert_eq!(keymap.action("E"), Some(PaletteAction::Edit));
+        assert_eq!(keymap.action("d"), Some(PaletteAction::Delete));
+        assert_eq!(keymap.action("j"), None);
+        assert_eq!(keymap.shortcut(PaletteAction::Note), None);
+        assert_eq!(keymap.action("z"), None);
+        assert_eq!(keymap.conflicts.len(), 4, "{:?}", keymap.conflicts);
+        assert!(keymap.conflicts.iter().any(|c| c.contains("Supprimer")));
+        assert!(keymap.is_prefix("ctrl+g", true));
+        assert_eq!(keymap.prefix().as_deref(), Some("Ctrl+G"));
+        // Two actions may exchange their keys without any conflict.
+        let swapped = Keymap::new(&bindings(
+            "ctrl+g",
+            &[("host.add", &["e"]), ("host.edit", &["a"])],
+        ));
+        assert!(swapped.conflicts.is_empty(), "{:?}", swapped.conflicts);
+        assert_eq!(swapped.action("e"), Some(PaletteAction::Add));
+        assert_eq!(swapped.action("a"), Some(PaletteAction::Edit));
+    }
+
+    #[test]
+    fn prefix_is_configurable_disableable_and_never_steals_text_editing() {
+        assert!(Keymap::new(&bindings("", &[])).prefix().is_none());
+        let editing = Keymap::new(&bindings("ctrl+a", &[]));
+        assert!(editing.is_prefix("ctrl+a", false));
+        assert!(!editing.is_prefix("ctrl+a", true));
+        assert_eq!(editing.conflicts.len(), 1);
+        for refused in ["f5", "g", "tab", "ctrl+c"] {
+            let keymap = Keymap::new(&bindings(refused, &[]));
+            assert!(keymap.prefix().is_none(), "{refused}");
+            assert_eq!(keymap.conflicts.len(), 1, "{refused}");
+        }
+        let letters: std::collections::BTreeSet<_> = QUICK.iter().map(|(c, _)| *c).collect();
+        assert_eq!(letters.len(), QUICK.len());
+        assert_eq!(quick_action('d'), Some(PaletteAction::Duplicate));
+        assert_eq!(quick_action('z'), None);
     }
 }

@@ -676,7 +676,7 @@ fn contextual_bar_exposes_palette_and_existing_list_actions() {
         "e: edit",
         "f: tunnel",
         "p: test",
-        "h: help",
+        "?: help",
     ] {
         assert!(output.contains(shortcut), "missing {shortcut}");
     }
@@ -818,7 +818,7 @@ fn adaptive_footer_at_eighty_columns_keeps_actions_and_help_visible() {
         "Enter: connect",
         "f: tunnel",
         "p: test",
-        "h: help",
+        "?: help",
     ] {
         assert!(
             output.contains(text),

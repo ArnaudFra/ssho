@@ -26,6 +26,8 @@ mod search;
 mod source_filter;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod ux_tests;
 use crate::{
     config,
     runtime::{self, PingResult, PingStatus},
@@ -87,6 +89,10 @@ enum View {
     },
     Actions {
         selected: usize,
+    },
+    /// Second step of the prefix sequence; `notice` explains an unavailable letter.
+    Quick {
+        notice: Option<&'static str>,
     },
     Host(Box<HostForm>),
     Info(Host),
@@ -848,7 +854,7 @@ impl Model {
             View::Help => {
                 if matches!(
                     k.code,
-                    KeyCode::Esc | KeyCode::Char('q' | 'h') | KeyCode::Enter
+                    KeyCode::Esc | KeyCode::Char('q' | 'h' | '?') | KeyCode::Enter | KeyCode::F(1)
                 ) || (ctrl && k.code == KeyCode::Char('c'))
                 {
                     self.back();
@@ -908,6 +914,7 @@ impl Model {
                 }
                 return Action::None;
             }
+            View::Quick { .. } => return self.quick_key(k),
             View::List => {}
         }
         if let Some(host) = self.delete.clone() {
@@ -933,6 +940,10 @@ impl Model {
         // Every printable key and editing chord is text while search is focused;
         // only the configured Ctrl quit chord keeps its meaning there.
         let text_key = self.search_focus && matches!(k.code, KeyCode::Char(_));
+        if self.keymap().is_prefix(&key_name(k), self.search_focus) {
+            self.open_view(View::Quick { notice: None });
+            return Action::None;
+        }
         if k.code == KeyCode::Esc {
             if self.quit_key(k) {
                 return Action::Quit;
@@ -967,6 +978,40 @@ impl Model {
             _ => {}
         }
         Action::None
+    }
+    /// Second step of the prefix sequence. An unknown letter runs nothing and keeps
+    /// the panel open; there is no timeout.
+    fn quick_key(&mut self, k: KeyEvent) -> Action {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = k.modifiers.contains(KeyModifiers::ALT);
+        if k.code == KeyCode::Esc
+            || (ctrl && k.code == KeyCode::Char('c'))
+            || self.keymap().is_prefix(&key_name(k), false)
+        {
+            self.back();
+            return Action::None;
+        }
+        let KeyCode::Char(letter) = k.code else {
+            return Action::None;
+        };
+        if ctrl || alt {
+            return Action::None;
+        }
+        let Some(action) = actions::quick_action(letter) else {
+            return Action::None;
+        };
+        match action.availability(self.selected_host().is_some()) {
+            Ok(()) => {
+                self.back();
+                self.activate_action(action)
+            }
+            Err(reason) => {
+                self.view = View::Quick {
+                    notice: Some(reason),
+                };
+                Action::None
+            }
+        }
     }
     /// Shortcuts of the host list, resolved from the current preferences.
     fn keymap(&self) -> Keymap {

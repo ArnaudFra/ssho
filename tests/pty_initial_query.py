@@ -190,7 +190,7 @@ assert history['connections']['alpha']['connect_count'] == 1
 # Still a live browser after SSH, with the initial query and focus preserved.
 session.resize(120, 40)
 session.expect(query)
-session.expect('h: help')
+session.expect('?: help')
 session.send(b'\t')
 session.send(b'\x15')
 session.send(b'alpha')

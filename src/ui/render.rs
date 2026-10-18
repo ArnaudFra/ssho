@@ -110,6 +110,10 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
             list(f, m, area);
             actions(f, m, area);
         }
+        View::Quick { .. } => {
+            list(f, m, area);
+            quick_actions(f, m, area);
+        }
         View::Note(_) => note_editor(f, m, area),
         View::Host(_) => host_form(f, m, area),
         View::Forward(_) => forward_form(f, m, area),
@@ -160,7 +164,12 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
     let area = if let Some(path) = &m.source_filter {
         let parts = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
         f.render_widget(
-            Paragraph::new(format!("File: C/F2 clear • {}", path.display())).style(accent()),
+            Paragraph::new(format!(
+                "File: {}/F2 clear • {}",
+                m.keymap().hint(PaletteAction::ClearSourceFilter),
+                path.display()
+            ))
+            .style(accent()),
             parts[0],
         );
         parts[1]
@@ -168,7 +177,9 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         area
     };
     let search_error = m.search.as_ref().err();
+    let keymap = m.keymap();
     let notice_count = u16::from(search_error.is_some())
+        + u16::from(!keymap.conflicts.is_empty())
         + u16::from(!m.error.is_empty())
         + u16::from(m.update.as_ref().is_some_and(|u| u.available))
         + u16::from(m.show_hidden)
@@ -179,7 +190,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         notice_count
     };
     let search_height = if area.height < 12 { 1 } else { 3 };
-    let mut help = list_footer(area.width, m.search_focus, &m.keymap());
+    let mut help = list_footer(area.width, m.search_focus, &keymap);
     if m.details.shown && viewport_width < 110 {
         help.push(Line::from(details::narrow_hint(area.width, m.search_focus)));
     }
@@ -251,6 +262,17 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
             Style::default().fg(Color::Red),
         ));
     }
+    if !keymap.conflicts.is_empty() {
+        // The reasons are long: the help lists each refused preference in full.
+        notices.push(Line::styled(
+            format!(
+                "Raccourcis : {} préférence(s) refusée(s) — détail dans l'aide ({})",
+                keymap.conflicts.len(),
+                keymap.hint(PaletteAction::Help)
+            ),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
     if m.show_hidden {
         notices.push(Line::styled(
             "[showing hidden hosts — press H to hide]",
@@ -265,6 +287,9 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
     }
     if notice_height < notice_count {
         let mut badges = vec![];
+        if !keymap.conflicts.is_empty() {
+            badges.push("Raccourcis refusés");
+        }
         if m.update.as_ref().is_some_and(|u| u.available) {
             badges.push("Update");
         }
@@ -777,6 +802,14 @@ fn list_footer(width: u16, search_focus: bool, keymap: &Keymap) -> Vec<Line<'sta
             k(A::Connect)
         )]
     };
+    let mut lines = lines;
+    // The two-step prefix is announced wherever a row still has room for it.
+    if let (Some(prefix), Some(last)) = (keymap.prefix(), lines.last_mut()) {
+        let hint = format!(" • {prefix}: quick");
+        if width >= 65 && last.width() + hint.width() <= usize::from(width) {
+            last.push_str(&hint);
+        }
+    }
     lines.into_iter().map(Line::from).collect()
 }
 fn actions(f: &mut Frame, m: &Model, area: Rect) {
@@ -841,6 +874,71 @@ fn actions(f: &mut Frame, m: &Model, area: Rect) {
     );
     f.render_widget(
         Paragraph::new("↑/↓: select • Enter: run • Esc: cancel").style(Style::default().fg(GRAY)),
+        parts[2],
+    );
+}
+/// Second step of the prefix sequence: every letter is listed with its action.
+fn quick_actions(f: &mut Frame, m: &Model, area: Rect) {
+    let View::Quick { notice } = m.view else {
+        return;
+    };
+    let host = m.selected_host();
+    let columns = if area.width >= 76 { 3 } else { 2 };
+    let rows = actions::QUICK.len().div_ceil(columns);
+    let area = panel(area, 76, rows as u16 + 5);
+    f.render_widget(Clear, area);
+    let title = format!(
+        "Actions rapides — {}",
+        host.as_ref().map_or("aucun hôte sélectionné", |h| &h.name)
+    );
+    let border = block(&title, true);
+    let inner = border.inner(area);
+    f.render_widget(border, area);
+    let parts = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    let cells = actions::QUICK.chunks(rows).map(|column| {
+        column
+            .iter()
+            .map(|(letter, action)| {
+                let enabled = action.enabled(host.is_some());
+                Line::from(vec![
+                    Span::styled(
+                        format!("{letter} "),
+                        if enabled {
+                            accent()
+                        } else {
+                            Style::default().fg(GRAY)
+                        },
+                    ),
+                    Span::styled(
+                        action.label(),
+                        if enabled {
+                            Style::default()
+                        } else {
+                            Style::default().fg(GRAY)
+                        },
+                    ),
+                ])
+            })
+            .collect::<Vec<_>>()
+    });
+    let areas = Layout::horizontal(vec![Constraint::Ratio(1, columns as u32); columns])
+        .spacing(1)
+        .split(parts[0]);
+    for (lines, area) in cells.zip(areas.iter()) {
+        f.render_widget(Paragraph::new(lines), *area);
+    }
+    f.render_widget(
+        Paragraph::new(notice.map_or(String::new(), |reason| format!("Indisponible : {reason}")))
+            .style(Style::default().fg(Color::Yellow)),
+        parts[1],
+    );
+    f.render_widget(
+        Paragraph::new("Lettre : lancer • Esc : annuler").style(Style::default().fg(GRAY)),
         parts[2],
     );
 }
@@ -1520,6 +1618,11 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         .map(String::from),
     );
     let mut right = section(&[C::Tools, C::Application]);
+    if let Some(prefix) = keymap.prefix() {
+        right.pop();
+        right.push(format!("{prefix:<9} Actions rapides (puis une lettre)"));
+        right.push(String::new());
+    }
     right.extend(
         [
             "Navigation",
@@ -1557,7 +1660,29 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         left.into_iter().chain(right).collect()
     };
     if let Some(path) = &m.source_filter {
-        text.insert(0, format!("File: {} • C/F2: clear", path.display()));
+        text.insert(
+            0,
+            format!(
+                "File: {} • {}/F2: clear",
+                path.display(),
+                keymap.hint(PaletteAction::ClearSourceFilter)
+            ),
+        );
+    }
+    if !keymap.conflicts.is_empty() {
+        text.push("Raccourcis refusés (key_bindings de config.json) :".into());
+        text.extend(
+            details::wrapped(
+                keymap
+                    .conflicts
+                    .iter()
+                    .map(|conflict| Line::from(conflict.clone()))
+                    .collect(),
+                parts[0].width,
+            )
+            .into_iter()
+            .map(|line| line.to_string()),
+        );
     }
     if !m.config_warnings.is_empty() {
         text.push("Configuration warnings (FileTags ignored):".into());
