@@ -106,11 +106,27 @@ fn batch_running_quit_is_confirmed_and_pending_cancel_has_no_history() {
     m.key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
     batch::start(&mut m).unwrap();
     assert!(m.batch.manager.has_active());
+    // Leaving the results neither quits nor cancels: the batch keeps running.
     assert_eq!(m.key(key(KeyCode::Char('q'))), Action::None);
-    assert!(m.quit_tunnels);
-    assert!(screen(&mut m, 80, 20).contains("Cancel active batch"));
-    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::List) && !m.quit_tunnels);
+    assert!(m.batch.manager.has_active());
+    // Quitting from the list is what the main loop confirms, naming the batch.
+    m.search_focus = false;
+    assert_eq!(m.key(key(KeyCode::Char('q'))), Action::Quit);
+    m.ask_quit();
+    let text = screen(&mut m, 100, 20);
+    assert!(
+        text.contains("Lot en cours") && text.contains("Arrêter et quitter"),
+        "{text}"
+    );
+    assert_eq!(
+        m.key(key(KeyCode::Enter)),
+        Action::None,
+        "the focused choice returns"
+    );
     assert!(!m.quit_tunnels);
+    m.key(key(KeyCode::Char('B')));
+    assert!(matches!(m.view, View::BatchResults { .. }));
     assert_eq!(m.key(key(KeyCode::Char('s'))), Action::CancelBatch);
     m.batch.manager.cancel();
     m.batch.poll().unwrap();
@@ -212,9 +228,14 @@ fn active_batch_quit_also_warns_about_suspended_dirty_form() {
     m.key(key(KeyCode::Char('e')));
     typing(&mut m, "changed");
     m.key(key(KeyCode::F(7)));
+    // Returning from the owned tunnels gives the suspended draft back untouched.
     m.key(key(KeyCode::Char('q')));
+    assert!(matches!(&m.view, View::Host(form) if form.dirty()));
+    assert!(!m.quit_tunnels);
+    m.ask_quit();
     let text = screen(&mut m, 100, 20);
-    assert!(text.contains("unsaved edits"), "{text}");
+    assert!(text.contains("Lot en cours"), "{text}");
+    assert!(text.contains("Modifications non enregistrées"), "{text}");
     m.batch.manager.cancel();
 }
 

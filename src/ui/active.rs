@@ -93,11 +93,9 @@ impl Model {
             return Action::None;
         };
         match k.code {
-            KeyCode::Esc | KeyCode::F(7) => self.back(),
-            KeyCode::Char('q') => return self.quit_action(),
-            KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                return self.quit_action()
-            }
+            // Returning never stops a tunnel and never leaves the application.
+            _ if nav::cancels(k) => self.back(),
+            KeyCode::F(7) | KeyCode::Char('q') => self.back(),
             KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 *selected = (*selected + 1).min(self.tunnels.len().saturating_sub(1))
@@ -132,7 +130,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &Model, area: ratatui::layout::Rec
         Constraint::Length(3),
     ])
     .split(area);
-    f.render_widget(Paragraph::new("Owned tunnels • Active = process running; forwarding readiness unverified\nEsc: return • s: stop selected • q: stop + quit confirmation"), areas[0]);
+    f.render_widget(Paragraph::new("Owned tunnels • Active = process running; forwarding readiness unverified\nEsc/q: return, tunnels keep running • s: stop selected"), areas[0]);
     let rows = m.tunnels.iter().map(|r| {
         Row::new(vec![
             r.id.to_string(),

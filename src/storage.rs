@@ -244,11 +244,10 @@ impl Default for KeyBindings {
 
 impl KeyBindings {
     pub fn should_quit_on_key(&self, key: &str) -> bool {
-        if key == "esc" {
-            !self.disable_esc_quit
-        } else {
-            self.quit_keys.iter().any(|candidate| candidate == key)
-        }
+        // Esc goes back one level; at the list it quits only when listed among
+        // the quit keys, and `disable_esc_quit` still forbids it.
+        self.quit_keys.iter().any(|candidate| candidate == key)
+            && !(key == "esc" && self.disable_esc_quit)
     }
 }
 
@@ -809,6 +808,9 @@ mod tests {
         assert_eq!(value["future"], true);
         assert_eq!(value["key_bindings"]["custom"], 42);
         assert_eq!(value["ping_on_start"], false);
+        // Esc goes back; it quits only when listed, and the legacy switch still forbids it.
+        assert!(!config.key_bindings.should_quit_on_key("esc"));
+        config.key_bindings.quit_keys.push("esc".into());
         assert!(config.key_bindings.should_quit_on_key("esc"));
         config.key_bindings.disable_esc_quit = true;
         assert!(!config.key_bindings.should_quit_on_key("esc"));

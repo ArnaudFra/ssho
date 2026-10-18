@@ -28,7 +28,7 @@ impl Model {
             if k.code == KeyCode::Enter {
                 return Action::DeleteProfile(list.host.clone(), name.clone());
             }
-            if k.code == KeyCode::Esc || (ctrl && k.code == KeyCode::Char('c')) {
+            if nav::cancels(k) {
                 list.delete = None;
             }
             return Action::None;
@@ -37,12 +37,10 @@ impl Model {
         let len = profiles.map_or(0, BTreeMap::len);
         let selected = profiles.and_then(|p| p.iter().nth(list.selected));
         match k.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.back(),
-            KeyCode::Char('c') if ctrl => self.back(),
-            KeyCode::Up | KeyCode::Char('k') => list.selected = list.selected.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => {
-                list.selected = (list.selected + 1).min(len.saturating_sub(1))
-            }
+            _ if nav::cancels(k) => self.back(),
+            KeyCode::Char('q') => self.back(),
+            KeyCode::Up | KeyCode::Char('k') => list.selected = nav::wrap(list.selected, len, -1),
+            KeyCode::Down | KeyCode::Char('j') => list.selected = nav::wrap(list.selected, len, 1),
             KeyCode::Home => list.selected = 0,
             KeyCode::End => list.selected = len.saturating_sub(1),
             KeyCode::Char('a') => {

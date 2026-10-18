@@ -100,11 +100,7 @@ pub(super) fn key(m: &mut Model, key: KeyEvent) -> Action {
     };
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
-        KeyCode::Esc => {
-            m.back();
-            m.error.clear();
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        _ if nav::cancels(key) => {
             m.back();
             m.error.clear();
         }

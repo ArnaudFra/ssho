@@ -19,6 +19,7 @@ mod groups_tests;
 mod keys;
 #[cfg(test)]
 mod keys_tests;
+mod nav;
 mod notes;
 mod profiles;
 mod render;
@@ -204,6 +205,10 @@ struct Model {
     quit_tunnels: bool,
     delete: Option<Host>,
     discard: bool,
+    // Focused choice of the open discard or quit confirmation.
+    confirm: nav::Confirm,
+    // One-line explanation of the last key, cleared by the next one.
+    hint: String,
     view: View,
     parents: Vec<(View, usize)>,
     preferences: AppConfig,
@@ -256,6 +261,8 @@ impl Model {
             quit_tunnels: false,
             delete: None,
             discard: false,
+            confirm: nav::Confirm::default(),
+            hint: String::new(),
             view: View::List,
             parents: vec![],
             preferences,
@@ -598,13 +605,16 @@ impl Model {
                 _ => false,
             })
     }
-    fn quit_action(&mut self) -> Action {
-        if (self.has_unsaved_context() || self.batch.manager.has_active()) && !self.quit_tunnels {
-            self.quit_tunnels = true;
-            Action::None
-        } else {
-            Action::Quit
-        }
+    /// A modified draft is never dropped by leaving its screen: ask, with the
+    /// focus on continuing the edit.
+    fn ask_discard(&mut self) {
+        self.discard = true;
+        self.confirm = nav::Confirm::default();
+    }
+    /// Owned work and drafts are summarised before leaving; the focus is on returning.
+    fn ask_quit(&mut self) {
+        self.quit_tunnels = true;
+        self.confirm = nav::Confirm::default();
     }
     fn quit_key(&self, k: KeyEvent) -> bool {
         self.preferences
@@ -664,21 +674,23 @@ impl Model {
             return Action::None;
         }
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        self.hint.clear();
         if self.quit_tunnels {
-            if k.code == KeyCode::Enter {
-                return Action::Quit;
-            }
-            if k.code == KeyCode::Esc || (ctrl && k.code == KeyCode::Char('c')) {
-                self.quit_tunnels = false;
+            match self.confirm.key(k) {
+                Some(nav::Answer::Proceed) => return Action::Quit,
+                Some(nav::Answer::Stay) => self.quit_tunnels = false,
+                None => {}
             }
             return Action::None;
         }
         if self.discard {
-            if k.code == KeyCode::Esc || (ctrl && k.code == KeyCode::Char('c')) {
-                self.discard = false;
-            } else if k.code == KeyCode::Enter {
-                self.discard = false;
-                self.back();
+            match self.confirm.key(k) {
+                Some(nav::Answer::Proceed) => {
+                    self.discard = false;
+                    self.back();
+                }
+                Some(nav::Answer::Stay) => self.discard = false,
+                None => {}
             }
             return Action::None;
         }
@@ -712,7 +724,7 @@ impl Model {
                 return match editor.key(k) {
                     FormEvent::Cancel => {
                         if editor.dirty() {
-                            self.discard = true;
+                            self.ask_discard();
                         } else {
                             self.back();
                         }
@@ -728,7 +740,7 @@ impl Model {
                 return match f.key(k) {
                     FormEvent::Cancel => {
                         if f.dirty() {
-                            self.discard = true;
+                            self.ask_discard();
                         } else {
                             self.back();
                         }
@@ -754,10 +766,11 @@ impl Model {
             View::Aliases { .. } => return aliases::key(self, k),
             View::Availability { selected } => {
                 match k.code {
-                    KeyCode::Esc => self.back(),
-                    KeyCode::Char('c') if ctrl => self.back(),
-                    KeyCode::Up | KeyCode::Home => *selected = 0,
-                    KeyCode::Down | KeyCode::End => *selected = 1,
+                    _ if nav::cancels(k) => self.back(),
+                    KeyCode::Up => *selected = nav::wrap(*selected, 2, -1),
+                    KeyCode::Down => *selected = nav::wrap(*selected, 2, 1),
+                    KeyCode::Home => *selected = 0,
+                    KeyCode::End => *selected = 1,
                     KeyCode::Enter => {
                         return Action::Availability(if *selected == 0 {
                             AvailabilityMethod::Ssh
@@ -800,7 +813,7 @@ impl Model {
                 return match f.key(k) {
                     FormEvent::Cancel => {
                         if f.dirty() {
-                            self.discard = true;
+                            self.ask_discard();
                         } else {
                             self.back();
                         }
@@ -872,13 +885,16 @@ impl Model {
                 duplicate,
             } => {
                 match k.code {
-                    KeyCode::Esc => self.back(),
-                    KeyCode::Char('c') if ctrl => self.back(),
+                    _ if nav::cancels(k) => self.back(),
                     KeyCode::Char('q') if host.is_some() => self.back(),
-                    KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        *selected = (*selected + 1).min(files.len().saturating_sub(1))
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        *selected = nav::wrap(*selected, files.len(), -1)
                     }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        *selected = nav::wrap(*selected, files.len(), 1)
+                    }
+                    KeyCode::Home => *selected = 0,
+                    KeyCode::End => *selected = files.len().saturating_sub(1),
                     KeyCode::Enter => {
                         if let Some(target) = files.get(*selected) {
                             if let Some(host) = host {
@@ -945,9 +961,15 @@ impl Model {
             return Action::None;
         }
         if k.code == KeyCode::Esc {
+            // Esc goes back one level and the list is the root: it only quits
+            // when the preferences list it among the quit keys.
             if self.quit_key(k) {
                 return Action::Quit;
             }
+            self.hint = format!(
+                "Esc ne quitte pas la liste — {} : quitter",
+                self.keymap().keys(PaletteAction::Quit).join(" / ")
+            );
         } else if let Some(action) = self.keymap().action(&key_name(k)) {
             if !text_key || (ctrl && action == PaletteAction::Quit) {
                 return self.activate_action(action);
@@ -1548,7 +1570,7 @@ pub fn run(
                     || m.has_unsaved_context())
                     && !m.quit_tunnels
                 {
-                    m.quit_tunnels = true;
+                    m.ask_quit();
                     Ok(false)
                 } else {
                     m.batch.manager.cancel();

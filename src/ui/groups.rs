@@ -243,10 +243,10 @@ pub(super) fn key(m: &mut Model, key: KeyEvent) -> Action {
         return Action::None;
     };
     match key.code {
-        KeyCode::Esc | KeyCode::Char('q') => m.back(),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => m.back(),
-        KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
-        KeyCode::Down | KeyCode::Char('j') => *selected = (*selected + 1).min(MODES.len() - 1),
+        _ if nav::cancels(key) => m.back(),
+        KeyCode::Char('q') => m.back(),
+        KeyCode::Up | KeyCode::Char('k') => *selected = nav::wrap(*selected, MODES.len(), -1),
+        KeyCode::Down | KeyCode::Char('j') => *selected = nav::wrap(*selected, MODES.len(), 1),
         KeyCode::Home => *selected = 0,
         KeyCode::End => *selected = MODES.len() - 1,
         KeyCode::Enter => return Action::GroupMode(MODES[*selected].0),

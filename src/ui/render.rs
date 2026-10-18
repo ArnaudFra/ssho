@@ -76,22 +76,54 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         area
     };
     if m.quit_tunnels {
-        f.render_widget(
-            Paragraph::new(if m.batch.manager.has_active() { "Cancel active batch, discard unsaved edits and stop owned tunnels, then quit?\nDetached remote work may continue.\nEnter: cancel + quit • Esc: return" } else if m.has_unsaved_context() { "Discard unsaved edits and stop owned tunnels, then quit?\nEnter: discard + stop + quit • Esc: return" } else { "Stop owned tunnels and quit?\nEnter: stop + quit • Esc: return" })
-                .block(block("Active tunnels", true))
-                .wrap(Wrap { trim: false }),
-            panel(area, 66, 7),
+        // Name what leaving stops or loses, then the two possible decisions.
+        let tunnels = m
+            .tunnels
+            .iter()
+            .filter(|record| record.state == runtime::tunnels::State::Active)
+            .count();
+        let batch = m.batch.manager.has_active();
+        let mut lines = vec![];
+        if tunnels > 0 {
+            lines.push(Line::from(format!(
+                "• {tunnels} tunnel(s) actif(s) : ils seront arrêtés."
+            )));
+        }
+        if batch {
+            lines.push(Line::from(
+                "• Lot en cours : il sera annulé ; un travail distant déjà détaché peut continuer.",
+            ));
+        }
+        if m.has_unsaved_context() {
+            lines.push(Line::from(
+                "• Modifications non enregistrées : elles seront perdues.",
+            ));
+        }
+        if lines.is_empty() {
+            lines.push(Line::from("Aucun travail en cours."));
+        }
+        m.confirm.draw(
+            f,
+            area,
+            "Quitter ssho ?",
+            lines,
+            "Revenir",
+            if tunnels > 0 || batch {
+                "Arrêter et quitter"
+            } else {
+                "Abandonner et quitter"
+            },
         );
         return;
     }
     if m.discard {
-        let area = panel(area, 64, 7);
-        f.render_widget(Clear, area);
-        f.render_widget(
-            Paragraph::new("Discard changes?\nEnter: discard • Esc: resume editing")
-                .block(block("Unsaved changes", true))
-                .wrap(Wrap { trim: false }),
+        m.confirm.draw(
+            f,
             area,
+            "Modifications non enregistrées",
+            vec![Line::from("Abandonner les modifications de ce brouillon ?")],
+            "Continuer l'édition",
+            "Abandonner",
         );
         return;
     }
@@ -229,13 +261,15 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         } else {
             "No selection"
         });
-    let title = if m.connection_result.is_empty() {
+    let title = if !m.hint.is_empty() {
+        &m.hint
+    } else if m.connection_result.is_empty() {
         "SSHO • F4: details"
     } else {
         &m.connection_result
     };
     let method = m.preferences.availability_method.label();
-    let heading = if m.connection_result.is_empty() {
+    let heading = if m.connection_result.is_empty() || !m.hint.is_empty() {
         format!("{method} • {selected_state} • {title}")
     } else {
         format!("{method} • {title} • {selected_state}")
@@ -1613,7 +1647,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
             "tag:work ET is:online",
             "file:\"Team Hosts\" is:favorite",
             "Tab/Shift+Tab switch search / table",
-            "Esc    clear search / leave search / exit view",
+            "Esc    clear search / leave search / back one level",
         ]
         .map(String::from),
     );
@@ -1637,7 +1671,8 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
             "Ctrl+T forwarding: shell session / tunnel only",
             "Ctrl+A/E start/end of input",
             "Review: Enter confirms, Esc returns",
-            "Discard: Enter discard, Esc resume",
+            "Modified draft: Tab chooses, Enter confirms, Esc resumes",
+            "Esc/Ctrl+C: back one level; quitting is asked from the list",
             "Columns: Space toggle, Shift+↑↓ order, r reset",
             "Batch results: s cancels the batch",
             "Keys: F4 full details/error; ↑↓ PgUp/Dn Home/End scroll",

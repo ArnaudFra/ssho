@@ -34,6 +34,15 @@ fn model() -> Model {
         false,
     )
 }
+/// Leave a modified draft: the confirmation focuses "continue editing", so the
+/// discard choice must be selected explicitly.
+fn discard(m: &mut Model) {
+    m.key(key(KeyCode::Esc));
+    assert!(m.discard);
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Enter));
+    assert!(!m.discard);
+}
 pub(super) fn typing(m: &mut Model, s: &str) {
     for c in s.chars() {
         m.key(key(KeyCode::Char(c)));
@@ -69,7 +78,9 @@ fn search_first_selection_and_escape() {
     assert!(m.query.value.is_empty());
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
     assert!(!m.search_focus);
-    assert_eq!(m.key(key(KeyCode::Esc)), Action::Quit);
+    // Esc goes back one level; the list is the root and stays open.
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+    assert!(matches!(m.view, View::List));
 }
 #[test]
 fn search_never_runs_shortcuts() {
@@ -86,6 +97,9 @@ fn tab_hidden_delete_and_preferences() {
     assert_eq!(m.visible.len(), 3);
     assert!(matches!(m.key(key(KeyCode::Char('d'))), Action::Delete(_)));
     assert!(m.delete.is_none());
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+    m.preferences.key_bindings.quit_keys.push("esc".into());
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::Quit);
     m.preferences.key_bindings.disable_esc_quit = true;
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
     assert_eq!(m.key(ctrl('c')), Action::Quit);
@@ -1253,7 +1267,14 @@ fn navigation_escape_leaves_search_focus_and_backtab_matches_tab() {
     assert!(m.search_focus);
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
     assert!(!m.search_focus);
-    assert_eq!(m.key(key(KeyCode::Esc)), Action::Quit);
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+    let text = screen(&mut m, 100, 20);
+    assert!(
+        text.contains("Esc ne quitte pas la liste — q / Ctrl+C : quitter"),
+        "{text}"
+    );
+    m.key(key(KeyCode::Down));
+    assert!(!screen(&mut m, 100, 20).contains("Esc ne quitte pas"));
 }
 
 #[test]
@@ -1421,14 +1442,25 @@ fn dirty_host_cancel_resume_and_discard() {
     m.activate_action(PaletteAction::Edit);
     typing(&mut m, "-changed");
     m.key(key(KeyCode::Esc));
-    assert!(screen(&mut m, 100, 24).contains("Discard changes?"));
-    m.key(key(KeyCode::Esc));
+    let text = screen(&mut m, 100, 24);
+    assert!(
+        text.contains("Abandonner les modifications de ce brouillon ?"),
+        "{text}"
+    );
+    assert!(
+        text.contains("[▶ Continuer l'édition ]") && text.contains("[  Abandonner ]"),
+        "{text}"
+    );
+    // Enter on the focused choice, like Esc, keeps the draft.
+    m.key(key(KeyCode::Enter));
     let View::Host(f) = &m.view else {
         panic!("resume form")
     };
     assert_eq!(f.names[0].value, "alpha-changed");
     m.key(key(KeyCode::Esc));
-    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(&m.view, View::Host(f) if f.names[0].value == "alpha-changed"));
+    discard(&mut m);
     assert!(matches!(m.view, View::List));
 }
 
@@ -1540,8 +1572,7 @@ fn forward_dirty_cancel_resume_preserves_every_form_value_and_parent() {
     assert_eq!(form.inputs[1].cursor, 2);
     assert_eq!(form.scroll, 5);
     assert_eq!(m.parents.len(), depth);
-    m.key(key(KeyCode::Esc));
-    m.key(key(KeyCode::Enter));
+    discard(&mut m);
     assert!(matches!(m.view, View::Info(_)));
     assert_eq!(m.scroll, 3);
 }
@@ -1699,8 +1730,7 @@ fn host_confirmation_resume_preserves_advanced_tab_cursor_errors_and_parents() {
     };
     assert_eq!(format!("{form:?}"), before);
     assert_eq!(format!("{:?}", m.parents), parents);
-    m.key(key(KeyCode::Esc));
-    m.key(key(KeyCode::Enter));
+    discard(&mut m);
     assert!(matches!(m.view, View::Info(_)));
     assert_eq!(m.scroll, 8);
 }
@@ -1769,9 +1799,9 @@ fn help_keeps_existing_system_keys_after_form_shortcuts() {
         "Ctrl+S",
         "Alt+A/D",
         "Ctrl+A/E",
-        "Discard:",
+        "Modified draft:",
         "q, Ctrl+C Quitter",
-        "exit view",
+        "back one level",
     ] {
         assert!(text.contains(shortcut), "missing {shortcut}: {text}");
     }
@@ -2007,13 +2037,15 @@ fn manual_reload_does_not_interrupt_forms_or_confirmations() {
     assert!(m.discard);
     assert_eq!(m.key(key(KeyCode::F(5))), Action::None);
     assert!(m.discard);
+    m.key(key(KeyCode::Tab));
     m.key(key(KeyCode::Enter));
     m.key(key(KeyCode::Char('f')));
     typing(&mut m, "123");
     assert_eq!(m.key(key(KeyCode::F(5))), Action::None);
     assert!(matches!(m.view, View::Forward(_)));
+    // The forwarding type has the focus: nothing was typed, so Esc just returns.
     m.key(key(KeyCode::Esc));
-    m.key(key(KeyCode::Enter));
+    assert!(!m.discard && matches!(m.view, View::List));
     assert!(matches!(m.key(key(KeyCode::Char('d'))), Action::Delete(_)));
 }
 
@@ -2444,9 +2476,7 @@ fn notes_cancel_failed_save_success_and_shared_details() {
     m.search_focus = false;
     m.key(key(KeyCode::Char('N')));
     typing(&mut m, "discard me");
-    m.key(key(KeyCode::Esc));
-    assert!(m.discard);
-    m.key(key(KeyCode::Enter));
+    discard(&mut m);
     assert!(matches!(m.view, View::List));
     assert!(!temp.path().join("metadata.json").exists());
     m.key(key(KeyCode::Char('N')));
@@ -3718,8 +3748,7 @@ fn duplication_implicit_keys_stay_unset_and_resolution_errors_are_responsive() {
         panic!()
     };
     assert_eq!(form.inputs[0].value, "new");
-    m.key(key(KeyCode::Esc));
-    m.key(key(KeyCode::Enter));
+    discard(&mut m);
     m.key(key(KeyCode::Esc));
     assert!(matches!(m.view, View::List));
     assert_eq!(
@@ -4237,13 +4266,25 @@ fn mode_save_launch_and_quit_cancel_preserve_editor() {
     profiles::apply(&mut m, &mut store, &save).unwrap();
     assert!(matches!(&m.view, View::Forward(f) if !f.dirty()));
     assert!(matches!(m.key(ctrl('l')), Action::StartTunnel(_, Some(name), _) if name == "sock"));
-    m.quit_tunnels = true;
+    m.ask_quit();
     m.paste("should not edit");
-    assert!(screen(&mut m, 90, 30).contains("stop + quit"));
+    let text = screen(&mut m, 90, 30);
+    assert!(
+        text.contains("Quitter ssho ?") && text.contains("[▶ Revenir ]"),
+        "{text}"
+    );
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
     assert!(!m.quit_tunnels);
     assert!(matches!(&m.view, View::Forward(f) if !f.dirty()));
-    m.quit_tunnels = true;
+    m.ask_quit();
+    assert_eq!(
+        m.key(key(KeyCode::Enter)),
+        Action::None,
+        "Enter keeps the safe choice"
+    );
+    assert!(!m.quit_tunnels);
+    m.ask_quit();
+    m.key(key(KeyCode::Right));
     assert_eq!(m.key(key(KeyCode::Enter)), Action::Quit);
     m.quit_tunnels = false;
     m.view = View::Profiles(profiles::List::new("alpha".into()));
@@ -4549,25 +4590,35 @@ fn active_quit_confirms_discard_of_suspended_dirty_forms_and_preserves_caret_on_
     let raw = format!("{form:?}");
     let parents = format!("{:?}", m.parents);
     m.key(key(KeyCode::F(7)));
-    assert_eq!(
-        m.key(key(KeyCode::Char('q'))),
-        Action::None,
-        "quit must confirm losing a suspended dirty draft even without active tunnels"
-    );
-    assert!(m.quit_tunnels);
-    assert!(screen(&mut m, 100, 20).contains("Discard unsaved edits"));
+    // Returning from the owned tunnels never quits: the suspended draft comes back.
+    for back in [key(KeyCode::Char('q')), ctrl('c'), key(KeyCode::Esc)] {
+        assert!(matches!(m.view, View::Active { .. }));
+        assert_eq!(m.key(back), Action::None);
+        assert!(!m.quit_tunnels);
+        assert!(matches!(&m.view, View::Host(form) if format!("{form:?}") == raw));
+        assert_eq!(format!("{:?}", m.parents), parents);
+        m.key(key(KeyCode::F(7)));
+    }
+    // A quit request names the draft and only an explicit choice loses it.
+    m.ask_quit();
+    let text = screen(&mut m, 100, 20);
+    assert!(text.contains("Modifications non enregistrées"), "{text}");
+    assert!(text.contains("[  Abandonner et quitter ]"), "{text}");
     m.paste("\r\n");
     assert!(m.quit_tunnels);
-    m.key(key(KeyCode::Esc));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
     assert!(!m.quit_tunnels);
+    m.ask_quit();
+    m.key(key(KeyCode::Tab));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::Quit);
+    m.quit_tunnels = false;
     m.key(key(KeyCode::Esc));
     assert!(matches!(&m.view, View::Host(form) if format!("{form:?}") == raw));
-    assert_eq!(format!("{:?}", m.parents), parents);
-    m.key(key(KeyCode::F(7)));
-    assert_eq!(m.key(ctrl('c')), Action::None);
-    assert_eq!(m.key(key(KeyCode::Enter)), Action::Quit);
     let mut clean = model();
+    clean.search_focus = false;
     clean.key(key(KeyCode::F(7)));
+    assert_eq!(clean.key(key(KeyCode::Char('q'))), Action::None);
+    assert!(matches!(clean.view, View::List));
     assert_eq!(clean.key(key(KeyCode::Char('q'))), Action::Quit);
     assert!(!clean.quit_tunnels);
 }
@@ -4610,10 +4661,9 @@ fn active_quit_also_protects_notes_profile_drafts_and_prepared_changes() {
         let before = format!("{:?}", m.view);
         m.key(key(KeyCode::F(7)));
         assert_eq!(m.key(ctrl('c')), Action::None);
-        assert!(m.quit_tunnels);
-        m.key(key(KeyCode::Esc));
-        m.key(key(KeyCode::Esc));
+        assert!(!m.quit_tunnels);
         assert_eq!(format!("{:?}", m.view), before);
+        assert!(m.has_unsaved_context());
     }
     let mut m = model();
     changes::open(
@@ -4633,10 +4683,9 @@ fn active_quit_also_protects_notes_profile_drafts_and_prepared_changes() {
     let before = format!("{:?}", m.view);
     m.key(key(KeyCode::F(7)));
     assert_eq!(m.key(key(KeyCode::Char('q'))), Action::None);
-    assert!(m.quit_tunnels);
-    m.key(key(KeyCode::Esc));
-    m.key(key(KeyCode::Esc));
+    assert!(!m.quit_tunnels);
     assert_eq!(format!("{:?}", m.view), before);
+    assert!(m.has_unsaved_context());
     assert_eq!(fs::read_to_string(root).unwrap(), "# original\n");
 }
 

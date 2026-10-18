@@ -192,7 +192,65 @@ def scenario_shortcuts():
           'dispatch/palette/footer/help, explained conflict, terminal restored')
 
 
-SCENARIOS = {'shortcuts': scenario_shortcuts}
+def scenario_navigation():
+    preferences()
+    s = Session('navigation')
+    s.expect('?: help')
+    # Esc walks back one level at a time and never closes the list.
+    s.send(b'i')
+    s.expect('SSH Host Information: alpha')
+    s.send(b'e')
+    s.expect('Edit SSH Host')
+    s.send(b'\x1b[18~')              # F7 over an untouched form
+    s.expect('Owned tunnels')
+    for screen in ['Edit SSH Host', 'SSH Host Information: alpha', '?: help']:
+        s.send(ESC)
+        s.expect(screen)
+    s.send(ESC)
+    s.expect('Esc ne quitte pas la liste — q / Ctrl+C : quitter')
+    s.alive()
+    # Ctrl+C follows Esc inside a secondary screen.
+    for opener, title in [(b'?', 'Commands'), (F2, 'Raccourci'), (b'\x1b[18~', 'Owned tunnels')]:
+        s.send(opener)
+        s.expect(title)
+        s.send(CTRL_C)
+        s.absent(title)
+        s.alive()
+    # A modified draft survives Esc, Ctrl+C and Enter on the focused choice.
+    s.send(b'e')
+    s.expect('Edit SSH Host')
+    s.send(b'-draft')
+    for keep in [ESC, CTRL_C, b'\r']:
+        s.send(ESC)
+        s.expect("[▶ Continuer l'édition ]")
+        s.send(keep)
+        s.expect('alpha-draft')
+        s.absent('Abandonner les modifications')
+    s.send(ESC)
+    s.send(b'\t')
+    s.expect('[▶ Abandonner ]')
+    s.send(b'\r')
+    s.expect('?: help')
+    s.absent('alpha-draft')
+    # Simple selectors wrap at both ends.
+    s.send(b'g')
+    s.expect('Group view')
+    first = next(line for line in s.screen.text().splitlines() if '▶' in line)
+    s.send(UP)
+    last = next(line for line in s.drain(.2).splitlines() if '▶' in line)
+    assert first != last, (first, last)
+    s.send(DOWN)
+    assert next(line for line in s.drain(.2).splitlines() if '▶' in line) == first
+    s.send(ESC)
+    assert CONFIG.read_bytes() == ORIGINAL_CONFIG and not connections()
+    s.send(CTRL_C)                    # the list is the root: Ctrl+C asks to quit
+    s.close()
+    print('PTY PASS [navigation]: Esc one level at a time and inert at the root, Ctrl+C as Esc in '
+          'secondary screens, draft kept until discard is chosen, wrapping selector, '
+          'quit from the list, terminal restored')
+
+
+SCENARIOS = {'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

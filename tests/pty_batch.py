@@ -88,8 +88,11 @@ try:
  # Start second batch and test responsive foreground guard and exit cancellation.
  send(b'\x1b');send(b'B');send(b'slow');send(b'\x0c');send(b'\r');expect('Running')
  send(b'\x1b');send(b'\r');expect('Batch active')
- send(b'B');send(b'q');expect('Cancel active batch');send(b'\x1b');expect('Running')
- send(b's');expect('Cancelled');send(b'q')
+ # Leaving the results keeps the batch running; quitting from the list is confirmed.
+ send(b'B');expect('Running');send(b'q');expect('?: help')
+ send(b'q');expect('Lot en cours');send(b'\r');expect('?: help')
+ send(b'B');expect('Running')
+ send(b's');expect('Cancelled');send(b'q');expect('?: help');send(b'q')
  assert process.wait(timeout=5)==0
  assert termios.tcgetattr(slave)==original,'terminal not restored'
  history=json.loads((app/'sshm_history.json').read_text())['connections']

@@ -13,15 +13,15 @@ pub(super) fn open(m: &mut Model, config: &Path) -> Result<()> {
 }
 
 pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
-    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     let View::SourceFiles { files, selected } = &mut m.view else {
         return Action::None;
     };
     match k.code {
-        KeyCode::Esc | KeyCode::Char('q') => m.back(),
-        KeyCode::Char('c') if ctrl => m.back(),
-        KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
-        KeyCode::Down | KeyCode::Char('j') => *selected = (*selected + 1).min(files.len()),
+        _ if nav::cancels(k) => m.back(),
+        KeyCode::Char('q') => m.back(),
+        // "All files" is the first entry of this selector.
+        KeyCode::Up | KeyCode::Char('k') => *selected = nav::wrap(*selected, files.len() + 1, -1),
+        KeyCode::Down | KeyCode::Char('j') => *selected = nav::wrap(*selected, files.len() + 1, 1),
         KeyCode::Home => *selected = 0,
         KeyCode::End => *selected = files.len(),
         KeyCode::Enter => {

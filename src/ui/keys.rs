@@ -97,7 +97,7 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
     }
     if editor.details {
         match k.code {
-            KeyCode::Esc => editor.details = false,
+            _ if nav::cancels(k) => editor.details = false,
             KeyCode::Down => editor.details_scroll = editor.details_scroll.saturating_add(1),
             KeyCode::Up => editor.details_scroll = editor.details_scroll.saturating_sub(1),
             KeyCode::PageDown => {
@@ -110,9 +110,7 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
         }
         return Action::None;
     }
-    if k.code == KeyCode::Esc
-        || (k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c'))
-    {
+    if nav::cancels(k) {
         if matches!(editor.mode, Mode::List) {
             m.back();
         } else {

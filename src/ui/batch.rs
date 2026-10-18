@@ -235,7 +235,7 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     match &mut m.view {
         View::Batch(editor) => {
-            if k.code == KeyCode::Esc || (ctrl && k.code == KeyCode::Char('c')) {
+            if nav::cancels(k) {
                 if editor.confirm {
                     editor.confirm = false;
                     editor.scroll = 0;
@@ -290,9 +290,9 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
             stderr,
             offset,
         } => match k.code {
-            KeyCode::Esc => m.back(),
-            KeyCode::Char('q') => return m.quit_action(),
-            KeyCode::Char('c') if ctrl => return m.quit_action(),
+            // Returning keeps the batch running; only `s` cancels it.
+            _ if nav::cancels(k) => m.back(),
+            KeyCode::Char('q') => m.back(),
             KeyCode::Char('s') => return Action::CancelBatch,
             KeyCode::Up => {
                 *selected = selected.saturating_sub(1);
@@ -465,7 +465,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                     .collect(),
                 offset,
             );
-            f.render_widget(Paragraph::new("s: cancel • Tab: stdout/stderr • Esc: return\n↑↓: host • PgUp/PgDn: output • q: quit"),areas[3]);
+            f.render_widget(Paragraph::new("s: cancel batch • Tab: stdout/stderr • Esc/q: return, batch keeps running\n↑↓: host • PgUp/PgDn: output"),areas[3]);
         }
         _ => {}
     }

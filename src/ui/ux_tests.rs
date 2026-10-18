@@ -214,3 +214,174 @@ fn conflicting_preferences_are_refused_and_explained() {
         "{help}"
     );
 }
+
+#[test]
+fn escape_walks_back_to_the_list_and_never_closes_it() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('i')));
+    m.key(key(KeyCode::Char('e')));
+    m.key(key(KeyCode::F(7)));
+    assert_eq!(m.parents.len(), 3);
+    for expected in [2, 1, 0] {
+        assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+        assert_eq!(m.parents.len(), expected);
+    }
+    assert!(matches!(m.view, View::List));
+    // At the root Esc explains how to quit instead of closing the application.
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+    assert!(matches!(m.view, View::List));
+    assert!(screen(&mut m, 100, 20).contains("Esc ne quitte pas la liste"));
+    assert_eq!(m.selected_host().unwrap().name, "alpha");
+    assert_eq!(m.key(key(KeyCode::Char('q'))), Action::Quit);
+}
+
+#[test]
+fn ctrl_c_follows_escape_in_every_secondary_screen() {
+    // Each opener leaves the list; Ctrl+C must return to it without quitting.
+    let openers: [&[KeyCode]; 9] = [
+        &[KeyCode::F(2)],
+        &[KeyCode::F(7)],
+        &[KeyCode::Char('i')],
+        &[KeyCode::Char('?')],
+        &[KeyCode::Char('g')],
+        &[KeyCode::Char('P')],
+        &[KeyCode::Char('v')],
+        &[KeyCode::Char('N')],
+        &[KeyCode::Char('B')],
+    ];
+    for opener in openers {
+        let mut m = model(serde_json::json!({}));
+        for code in opener {
+            m.key(key(*code));
+        }
+        assert!(!matches!(m.view, View::List), "{opener:?} opens a screen");
+        assert_eq!(m.key(ctrl('c')), Action::None, "{opener:?}");
+        assert!(
+            matches!(m.view, View::List),
+            "{opener:?} returns to the list"
+        );
+        assert!(!m.quit_tunnels && !m.discard, "{opener:?}");
+    }
+    // The key details opened by F4 close first, then the key screen itself.
+    let mut m = model(serde_json::json!({}));
+    keys::open_view(&mut m, false);
+    m.key(key(KeyCode::F(4)));
+    assert_eq!(m.key(ctrl('c')), Action::None);
+    assert!(matches!(m.view, View::Keys(_)), "one level at a time");
+    assert_eq!(m.key(ctrl('c')), Action::None);
+    assert!(matches!(m.view, View::List));
+}
+
+#[test]
+fn simple_selectors_wrap_while_the_host_table_stays_bounded() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('g')));
+    m.key(key(KeyCode::Up));
+    assert!(matches!(m.view, View::GroupMode { selected } if selected == groups::MODES.len() - 1));
+    m.key(key(KeyCode::Down));
+    assert!(matches!(m.view, View::GroupMode { selected: 0 }));
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Char('P')));
+    m.key(key(KeyCode::Up));
+    assert!(matches!(m.view, View::Availability { selected: 1 }));
+    m.key(key(KeyCode::Down));
+    assert!(matches!(m.view, View::Availability { selected: 0 }));
+    m.key(key(KeyCode::Esc));
+    m.view = View::SourceFiles {
+        files: vec!["/one".into(), "/two".into()],
+        selected: 0,
+    };
+    m.key(key(KeyCode::Up));
+    assert!(matches!(m.view, View::SourceFiles { selected: 2, .. }));
+    m.key(key(KeyCode::Down));
+    assert!(matches!(m.view, View::SourceFiles { selected: 0, .. }));
+    m.view = View::Files {
+        files: vec!["/one".into(), "/two".into(), "/three".into()],
+        selected: 2,
+        host: None,
+        seed: String::new(),
+        duplicate: None,
+    };
+    m.key(key(KeyCode::Down));
+    assert!(matches!(m.view, View::Files { selected: 0, .. }));
+    m.key(key(KeyCode::End));
+    assert!(matches!(m.view, View::Files { selected: 2, .. }));
+    // The host table keeps its ends as spatial landmarks.
+    m.view = View::List;
+    m.key(key(KeyCode::Up));
+    assert_eq!(m.selected, 0);
+    m.key(key(KeyCode::End));
+    m.key(key(KeyCode::Down));
+    assert_eq!(m.selected, m.rows.len() - 1);
+}
+
+#[test]
+fn modified_draft_is_kept_until_discard_is_chosen_explicitly() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('e')));
+    typing(&mut m, "-draft");
+    let draft = format!("{:?}", m.view);
+    // Esc, Ctrl+C, Enter on the default choice and unrelated keys all keep it.
+    for keep in [key(KeyCode::Esc), ctrl('c'), key(KeyCode::Enter)] {
+        m.key(key(KeyCode::Esc));
+        assert!(m.discard);
+        m.key(key(KeyCode::Char('y')));
+        assert!(m.discard, "an unrelated key decides nothing");
+        m.key(keep);
+        assert!(!m.discard);
+        assert_eq!(format!("{:?}", m.view), draft);
+    }
+    // A previous visit never leaves the destructive choice focused.
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Esc));
+    assert!(screen(&mut m, 100, 24).contains("[▶ Continuer l'édition ]"));
+    m.key(key(KeyCode::Right));
+    assert!(screen(&mut m, 100, 24).contains("[▶ Abandonner ]"));
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(m.view, View::List));
+}
+
+#[test]
+fn quit_request_summarises_owned_work_and_names_both_decisions() {
+    use runtime::tunnels::{Record, Snapshot, State};
+    let mut m = model(serde_json::json!({}));
+    let record = |id, state| Record {
+        id,
+        snapshot: Snapshot {
+            config: "/config".into(),
+            host: "alpha".into(),
+            profile: None,
+            forward: Forward::default(),
+        },
+        state,
+        exit_code: None,
+        diagnostic: String::new(),
+    };
+    m.tunnels = vec![
+        record(1, State::Active),
+        record(2, State::Stopped),
+        record(3, State::Active),
+    ];
+    assert_eq!(m.key(key(KeyCode::Char('q'))), Action::Quit);
+    m.ask_quit();
+    let text = screen(&mut m, 100, 20);
+    assert!(
+        text.contains("2 tunnel(s) actif(s) : ils seront arrêtés"),
+        "{text}"
+    );
+    assert!(
+        text.contains("[▶ Revenir ]") && text.contains("[  Arrêter et quitter ]"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Lot en cours") && !text.contains("non enregistrées"),
+        "{text}"
+    );
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(!m.quit_tunnels, "the default decision returns to the list");
+    m.ask_quit();
+    m.key(key(KeyCode::Tab));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::Quit);
+}
