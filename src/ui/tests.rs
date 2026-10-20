@@ -43,6 +43,13 @@ fn discard(m: &mut Model) {
     m.key(key(KeyCode::Enter));
     assert!(!m.discard);
 }
+/// Open F2, find one action by typing words of its name, and run it with Enter.
+pub(super) fn palette(m: &mut Model, words: &str) -> Action {
+    m.key(key(KeyCode::F(2)));
+    assert!(matches!(m.view, View::Actions(_)), "F2 opens the palette");
+    typing(m, words);
+    m.key(key(KeyCode::Enter))
+}
 pub(super) fn typing(m: &mut Model, s: &str) {
     for c in s.chars() {
         m.key(key(KeyCode::Char(c)));
@@ -570,9 +577,7 @@ fn palette_from_search_edits_the_filtered_host() {
     typing(&mut m, "beta");
     assert_eq!(m.key(key(KeyCode::F(2))), Action::None);
     assert!(screen(&mut m, 100, 30).contains("Modifier"));
-    m.key(key(KeyCode::Down));
-    m.key(key(KeyCode::Down));
-    m.key(key(KeyCode::Up));
+    typing(&mut m, "modifier");
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
     let View::Host(form) = &m.view else {
         panic!("palette must open the existing edit form");
@@ -619,22 +624,27 @@ fn palette_empty_list_disables_host_actions_but_allows_add_and_help() {
         };
         m.key(key(KeyCode::F(2)));
         let output = screen(&mut m, 100, 30);
-        assert!(output.contains("Ajouter"));
-        assert!(output.contains("Aide"));
-        for _ in 0..3 {
-            m.key(key(KeyCode::Down));
+        assert!(output.contains("Ajouter un hôte"), "{output}");
+        // Host actions stay listed, explain why they cannot run, and run nothing.
+        for words in ["modifier", "dupliquer", "creer tunnel"] {
+            typing(&mut m, words);
             assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
-            assert!(screen(&mut m, 100, 30).contains("Ajouter"));
+            assert!(matches!(m.view, View::Actions(_)));
+            let output = screen(&mut m, 100, 30);
+            assert!(
+                output.contains("Indisponible : Sélectionnez un hôte. Rien n'a été lancé."),
+                "{words}: {output}"
+            );
+            m.key(ctrl('u'));
         }
-        m.key(key(KeyCode::Down));
+        typing(&mut m, "aide");
         for (width, height) in [(40, 12), (10, 5), (1, 1)] {
             screen(&mut m, width, height);
         }
         m.key(key(KeyCode::Enter));
         assert!(matches!(m.view, View::Help));
         m.key(key(KeyCode::Esc));
-        m.key(key(KeyCode::F(2)));
-        assert_eq!(m.key(key(KeyCode::Enter)), Action::Add(String::new()));
+        assert_eq!(palette(&mut m, "ajouter"), Action::Add(String::new()));
     }
 }
 
@@ -657,10 +667,8 @@ fn palette_tunnel_and_test_reuse_existing_actions() {
         },
     );
     m.key(key(KeyCode::F(2)));
-    assert!(screen(&mut m, 100, 30).contains("Tunnel"));
-    m.key(key(KeyCode::Up));
-    m.key(key(KeyCode::Down));
-    m.key(key(KeyCode::Down));
+    assert!(screen(&mut m, 100, 30).contains("Créer un tunnel"));
+    typing(&mut m, "creer tunnel");
     m.key(key(KeyCode::Enter));
     let View::Forward(form) = &m.view else {
         panic!("palette must open the existing tunnel form");
@@ -669,11 +677,7 @@ fn palette_tunnel_and_test_reuse_existing_actions() {
     assert_eq!(form.kind, 2);
     assert_eq!(form.inputs[1].value, "1080");
     m.key(key(KeyCode::Esc));
-    m.key(key(KeyCode::F(2)));
-    for _ in 0..3 {
-        m.key(key(KeyCode::Down));
-    }
-    assert_eq!(m.key(key(KeyCode::Enter)), Action::Ping);
+    assert_eq!(palette(&mut m, "tester"), Action::Ping);
     assert!(matches!(m.view, View::List));
     assert_eq!(m.query.value, "beta");
 }
@@ -922,10 +926,10 @@ fn adaptive_compact_notices_reserve_real_selected_host_rows() {
 fn palette_selected_actions_and_selector_have_explicit_high_contrast_colors() {
     use ratatui::style::{Color, Modifier};
 
-    for (has_host, selected, label) in [
-        (true, 0, "Ajouter"),
-        (true, 2, "Tunnel"),
-        (false, 1, "Modifier"),
+    for (has_host, words, label) in [
+        (true, "ajouter", "Ajouter un hôte"),
+        (true, "creer tunnel", "Créer un tunnel"),
+        (false, "modifier", "Modifier"),
     ] {
         let mut m = if has_host {
             model()
@@ -933,9 +937,7 @@ fn palette_selected_actions_and_selector_have_explicit_high_contrast_colors() {
             Model::new(vec![], AppConfig::default(), BTreeMap::new(), false)
         };
         m.key(key(KeyCode::F(2)));
-        for _ in 0..selected {
-            m.key(key(KeyCode::Down));
-        }
+        typing(&mut m, words);
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
         let row = terminal
@@ -953,8 +955,16 @@ fn palette_selected_actions_and_selector_have_explicit_high_contrast_colors() {
             selected_text.push("Sélectionnez un hôte");
         }
         for text in selected_text {
-            let first = text.chars().next().unwrap().to_string();
-            let start = row.iter().position(|cell| cell.symbol() == first).unwrap();
+            // The list stays visible beside the palette: locate the whole text.
+            let needle: Vec<String> = text.chars().map(|c| c.to_string()).collect();
+            let start = (0..=row.len() - needle.len())
+                .find(|&start| {
+                    needle
+                        .iter()
+                        .enumerate()
+                        .all(|(i, symbol)| row[start + i].symbol() == symbol)
+                })
+                .unwrap();
             for cell in &row[start..start + text.chars().count()] {
                 assert_eq!(cell.fg, Color::Black, "foreground of {text}: {cell:?}");
                 assert_eq!(cell.bg, Color::Rgb(0, 173, 216));
@@ -1020,11 +1030,9 @@ fn details_palette_appends_toggle_and_allows_empty_list() {
             model()
         };
         m.key(key(KeyCode::F(2)));
+        typing(&mut m, "panneau");
         let output = screen(&mut m, 150, 40);
-        assert!(output.contains("Détails"));
-        for _ in 0..5 {
-            m.key(key(KeyCode::Down));
-        }
+        assert!(output.contains("Panneau de détails"));
         m.key(key(KeyCode::Enter));
         assert!(matches!(m.view, View::List));
         let output = screen(&mut m, 150, 40);
@@ -2011,10 +2019,8 @@ fn manual_reload_palette_is_available_with_empty_filtered_list_and_retains_caret
     typing(&mut m, "missing");
     m.key(key(KeyCode::Left));
     m.key(key(KeyCode::F(2)));
+    typing(&mut m, "recharger");
     assert!(screen(&mut m, 100, 30).contains("Recharger"));
-    for _ in 0..6 {
-        m.key(key(KeyCode::Down));
-    }
     assert_eq!(m.key(key(KeyCode::Enter)), Action::Reload);
     assert!(matches!(m.view, View::List));
     assert!(m.search_focus);
@@ -2448,10 +2454,12 @@ fn favorites_commit_before_reordering_preserve_identity_and_filter_empty_palette
     apply_metadata_action(&mut m, &mut storage, &action).unwrap();
     assert!(m.visible.is_empty());
     m.key(key(KeyCode::F(2)));
-    for _ in 0..9 {
-        m.key(key(KeyCode::Down));
-    }
-    assert!(screen(&mut m, 80, 24).contains("Favoris seuls"));
+    typing(&mut m, "favoris seuls");
+    let text = screen(&mut m, 80, 24);
+    assert!(
+        text.contains("Favoris seuls") && text.contains("activé"),
+        "{text}"
+    );
     m.key(key(KeyCode::Enter));
     assert!(!m.favorites_only);
     assert_eq!(m.visible.len(), 2);
@@ -2653,8 +2661,7 @@ fn favorites_preferred_add_from_palette_reveals_real_save_even_when_filter_empty
         m.metadata = metadata.hosts().clone();
         m.activate_action(PaletteAction::FavoritesOnly);
         assert_eq!(m.visible.len(), usize::from(existing_favorite));
-        m.key(key(KeyCode::F(2)));
-        let Action::Add(seed) = m.key(key(KeyCode::Enter)) else {
+        let Action::Add(seed) = palette(&mut m, "ajouter") else {
             panic!("F2 Add must work without a selected host");
         };
         select_files(&mut m, &config, None, seed).unwrap();
@@ -3052,9 +3059,13 @@ fn advanced_search_paste_is_text_only_and_preserves_note_lines() {
     let View::Host(form) = &m.view else { panic!() };
     assert_eq!(form.inputs[0].value, "server user q");
     assert_eq!(form.focus, 0);
-    m.view = View::Actions { selected: 0 };
+    m.view = View::Actions(palette::State::new(palette::Scope::List));
     m.paste("\nq");
-    assert!(matches!(m.view, View::Actions { selected: 0 }));
+    assert!(matches!(
+        &m.view,
+        View::Actions(state)
+            if state.query.value.is_empty() && state.selected == Some(PaletteAction::Connect)
+    ));
 }
 
 #[test]
@@ -3517,7 +3528,7 @@ fn duplication_shortcut_and_palette_offer_selected_host() {
         m.key(key(KeyCode::Char('D'))),
         Action::Duplicate(m.all[0].clone())
     );
-    assert_eq!(PaletteAction::ALL[10].label(), "Dupliquer");
+    assert_eq!(PaletteAction::Duplicate.label(), "Dupliquer");
     assert_eq!(
         m.keymap().shortcut(PaletteAction::Duplicate).as_deref(),
         Some("D")
@@ -3526,12 +3537,8 @@ fn duplication_shortcut_and_palette_offer_selected_host() {
     m.query.set("alpha");
     m.filter(true);
     m.search_focus = true;
-    m.key(key(KeyCode::F(2)));
-    for _ in 0..10 {
-        m.key(key(KeyCode::Down));
-    }
     assert_eq!(
-        m.key(key(KeyCode::Enter)),
+        palette(&mut m, "dupliquer"),
         Action::Duplicate(m.all[0].clone())
     );
     assert_eq!(m.query.value, "alpha");
@@ -4063,7 +4070,9 @@ fn name_validation_caret_and_table_selection_are_visible() {
     assert!(cells.iter().all(|cell| cell.fg == Color::Black));
     assert!(matches!(m.key(ctrl('l')), Action::Connect(_, Some(_))));
     assert!(matches!(
-        PaletteAction::ALL.get(11),
+        PaletteAction::CATALOGUE
+            .iter()
+            .find(|action| action.id() == "tunnel.profiles"),
         Some(PaletteAction::Profiles)
     ));
 }
@@ -4839,11 +4848,10 @@ fn f2_source_actions_are_available_with_empty_search_results() {
     let mut m = model();
     typing(&mut m, "no-such-host");
     assert!(m.visible.is_empty());
-    m.key(key(KeyCode::F(2)));
-    for _ in 0..14 {
-        m.key(key(KeyCode::Down));
-    }
-    assert_eq!(format!("{:?}", m.key(key(KeyCode::Enter))), "SourceFilter");
+    assert_eq!(
+        format!("{:?}", palette(&mut m, "filtrer par fichier")),
+        "SourceFilter"
+    );
     assert!(m.search_focus);
     assert_eq!(m.query.value, "no-such-host");
 }
@@ -4973,11 +4981,7 @@ fn empty_filter_banner_survives_query_reload_and_compact_errors() {
         assert!(s.contains("C/F2"), "{w}x{h}: {s}");
     }
     screen(&mut m, 1, 1);
-    m.key(key(KeyCode::F(2)));
-    for _ in 0..15 {
-        m.key(key(KeyCode::Down));
-    }
-    m.key(key(KeyCode::Enter));
+    palette(&mut m, "tous les fichiers");
     assert!(m.source_filter.is_none());
     assert!(m.search_focus);
 }
@@ -5105,11 +5109,7 @@ fn expanding_or_retaining_source_keeps_applicable_pending_save_resolution() {
             }
             "F2-clear" => {
                 m.search_focus = true;
-                m.key(key(KeyCode::F(2)));
-                for _ in 0..15 {
-                    m.key(key(KeyCode::Down));
-                }
-                m.key(key(KeyCode::Enter));
+                palette(&mut m, "tous les fichiers");
             }
             "all" => choose_source(&mut m, &root, None),
             "same" => choose_source(&mut m, &root, Some(&a)),

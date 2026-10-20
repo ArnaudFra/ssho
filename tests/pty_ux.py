@@ -173,7 +173,8 @@ def scenario_shortcuts():
     s.send(b'E')
     s.expect('Edit SSH Host')
     s.send(ESC)
-    s.send(F2 + DOWN)
+    s.send(F2)
+    s.send(b'modifier')
     s.expect('Raccourci')
     row = next(line for line in s.screen.text().splitlines() if '▶' in line)
     assert 'Modifier' in row and ' E ' in row, row
@@ -250,7 +251,72 @@ def scenario_navigation():
           'quit from the list, terminal restored')
 
 
-SCENARIOS = {'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation}
+def scenario_palette():
+    preferences()
+    s = Session('palette', width=80, height=24)
+    s.expect('F2: actions')
+    s.send(F2)
+    s.expect('Actions — alpha')
+    for column in ['Rechercher une action :', 'Action', 'Raccourci', 'État', 'Connexion']:
+        s.expect(column)
+    selected = lambda: next(line for line in s.drain(.2).splitlines() if '▶' in line)
+    assert 'Se connecter' in selected() and ' Enter ' in selected(), selected()
+    s.send(UP)                        # first -> last
+    assert 'Quitter' in selected(), selected()
+    s.send(DOWN)                      # last -> first, category title back in view
+    assert 'Se connecter' in selected(), selected()
+    s.expect('Connexion')
+    # Typing searches, without accents; the single match waits for Enter.
+    s.send(b'tunnel')
+    s.expect('Rechercher une action : tunnel')
+    rows = [line for line in s.drain(.2).splitlines() if 'F6' in line or 'F7' in line]
+    assert len(rows) == 2 and 'Profils de tunnels' in rows[0] and 'Tunnels actifs' in rows[1], rows
+    s.absent('Ajouter un hôte')
+    s.send(b'\x15methode')           # Ctrl+U clears the search field
+    assert 'Méthode de disponibilité' in selected() and ' P ' in selected() and 'SSH' in selected()
+    time.sleep(.6)
+    s.expect('Actions — alpha')       # still open: nothing ran on its own
+    # An unavailable action explains itself and runs nothing.
+    s.send(b'\x15tous les fichiers')
+    s.expect('Indisponible : Aucun filtre de fichier actif.')
+    s.send(b'\r')
+    s.expect("Rien n'a été lancé.")
+    s.expect('Actions — alpha')
+    # Letters are search text: `q` and `d` neither quit nor delete.
+    s.send(b'\x15qd')
+    s.expect('Aucune action ne correspond')
+    s.alive()
+    s.send(ESC)
+    s.absent('Rechercher une action')
+    s.expect('F2: actions')
+    # Enter runs only the selected, available action.
+    s.send(F2)
+    s.send(b'aide\r')
+    s.expect('Commands')
+    s.send(ESC)
+    # Contextual palette over a modified draft: the draft is found again.
+    s.send(b'e')
+    s.expect('Edit SSH Host')
+    s.send(b'-draft')
+    s.send(F2)
+    s.expect('Actions — brouillon conservé')
+    s.expect('Tunnels actifs')
+    s.absent('Supprimer')
+    s.send(F2)                        # the key that opened it closes it
+    s.absent('brouillon conservé')
+    s.expect('alpha-draft')
+    s.send(ESC)
+    s.send(b'\t\r')
+    s.expect('F2: actions')
+    assert CONFIG.read_bytes() == ORIGINAL_CONFIG and not connections()
+    s.send(CTRL_C)
+    s.close()
+    print('PTY PASS [palette] at 80x24: columns, wrap at both ends, accent-insensitive search, no '
+          'auto-run, explained unavailability, letters as text, Enter runs the selection, '
+          'contextual palette keeps the draft, terminal restored')
+
+
+SCENARIOS = {'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

@@ -1,4 +1,4 @@
-use super::tests::{key, screen};
+use super::tests::{key, screen, typing};
 use super::*;
 #[test]
 fn picker_restores_dirty_fields_carets_and_parent_then_changes_only_identity() {
@@ -52,9 +52,7 @@ fn search_k_is_text_palette_and_global_picker_remain_available() {
     assert_eq!(m.key(key(KeyCode::Char('K'))), Action::OpenKeys(false));
     m.key(key(KeyCode::F(2)));
     assert!(matches!(m.view, View::Actions { .. }));
-    for _ in 0..PaletteAction::ALL.len() - 1 {
-        m.key(key(KeyCode::Down));
-    }
+    typing(&mut m, "cles");
     let text = screen(&mut m, 100, 40);
     assert!(text.contains("Clés OpenSSH"), "{text}");
     // The shortcut sits in its own column and follows the keymap.

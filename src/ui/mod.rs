@@ -21,6 +21,7 @@ mod keys;
 mod keys_tests;
 mod nav;
 mod notes;
+mod palette;
 mod profiles;
 mod render;
 mod search;
@@ -88,9 +89,7 @@ enum View {
         entries: Vec<config::backups::Backup>,
         selected: usize,
     },
-    Actions {
-        selected: usize,
-    },
+    Actions(palette::State),
     /// Second step of the prefix sequence; `notice` explains an unavailable letter.
     Quick {
         notice: Option<&'static str>,
@@ -715,6 +714,16 @@ impl Model {
         if k.code == KeyCode::F(9) && matches!(self.view, View::Host(_)) {
             return Action::OpenKeys(true);
         }
+        // The palette key also opens a contextual palette over a sheet or a draft,
+        // which stays underneath untouched. A character is never taken from a field.
+        if !matches!(k.code, KeyCode::Char(_))
+            && self.keymap().action(&key_name(k)) == Some(PaletteAction::Palette)
+        {
+            if let Some(scope) = palette::Scope::of(&self.view) {
+                palette::open(self, scope);
+                return Action::None;
+            }
+        }
         match &mut self.view {
             View::Columns(_) => return columns::key(self, k),
             View::Keys(_) => return keys::key(self, k),
@@ -913,23 +922,7 @@ impl Model {
                 }
                 return Action::None;
             }
-            View::Actions { selected } => {
-                match k.code {
-                    KeyCode::Up => *selected = selected.saturating_sub(1),
-                    KeyCode::Down => *selected = (*selected + 1).min(PaletteAction::ALL.len() - 1),
-                    KeyCode::Esc => self.back(),
-                    KeyCode::Char('c') if ctrl => self.back(),
-                    KeyCode::Enter => {
-                        let action = PaletteAction::ALL[*selected];
-                        if action.enabled(self.selected_host().is_some()) {
-                            self.back();
-                            return self.activate_action(action);
-                        }
-                    }
-                    _ => {}
-                }
-                return Action::None;
-            }
+            View::Actions(_) => return palette::key(self, k),
             View::Quick { .. } => return self.quick_key(k),
             View::List => {}
         }
@@ -1022,7 +1015,7 @@ impl Model {
         let Some(action) = actions::quick_action(letter) else {
             return Action::None;
         };
-        match action.availability(self.selected_host().is_some()) {
+        match action.availability(&self.action_context()) {
             Ok(()) => {
                 self.back();
                 self.activate_action(action)
@@ -1160,7 +1153,7 @@ impl Model {
                 self.filter(false);
             }
             PaletteAction::Search => self.search_focus = true,
-            PaletteAction::Palette => self.open_view(View::Actions { selected: 0 }),
+            PaletteAction::Palette => palette::open(self, palette::Scope::List),
             PaletteAction::Quit => return Action::Quit,
         }
         Action::None

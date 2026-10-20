@@ -218,7 +218,7 @@ fn groups_picker_cancel_preserves_selection_and_palette_access() {
     assert!(!matches!(m.view, View::List));
     m.key(key(KeyCode::Esc));
     assert_eq!(m.selected, before);
-    assert!(PaletteAction::ALL
+    assert!(PaletteAction::CATALOGUE
         .iter()
         .any(|a| a.label().contains("Group")));
 }

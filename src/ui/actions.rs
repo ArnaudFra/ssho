@@ -32,7 +32,6 @@ pub(super) enum PaletteAction {
     Keys,
     Availability,
     Columns,
-    // Catalogue entries reached from the list; not yet offered by the palette.
     Connect,
     Info,
     Move,
@@ -56,6 +55,14 @@ pub(super) enum Category {
 }
 
 impl Category {
+    pub(super) const ALL: [Self; 5] = [
+        Self::Connection,
+        Self::Host,
+        Self::Organization,
+        Self::Tools,
+        Self::Application,
+    ];
+
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Connection => "Connexion",
@@ -68,38 +75,8 @@ impl Category {
 }
 
 impl PaletteAction {
-    /// Actions listed by the F2 palette, in display order.
-    pub(super) const ALL: [Self; 27] = [
-        Self::Add,
-        Self::Edit,
-        Self::Tunnel,
-        Self::Test,
-        Self::Help,
-        Self::Details,
-        Self::Reload,
-        Self::Favorite,
-        Self::Note,
-        Self::FavoritesOnly,
-        Self::Duplicate,
-        Self::Profiles,
-        Self::Active,
-        Self::Backups,
-        Self::SourceFilter,
-        Self::ClearSourceFilter,
-        Self::ToggleAliases,
-        Self::ChooseAlias,
-        Self::GroupMode,
-        Self::BatchMark,
-        Self::BatchSelectVisible,
-        Self::BatchClear,
-        Self::BatchOpen,
-        Self::BatchResults,
-        Self::Keys,
-        Self::Availability,
-        Self::Columns,
-    ];
-
-    /// Every catalogue entry, grouped by category for help and documentation.
+    /// Every catalogue entry, grouped by category. The palette lists them in this
+    /// order; only the action that opens the palette itself is left out of it.
     pub(super) const CATALOGUE: [Self; 38] = [
         Self::Connect,
         Self::Tunnel,
@@ -187,43 +164,43 @@ impl PaletteAction {
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Columns => "Colonnes (ordre / visibilité)",
-            Self::Availability => "Méthode de disponibilité (SSH / ICMP)",
-            Self::Keys => "Clés OpenSSH (assistant)",
+            Self::Columns => "Colonnes : ordre et visibilité",
+            Self::Availability => "Méthode de disponibilité",
+            Self::Keys => "Clés OpenSSH",
             Self::BatchMark => "Lot : marquer l'alias",
-            Self::BatchSelectVisible => "Lot : sélectionner les résultats du filtre",
+            Self::BatchSelectVisible => "Lot : cibler les résultats du filtre",
             Self::BatchClear => "Lot : effacer les marques",
             Self::BatchOpen => "Lot : préparer / suivre",
             Self::BatchResults => "Lot : derniers résultats",
             Self::GroupMode => "Groupes",
             Self::ToggleAliases => "Alias regroupés",
             Self::ChooseAlias => "Choisir un alias",
-            Self::SourceFilter => "Fichier source",
+            Self::SourceFilter => "Filtrer par fichier source",
             Self::ClearSourceFilter => "Tous les fichiers",
-            Self::Add => "Ajouter",
+            Self::Add => "Ajouter un hôte",
             Self::Edit => "Modifier",
-            Self::Tunnel => "Tunnel",
-            Self::Test => "Tester",
+            Self::Tunnel => "Créer un tunnel",
+            Self::Test => "Tester la disponibilité",
             Self::Help => "Aide",
-            Self::Details => "Détails",
+            Self::Details => "Panneau de détails",
             Self::Reload => "Recharger",
-            Self::Favorite => "Favori",
-            Self::Note => "Note",
+            Self::Favorite => "Favori : épingler / retirer",
+            Self::Note => "Note personnelle",
             Self::FavoritesOnly => "Favoris seuls",
             Self::Duplicate => "Dupliquer",
             Self::Backups => "Sauvegardes",
             Self::Active => "Tunnels actifs",
             Self::Profiles => "Profils de tunnels",
             Self::Connect => "Se connecter",
-            Self::Info => "Informations",
+            Self::Info => "Fiche d'informations",
             Self::Move => "Déplacer",
             Self::Delete => "Supprimer",
-            Self::ToggleHidden => "Hôtes masqués",
+            Self::ToggleHidden => "Hôtes masqués : afficher / cacher",
             Self::SortToggle => "Tri : alterner",
             Self::SortName => "Tri : par nom",
             Self::SortRecent => "Tri : par connexion récente",
             Self::Search => "Rechercher",
-            Self::Palette => "Actions",
+            Self::Palette => "Palette d'actions",
             Self::Quit => "Quitter",
         }
     }
@@ -268,9 +245,104 @@ impl PaletteAction {
         }
     }
 
-    /// `Err` carries the reason shown to the user instead of running the action.
-    pub(super) fn availability(self, has_host: bool) -> Result<(), &'static str> {
-        let needs_host = matches!(
+    /// Words that also find the action in the palette, beyond its label.
+    pub(super) fn keywords(self) -> &'static str {
+        match self {
+            Self::Connect => "connexion ssh session ouvrir connect login",
+            Self::Tunnel => "transfert port forwarding redirection socks local distant",
+            Self::Profiles => "tunnel transfert forwarding enregistrés lancer",
+            Self::Active => "tunnel en cours suivi arrêter processus",
+            Self::Test => "ping sonde vérifier joignable",
+            Self::Availability => "ping icmp ssh sonde tester",
+            Self::Add => "nouveau créer new add",
+            Self::Edit => "éditer changer hôte edit",
+            Self::Duplicate => "copier cloner copy",
+            Self::Move => "fichier include déplacement move",
+            Self::Delete => "effacer retirer remove delete",
+            Self::Info => "détails configuration effective historique info",
+            Self::Details => "latéral aperçu volet",
+            Self::Favorite => "étoile épingle pin star",
+            Self::Note => "commentaire mémo",
+            Self::ChooseAlias => "cible exacte nom bloc",
+            Self::Search => "filtrer chercher trouver find",
+            Self::FavoritesOnly => "filtre étoile épinglés",
+            Self::ToggleHidden => "cachés hidden visibilité",
+            Self::SourceFilter => "include config fichier filtre",
+            Self::ClearSourceFilter => "effacer retirer filtre fichier",
+            Self::ToggleAliases => "regrouper bloc noms",
+            Self::GroupMode => "arborescence replier fichier tag regroupement",
+            Self::SortToggle | Self::SortName | Self::SortRecent => "ordre trier classer",
+            Self::Columns => "affichage tableau champs",
+            Self::BatchMark
+            | Self::BatchSelectVisible
+            | Self::BatchClear
+            | Self::BatchOpen
+            | Self::BatchResults => "commande multi-hôtes exécuter cibles batch",
+            Self::Keys => "clef ssh-keygen agent identité déployer générer",
+            Self::Backups => "restaurer restauration historique diff annuler",
+            Self::Reload => "rafraîchir relire actualiser",
+            Self::Palette => "f2 commandes",
+            Self::Help => "raccourcis touches documentation",
+            Self::Quit => "sortir fermer exit",
+        }
+    }
+
+    /// One sentence shown under the palette for the selected action.
+    pub(super) fn description(self) -> &'static str {
+        match self {
+            Self::Connect => "Ouvre une session SSH sur l'alias sélectionné, puis revient ici.",
+            Self::Tunnel => "Prépare un transfert de port local, distant ou SOCKS pour cet hôte.",
+            Self::Profiles => {
+                "Liste les tunnels enregistrés de cet hôte : ouvrir, lancer, supprimer."
+            }
+            Self::Active => "Suit les tunnels lancés par l'application et permet de les arrêter.",
+            Self::Test => "Relance les sondes de disponibilité de tous les hôtes.",
+            Self::Availability => "Choisit ce que mesure la disponibilité : SSH ou ICMP local.",
+            Self::Add => "Crée un nouvel hôte dans un fichier de configuration SSH.",
+            Self::Edit => "Modifie le bloc SSH de l'hôte sélectionné, avec aperçu avant écriture.",
+            Self::Duplicate => "Copie l'hôte sous un nouveau nom, dans le fichier de votre choix.",
+            Self::Move => "Déplace le bloc de l'hôte vers un autre fichier inclus.",
+            Self::Delete => {
+                "Supprime l'hôte après aperçu de la modification ; rien n'est écrit avant."
+            }
+            Self::Info => {
+                "Affiche la configuration déclarée et effective, la note et l'historique."
+            }
+            Self::Details => "Affiche ou masque le volet de détails à côté de la liste.",
+            Self::Favorite => "Épingle l'hôte en tête de liste, ou retire l'épingle.",
+            Self::Note => "Édite la note personnelle, conservée hors du fichier SSH.",
+            Self::ChooseAlias => "Choisit l'alias exact du bloc utilisé pour se connecter.",
+            Self::Search => "Place le curseur dans la recherche de la liste.",
+            Self::FavoritesOnly => "N'affiche que les favoris, ou revient à tous les hôtes.",
+            Self::ToggleHidden => "Affiche ou cache les hôtes portant le tag hidden.",
+            Self::SourceFilter => "Limite la liste aux hôtes d'un fichier de configuration.",
+            Self::ClearSourceFilter => "Retire le filtre par fichier source.",
+            Self::ToggleAliases => {
+                "Regroupe les alias d'un même bloc sur une seule ligne, ou les sépare."
+            }
+            Self::GroupMode => "Présente la liste à plat, par fichier, ou par fichier puis tag.",
+            Self::SortToggle => "Alterne entre le tri par nom et par connexion récente.",
+            Self::SortName => "Trie les hôtes par nom.",
+            Self::SortRecent => "Trie les hôtes par dernière connexion.",
+            Self::Columns => "Choisit les colonnes de la liste et leur ordre.",
+            Self::BatchMark => "Marque ou démarque l'alias sélectionné comme cible d'un lot.",
+            Self::BatchSelectVisible => "Ajoute aux cibles tous les hôtes que le filtre affiche.",
+            Self::BatchClear => "Retire toutes les cibles marquées.",
+            Self::BatchOpen => {
+                "Prépare une commande pour les cibles marquées, ou suit le lot en cours."
+            }
+            Self::BatchResults => "Rouvre les résultats du dernier lot lancé.",
+            Self::Keys => "Inventorie les clés, en génère, les ajoute à l'agent ou les déploie.",
+            Self::Backups => "Liste les sauvegardes des fichiers SSH et prépare une restauration.",
+            Self::Reload => "Relit le fichier SSH et ses Includes après une modification externe.",
+            Self::Palette => "Ouvre cette palette.",
+            Self::Help => "Affiche les raccourcis et les conventions de l'écran.",
+            Self::Quit => "Ferme l'application ; les travaux en cours sont récapitulés avant.",
+        }
+    }
+
+    fn needs_host(self) -> bool {
+        matches!(
             self,
             Self::Edit
                 | Self::Tunnel
@@ -283,17 +355,65 @@ impl PaletteAction {
                 | Self::BatchMark
                 | Self::Move
                 | Self::Delete
-        );
-        if needs_host && !has_host {
-            Err("Sélectionnez un hôte")
-        } else {
-            Ok(())
-        }
+        )
     }
 
+    /// Whether the action can be dispatched at all without a selected host.
     pub(super) fn enabled(self, has_host: bool) -> bool {
-        self.availability(has_host).is_ok()
+        has_host || !self.needs_host()
     }
+
+    /// `Err` carries the precise reason shown instead of running the action.
+    pub(super) fn availability(self, context: &Context) -> Result<(), &'static str> {
+        let no_host = if context.group {
+            "Sélectionnez un hôte, pas un groupe"
+        } else {
+            "Sélectionnez un hôte"
+        };
+        match self {
+            _ if self.needs_host() && !context.host => Err(no_host),
+            Self::Connect if !context.host => Err(no_host),
+            Self::Info if !context.host && !context.group => {
+                Err("Sélectionnez un hôte ou un groupe")
+            }
+            Self::ClearSourceFilter if !context.source_filter => {
+                Err("Aucun filtre de fichier actif")
+            }
+            Self::BatchClear if context.marks == 0 => Err("Aucune cible marquée"),
+            Self::BatchResults if !context.batch_results => Err("Aucun lot lancé"),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// What the availability of an action depends on, captured from the list.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Context {
+    pub host: bool,
+    /// A group header is selected instead of a host.
+    pub group: bool,
+    pub source_filter: bool,
+    pub marks: usize,
+    pub batch_results: bool,
+}
+
+/// Case- and accent-insensitive form used to search action names.
+pub(super) fn fold(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'à' | 'â' | 'ä' | 'á' | 'ã' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'î' | 'ï' | 'í' | 'ì' => 'i',
+            'ô' | 'ö' | 'ó' | 'ò' | 'õ' => 'o',
+            'ù' | 'û' | 'ü' | 'ú' => 'u',
+            'ç' => 'c',
+            'ñ' => 'n',
+            'ÿ' => 'y',
+            '’' => '\'',
+            _ => c,
+        })
+        .collect()
 }
 
 /// Historical direct shortcuts of the host list. Printable keys only apply while
@@ -553,9 +673,6 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), PaletteAction::CATALOGUE.len());
-        for action in PaletteAction::ALL {
-            assert!(PaletteAction::CATALOGUE.contains(&action), "{action:?}");
-        }
         let keymap = Keymap::new(&KeyBindings::default());
         for action in PaletteAction::CATALOGUE {
             for key in keymap.keys(action) {

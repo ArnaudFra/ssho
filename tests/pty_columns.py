@@ -120,10 +120,10 @@ try:
     send(b'\r'); expect('native-secondary'); expect('4321')
     saved = json.loads((app / 'config.json').read_text())
     assert saved['host_columns'] == ['name', 'port', 'user', 'hostname'] and saved['future']['kept'] == 9
-    # Cancel/reset doesn't publish, and the new F2 action is last (existing 26 intact).
+    # Cancel/reset doesn't publish, and F2 finds the action by its name.
     send(b'v'); send(b'r'); send(b'\x1b')
     assert json.loads((app / 'config.json').read_text()) == saved
-    send(b'\x1bOQ'); expect('Actions'); send(b'\x1b[B' * 26); send(b'\r'); expect('Columns')
+    send(b'\x1bOQ'); expect('Actions'); send(b'colonnes'); send(b'\r'); expect('Columns')
     send(b'\x1b'); send(b'\r'); expect('37'); expect('native-secondary')
     calls = [json.loads(line) for line in (ROOT / 'ssh.jsonl').read_text().splitlines()]
     connections = [args for args in calls if '-G' not in args]

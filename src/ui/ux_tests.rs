@@ -175,7 +175,7 @@ fn configured_shortcut_updates_dispatch_palette_footer_and_help() {
     assert!(matches!(m.view, View::Host(_)));
     m.key(key(KeyCode::Esc));
     m.key(key(KeyCode::F(2)));
-    m.key(key(KeyCode::Down));
+    typing(&mut m, "modifier");
     let palette = screen(&mut m, 120, 30);
     let row = palette
         .lines()
@@ -384,4 +384,219 @@ fn quit_request_summarises_owned_work_and_names_both_decisions() {
     m.ask_quit();
     m.key(key(KeyCode::Tab));
     assert_eq!(m.key(key(KeyCode::Enter)), Action::Quit);
+}
+
+fn palette_state(m: &Model) -> &palette::State {
+    let View::Actions(state) = &m.view else {
+        panic!("the palette is open")
+    };
+    state
+}
+
+#[test]
+fn palette_wraps_at_both_ends_over_displayed_actions() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::F(2)));
+    let entries = palette_state(&m).entries();
+    assert_eq!(entries.len(), PaletteAction::CATALOGUE.len() - 1);
+    assert_eq!(palette_state(&m).selected, entries.first().copied());
+    m.key(key(KeyCode::Up));
+    assert_eq!(palette_state(&m).selected, entries.last().copied());
+    assert!(
+        screen(&mut m, 100, 30).contains("Quitter"),
+        "the last action is scrolled in"
+    );
+    m.key(key(KeyCode::Down));
+    assert_eq!(palette_state(&m).selected, entries.first().copied());
+    let text = screen(&mut m, 100, 30);
+    assert!(
+        text.contains("Connexion") && text.contains("Se connecter"),
+        "{text}"
+    );
+    m.key(key(KeyCode::End));
+    assert_eq!(palette_state(&m).selected, entries.last().copied());
+    m.key(key(KeyCode::Home));
+    assert_eq!(palette_state(&m).selected, entries.first().copied());
+    // The wrap follows the filtered list, not the whole catalogue.
+    typing(&mut m, "tunnel");
+    let filtered = palette_state(&m).entries();
+    assert_eq!(
+        filtered,
+        [
+            PaletteAction::Tunnel,
+            PaletteAction::Profiles,
+            PaletteAction::Active
+        ]
+    );
+    m.key(key(KeyCode::Up));
+    assert_eq!(palette_state(&m).selected, Some(PaletteAction::Active));
+    m.key(key(KeyCode::Down));
+    assert_eq!(palette_state(&m).selected, Some(PaletteAction::Tunnel));
+}
+
+#[test]
+fn search_ignores_case_and_accents_and_never_runs_on_its_own() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::F(2)));
+    // Label words, synonyms and categories all find an action.
+    for (words, expected) in [
+        ("CLES", PaletteAction::Keys),
+        ("methode", PaletteAction::Availability),
+        ("forwarding socks", PaletteAction::Tunnel),
+        ("copier", PaletteAction::Duplicate),
+        ("effacer filtre", PaletteAction::ClearSourceFilter),
+        ("  restaurer ", PaletteAction::Backups),
+    ] {
+        typing(&mut m, words);
+        assert_eq!(palette_state(&m).selected, Some(expected), "{words}");
+        m.key(ctrl('u'));
+    }
+    // Shortcut letters are search text here: nothing is triggered or deleted.
+    typing(&mut m, "dq");
+    assert!(matches!(m.view, View::Actions(_)));
+    assert_eq!(palette_state(&m).query.value, "dq");
+    assert!(palette_state(&m).entries().is_empty());
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(screen(&mut m, 100, 30).contains("Aucune action ne correspond"));
+    m.key(ctrl('u'));
+    // A single match is selected but still waits for Enter.
+    typing(&mut m, "recharger");
+    assert_eq!(palette_state(&m).entries(), [PaletteAction::Reload]);
+    assert!(matches!(m.view, View::Actions(_)));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::Reload);
+    assert!(matches!(m.view, View::List));
+}
+
+#[test]
+fn columns_separate_shortcut_and_state_and_fit_eighty_columns() {
+    let mut m = model(serde_json::json!({}));
+    m.favorites_only = false;
+    m.show_hidden = true;
+    m.key(key(KeyCode::F(2)));
+    let text = screen(&mut m, 80, 24);
+    for expected in ["Action", "Raccourci", "État", "Rechercher une action :"] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // No label is truncated at 80 columns, and none carries its key.
+    let keymap = m.keymap();
+    for action in palette_state(&m).entries() {
+        assert_eq!(palette_state(&m).selected, Some(action));
+        let text = screen(&mut m, 80, 24);
+        let row = text
+            .lines()
+            .find(|line| line.contains('▶'))
+            .unwrap_or_else(|| panic!("{action:?} is selected: {text}"));
+        assert!(row.contains(action.label()), "{action:?} truncated: {row}");
+        if let Some(shortcut) = keymap.shortcut(action) {
+            assert!(row.contains(&format!(" {shortcut} ")), "{action:?}: {row}");
+        } else {
+            assert!(row.contains(" — "), "{action:?} has no direct key: {row}");
+        }
+        m.key(key(KeyCode::Down));
+    }
+    typing(&mut m, "masques");
+    let text = screen(&mut m, 80, 24);
+    assert!(
+        text.lines()
+            .any(|l| l.contains('▶') && l.contains("activé")),
+        "{text}"
+    );
+}
+
+#[test]
+fn unavailable_action_explains_its_reason_and_keeps_the_palette_open() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::F(2)));
+    for (words, reason) in [
+        ("tous les fichiers", "Aucun filtre de fichier actif"),
+        ("effacer les marques", "Aucune cible marquée"),
+        ("derniers resultats", "Aucun lot lancé"),
+    ] {
+        typing(&mut m, words);
+        let before = screen(&mut m, 100, 30);
+        assert!(
+            before.contains(&format!("Indisponible : {reason}.")),
+            "{before}"
+        );
+        assert_eq!(m.key(key(KeyCode::Enter)), Action::None, "{words}");
+        assert!(matches!(m.view, View::Actions(_)), "{words}");
+        let after = screen(&mut m, 100, 30);
+        assert!(after.contains("Rien n'a été lancé."), "{after}");
+        m.key(ctrl('u'));
+    }
+    assert!(m.source_filter.is_none() && m.batch.marks.is_empty());
+    // A group header is not a host: the reason says so.
+    let mut grouped = model(serde_json::json!({}));
+    grouped.preferences.group_mode = GroupMode::Files;
+    grouped.filter(false);
+    grouped.selected = 0;
+    assert!(grouped.selected_group().is_some());
+    grouped.key(key(KeyCode::F(2)));
+    typing(&mut grouped, "modifier");
+    assert!(screen(&mut grouped, 100, 30).contains("Sélectionnez un hôte, pas un groupe"));
+}
+
+#[test]
+fn selection_follows_the_action_identity_through_filtering() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "tunnel");
+    m.key(key(KeyCode::Down));
+    assert_eq!(palette_state(&m).selected, Some(PaletteAction::Profiles));
+    // Narrowing keeps the same action selected while it still matches.
+    typing(&mut m, " profils");
+    assert_eq!(palette_state(&m).selected, Some(PaletteAction::Profiles));
+    for _ in 0..8 {
+        m.key(key(KeyCode::Backspace));
+    }
+    assert_eq!(palette_state(&m).query.value, "tunnel");
+    assert_eq!(palette_state(&m).selected, Some(PaletteAction::Profiles));
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(m.view, View::Profiles(_)));
+}
+
+#[test]
+fn contextual_palette_keeps_the_draft_and_offers_compatible_actions() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('e')));
+    typing(&mut m, "-draft");
+    let draft = format!("{:?}", m.view);
+    m.key(key(KeyCode::F(2)));
+    assert_eq!(
+        palette_state(&m).entries(),
+        [PaletteAction::Active, PaletteAction::Help],
+        "a draft only offers screens that return to it"
+    );
+    let text = screen(&mut m, 100, 30);
+    assert!(text.contains("Actions — brouillon conservé"), "{text}");
+    assert!(
+        text.contains("alpha-draft"),
+        "the draft stays visible underneath: {text}"
+    );
+    typing(&mut m, "aide");
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(m.view, View::Help));
+    m.key(key(KeyCode::Esc));
+    assert_eq!(format!("{:?}", m.view), draft);
+    m.key(key(KeyCode::F(2)));
+    m.key(key(KeyCode::F(2)));
+    assert_eq!(
+        format!("{:?}", m.view),
+        draft,
+        "F2 closes the palette it opened"
+    );
+    // From a host sheet, the palette acts on that host.
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('i')));
+    m.key(key(KeyCode::F(2)));
+    let entries = palette_state(&m).entries();
+    assert!(entries.contains(&PaletteAction::Edit) && entries.contains(&PaletteAction::Connect));
+    assert!(
+        !entries.contains(&PaletteAction::GroupMode) && !entries.contains(&PaletteAction::Quit)
+    );
+    typing(&mut m, "connecter");
+    assert_eq!(
+        m.key(key(KeyCode::Enter)),
+        Action::Connect("alpha".into(), None)
+    );
 }

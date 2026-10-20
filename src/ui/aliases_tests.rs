@@ -157,7 +157,7 @@ fn grouping_toggle_is_action_only_outside_search_and_palette_is_available() {
     assert_eq!(m.query.value, "A");
     m.search_focus = false;
     assert_ne!(m.key(key(KeyCode::Char('A'))), Action::None);
-    assert!(PaletteAction::ALL
+    assert!(PaletteAction::CATALOGUE
         .iter()
         .any(|a| a.label().contains("Alias")));
 }

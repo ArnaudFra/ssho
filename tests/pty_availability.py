@@ -78,8 +78,8 @@ try:
  (app/'config.json').rmdir();(app/'saved.json').rename(app/'config.json');send(b'\x1b');expect('ICMP local')
  (ROOT/'mode').write_text('offline');send(b'p');expect('! Offline');send(b'/');send(b'is:offline');expect('alpha');send(b'\x1b');send(b'\x1b')
  (ROOT/'mode').write_text('denied');send(b'p');expect('? Unknown');send(b'i');expect('Operation not permitted');send(b'\x1b')
- # F2 is still the palette; new action is accessible at its end.
- send(b'\x1bOQ');expect('Actions');send(b'\x1b[B'*25);send(b'\r');expect('Availability method');send(b'\x1b')
+ # F2 is still the palette; the action is found by typing its name, without accents.
+ send(b'\x1bOQ');expect('Actions');send(b'methode');send(b'\r');expect('Availability method');send(b'\x1b')
  # Switch while native ping has a live descendant. New SSH verdict must win.
  (ROOT/'mode').write_text('slow');send(b'p')
  end=time.monotonic()+3

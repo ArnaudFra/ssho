@@ -127,6 +127,9 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         );
         return;
     }
+    draw_view(f, m, area);
+}
+fn draw_view(f: &mut Frame, m: &mut Model, area: Rect) {
     match &m.view {
         View::List => {
             list(f, m, area);
@@ -138,9 +141,9 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         View::Keys(_) => keys::draw(f, m, area),
         View::Batch(_) | View::BatchResults { .. } => batch::draw(f, m, area),
         View::Changes(_) | View::Backups { .. } => changes::draw(f, m, area),
-        View::Actions { .. } => {
-            list(f, m, area);
-            actions(f, m, area);
+        View::Actions(_) => {
+            draw_parent(f, m, area);
+            palette::draw(f, m, area);
         }
         View::Quick { .. } => {
             list(f, m, area);
@@ -846,70 +849,17 @@ fn list_footer(width: u16, search_focus: bool, keymap: &Keymap) -> Vec<Line<'sta
     }
     lines.into_iter().map(Line::from).collect()
 }
-fn actions(f: &mut Frame, m: &Model, area: Rect) {
-    let View::Actions { selected } = m.view else {
+/// Draw the screen under an overlay, exactly as it will be found on return.
+fn draw_parent(f: &mut Frame, m: &mut Model, area: Rect) {
+    let Some((parent, scroll)) = m.parents.pop() else {
         return;
     };
-    let area = panel(area, 76, 17);
-    f.render_widget(Clear, area);
-    let border = block("Actions", true);
-    let inner = border.inner(area);
-    f.render_widget(border, area);
-    let parts = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .split(inner);
-    let host = m.selected_host();
-    f.render_widget(
-        Paragraph::new(
-            host.as_ref()
-                .map(|host| format!("Host: {}", host.name))
-                .unwrap_or_else(|| "No selected host".into()),
-        ),
-        parts[0],
-    );
-    let keymap = m.keymap();
-    // Shortcuts have their own column: a label never carries a key.
-    let rows = PaletteAction::ALL.into_iter().map(|action| {
-        let availability = action.availability(host.is_some());
-        Row::new(vec![
-            Cell::from(action.label()),
-            Cell::from(keymap.hint(action)),
-            Cell::from(availability.err().unwrap_or("")),
-        ])
-        .style(if availability.is_ok() {
-            Style::default()
-        } else {
-            Style::default().fg(GRAY)
-        })
-    });
-    let mut state = TableState::default().with_selected(Some(selected));
-    f.render_stateful_widget(
-        Table::new(
-            rows,
-            [
-                Constraint::Min(20),
-                Constraint::Length(9),
-                Constraint::Length(20),
-            ],
-        )
-        .header(Row::new(["Action", "Raccourci", "État"]).style(Style::default().fg(GRAY)))
-        .highlight_symbol("▶ ")
-        .row_highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(CYAN)
-                .add_modifier(Modifier::BOLD),
-        ),
-        parts[1],
-        &mut state,
-    );
-    f.render_widget(
-        Paragraph::new("↑/↓: select • Enter: run • Esc: cancel").style(Style::default().fg(GRAY)),
-        parts[2],
-    );
+    let overlay = std::mem::replace(&mut m.view, parent);
+    let overlay_scroll = std::mem::replace(&mut m.scroll, scroll);
+    draw_view(f, m, area);
+    let parent = std::mem::replace(&mut m.view, overlay);
+    let scroll = std::mem::replace(&mut m.scroll, overlay_scroll);
+    m.parents.push((parent, scroll));
 }
 /// Second step of the prefix sequence: every letter is listed with its action.
 fn quick_actions(f: &mut Frame, m: &Model, area: Rect) {
@@ -917,6 +867,7 @@ fn quick_actions(f: &mut Frame, m: &Model, area: Rect) {
         return;
     };
     let host = m.selected_host();
+    let context = m.action_context();
     let columns = if area.width >= 76 { 3 } else { 2 };
     let rows = actions::QUICK.len().div_ceil(columns);
     let area = panel(area, 76, rows as u16 + 5);
@@ -938,7 +889,7 @@ fn quick_actions(f: &mut Frame, m: &Model, area: Rect) {
         column
             .iter()
             .map(|(letter, action)| {
-                let enabled = action.enabled(host.is_some());
+                let enabled = action.availability(&context).is_ok();
                 Line::from(vec![
                     Span::styled(
                         format!("{letter} "),
