@@ -98,7 +98,7 @@ try:
     send(b'v')
     expect('Search: > v')
     assert not any('-G' not in json.loads(line) for line in (ROOT / 'ssh.jsonl').read_text().splitlines())
-    send(b'\x1b'); send(b'\x1b')
+    send(b'\x15'); send(b'\x1b')  # Ctrl+U clears the text, Esc returns to the table
     send(b'\x1b[F')  # Last row: concrete primary alias, after its file header.
     send(b'\x1bOR'); expect('Choose alias')
     send(b'\x1b[B'); send(b'\r'); expect('native-secondary'); expect('4321')

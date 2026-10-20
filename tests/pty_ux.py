@@ -316,7 +316,66 @@ def scenario_palette():
           'contextual palette keeps the draft, terminal restored')
 
 
-SCENARIOS = {'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation}
+def scenario_search():
+    preferences()
+    (APP / 'config.json').write_text(json.dumps(dict(BASE, focus_search_on_start=True)))
+    s = Session('search', width=100, height=30)
+    # Editing: a real input, named as the focused element, with a caret.
+    s.expect('● Recherche')
+    s.expect('Search: > ')
+    s.absent('● Hôtes')
+    s.send(b'alp')
+    s.expect('Search: > alp')
+    s.expect('1 hôte sur 2')
+    assert b'\x1b[?25h' in s.raw, 'the search input shows the native caret'
+    # Tab gives the focus to the table: no inactive input box is left behind.
+    s.send(b'\x1b[D\t')
+    s.expect('● Hôtes')
+    s.absent('Search: > ')
+    s.absent('● Recherche')
+    s.expect('Filtres : alp')
+    s.expect('( / : modifier • Backspace : effacer )')
+    s.expect('1 hôte sur 2')
+    s.absent('beta')
+    # Back to the search: text and cursor are found again.
+    s.send(b'/X')
+    s.expect('Search: > alXp')
+    s.send(b'\x7f')                   # Backspace edits inside the input
+    s.expect('Search: > alp')
+    # Esc leaves the edit and keeps the filter applied and visible.
+    s.send(ESC)
+    s.expect('Filtres : alp')
+    s.absent('beta')
+    s.alive()
+    # Clearing is explicit: Backspace from the table, or the palette action.
+    s.send(b'\x7f')
+    s.expect('/ Rechercher')
+    s.expect('beta')
+    s.absent('Filtres :')
+    s.send(F2)
+    s.send(b'effacer la recherche')
+    s.expect('Indisponible : Aucune recherche active.')
+    s.send(ESC)
+    # Hidden hosts and favorites join the same band, with the host count.
+    s.send(b'H')
+    s.expect('Filtres : Masqués visibles (H)')
+    s.send(F2)
+    s.send(b'favoris seuls\r')
+    s.expect('Filtres : Favoris seuls • Masqués visibles (H)')
+    s.expect('0 hôte sur 2')
+    s.send(F2)
+    s.send(b'effacer tous les filtres\r')
+    s.absent('Filtres :')
+    s.expect('2 hôtes')
+    assert CONFIG.read_bytes() == ORIGINAL_CONFIG and not connections()
+    s.send(CTRL_C)
+    s.close()
+    print('PTY PASS [search]: editing input with caret, no inactive box after Tab, visible '
+          'filter band and host count, query and cursor kept, Esc keeps the filter, '
+          'explicit clearing from table and palette, combined criteria, terminal restored')
+
+
+SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

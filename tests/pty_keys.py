@@ -82,7 +82,7 @@ def resize(w,h):
  fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',h,w,0,0));os.kill(process.pid,signal.SIGWINCH);drain()
 try:
  expect('alpha');send(b'K');expect('K');assert not (ROOT/'native.jsonl').exists()
- send(b'\x1b');send(b'\x1b');send(b'e');expect('Edit SSH Host')
+ send(b'\x15');send(b'\x1b');send(b'e');expect('Edit SSH Host')
  # F9 picker from an edited name; cancel preserves caret and parent draft.
  send(b'Z');send(b'\x1b[20~');expect('IdentityFile picker');expect('SHA256:fixture');send(b'\x1b');expect('alphaZ')
  send(b'\x1b[20~');expect('IdentityFile picker');send(b'\r');expect('alphaZ')

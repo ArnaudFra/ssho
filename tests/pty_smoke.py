@@ -81,10 +81,13 @@ class Session:
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
         os.kill(self.process.pid, signal.SIGWINCH)
         deadline = time.monotonic() + timeout
-        border = "╭" + "─" * (width - 4) + "╮"
+        # A full-width box border of the new geometry; borders may carry a title.
+        def bordered(text):
+            return any(line.strip().startswith("╭") and line.strip().endswith("╮")
+                       and len(line.strip()) == width - 2 for line in text.splitlines())
         while time.monotonic() < deadline:
             current = self.drain(0.05)
-            if (b"\x1b[2J" in self.output[mark:] and border in current
+            if (b"\x1b[2J" in self.output[mark:] and bordered(current)
                     and compact_footer in current):
                 return
         raise AssertionError(f"no fresh {width}x{height} frame after resize:\n{self.screen.text()}")
@@ -207,7 +210,7 @@ sys.exit(int(mode))
         session.send(b"\r")
         session.expect("SSH exit 37: prod")
         assert (home/"ssh-args").read_text().splitlines()[-1] == "prod"
-        session.send(b"\x1b")  # standalone Esc clears query (Esc+Tab can encode Alt+Tab)
+        session.send(b"\x15")  # Ctrl+U clears the query; Esc would only leave the edit
         session.send(b"\t\x1b[H")  # table focus; manual first-file collapse restored
         session.expect("Selected: 1/3")
         session.send(b"\x1b[15~")  # F5 keeps selected header + collapse
@@ -321,7 +324,7 @@ sys.exit(int(mode))
         session.send(b"/secondary.target")
         session.expect("→prod")
         session.expect("1/2 aliases")
-        session.send(b"\x1b")  # bare Esc is a separate event, with a visible boundary
+        session.send(b"\x15")  # Ctrl+U clears the query; Esc would only leave the edit
         session.expect("2/2 aliases")
         session.send(b"\t")  # table focus only after the cleared-query frame
         protected = home/"protected-config.json"
@@ -421,7 +424,7 @@ sys.exit(int(mode))
         session.send(b"\t" + b"c")
         session.expect("Filtrer par fichier source")
         session.send(b"\x1b[B\r")
-        session.expect("File: C/F2 clear")
+        session.expect("Fichier"); session.expect("C/F2")
         session.expect("FileTags warning")
         session.send(b"H")
         session.expect("alpha")
@@ -433,12 +436,12 @@ sys.exit(int(mode))
         session.screen = Screen(60, 10)
         session.process.send_signal(signal.SIGWINCH)
         session.expect("FileTags warning")
-        session.expect("File: C/F2 clear")
+        session.expect("Fichier"); session.expect("C/F2")
         config.write_text("#FileTags: team\nInclude included\n# Tags: own\nHost alpha\n HostName alpha.invalid\n")
         session.send(b"\x1b[15~")
         session.expect("alpha")
         assert "FileTags warning" not in session.screen.text()
-        session.send(b"C\t\x1b")  # all sources, search focus, clear query
+        session.send(b"C\x7f")  # all sources, then Backspace from the table clears the query
         session.expect("secret")
         session.send(b"\x03")
         session.close()
@@ -458,25 +461,25 @@ sys.exit(int(mode))
         session.send(b"cC")
         session.expect("cC")
         assert "Filtrer par fichier source" not in session.screen.text()
-        session.send(b"\x1b")  # clear query, retaining search focus
+        session.send(b"\x15")  # Ctrl+U clears the query, retaining search focus
         session.send(b"\t" + b"c")
         session.expect("Filtrer par fichier source")
         session.expect("Tous les fichiers")
         session.expect(str(empty))
         session.send(b"\x1b[B" * 3 + b"\r")
-        session.expect("File: C/F2 clear")
+        session.expect("Fichier"); session.expect("C/F2")
         session.expect(str(empty))
         assert "included" not in session.screen.text()
         assert "global" not in session.screen.text()
         session.send(b"H")
-        session.expect("File: C/F2 clear")
+        session.expect("Fichier"); session.expect("C/F2")
         session.send(b"\x1b[15~")  # F5 keeps the empty scope
-        session.expect("File: C/F2 clear")
+        session.expect("Fichier"); session.expect("C/F2")
         # A compact terminal keeps the source banner alongside errors/hidden badges.
         fcntl.ioctl(session.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 10, 60, 0, 0))
         session.screen = Screen(60, 10)
         session.process.send_signal(signal.SIGWINCH)
-        session.expect("File: C/F2 clear")
+        session.expect("Fichier"); session.expect("C/F2")
         session.send(b"C")
         session.expect("included")
         session.expect("global")
@@ -888,9 +891,9 @@ sys.exit(int(mode))
     reload_keep.unlink()
     session.send(b"\x1b[15~")
     session.expect("No matching hosts")
-    session.expect("Search (/ or Tab to focus): reload-keep")
+    session.expect("Filtres : reload-keep")
     assert "SSH Host Information" not in session.screen.text()
-    session.send(b"\t\x1b")  # Focus search, clear the retained query.
+    session.send(b"\x7f")  # Backspace from the table clears the retained query.
     session.expect("reload-added")
     assert "reload-removed" not in session.screen.text()
     session.send(b"\x03")
@@ -914,7 +917,7 @@ sys.exit(int(mode))
     session.expect("second line")
     session.send(b"\x1b")
     session.send(b"\x1bOQfavoris seuls\r")
-    session.expect("favorites only")
+    session.expect("Filtres : Favoris seuls")
     assert "note-a" not in session.screen.text()
     session.send(b"*")
     session.expect("No favorite matches")
@@ -965,7 +968,7 @@ sys.exit(int(mode))
     session.expect("qae")
     session.send(b"\x13")
     session.expect("Last Attempt")
-    session.send(b"\t\x1b")  # Focus search and clear old query.
+    session.send(b"\t\x15")  # Focus search and clear old query.
     expression = 'tag:prod AND user:inherited-user ET "café 東京" is:favorite is:unknown'
     session.send(b"\x1b[200~" + expression.replace(" AND ", "\nAND ").encode() + b"\x1b[201~")
     session.expect("Hosts: 1/2")
@@ -979,7 +982,7 @@ sys.exit(int(mode))
     session.expect("Hosts: 1/2")
     session.expect(expression)
     # A real unrelated form edit must keep inherited user + effective address filters.
-    session.send(b"\x1b")
+    session.send(b"\x15")
     inherited_expression = "user:inherited-user AND 127.0.0.1"
     session.send(inherited_expression.encode() + b"\te")
     session.expect("Edit SSH Host")
@@ -995,17 +998,18 @@ sys.exit(int(mode))
     session.expect("Last Attempt")
     assert session.process.poll() is None
     assert session.output.count(b"SSH_TAKEOVER") == before_paste
-    session.send(b"\t\x1b")
+    # Ctrl+U clears the search text; Esc only leaves the edit and keeps the filter.
+    session.send(b"\t\x15")
     session.send(b"is:unknown\tp")  # Start real probes to disposable loopback closed ports.
     session.expect("No matching hosts")
-    session.send(b"\t\x1b")
+    session.send(b"\t\x15")
     session.send(b"is:offline")
     session.expect("Hosts: 2/2")
     session.expect("Offline")
-    session.send(b"\x1b")
+    session.send(b"\x15")
     session.send(b"alpha AND ET beta")
     session.expect("conjunction")
-    session.send(b"\x1b")
+    session.send(b"\x15")
     session.send(b'user:inherited-user file:"advanced search config"')
     session.expect("Hosts: 2/2")
     session.send(b"\x03")

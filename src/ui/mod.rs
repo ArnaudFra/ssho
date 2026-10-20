@@ -938,17 +938,14 @@ impl Model {
             return Action::None;
         }
         if k.code == KeyCode::Esc && self.search_focus {
-            if self.query.value.is_empty() {
-                self.search_focus = false;
-            } else {
-                self.query.set("");
-                self.filter(true);
-            }
+            // Leaving the edit never clears: the filter stays applied and shown,
+            // and its text and cursor are found again by the next edit.
+            self.search_focus = false;
             return Action::None;
         }
         // Every printable key and editing chord is text while search is focused;
         // only the configured Ctrl quit chord keeps its meaning there.
-        let text_key = self.search_focus && matches!(k.code, KeyCode::Char(_));
+        let text_key = self.search_focus && actions::owned_by_text(&key_name(k));
         if self.keymap().is_prefix(&key_name(k), self.search_focus) {
             self.open_view(View::Quick { notice: None });
             return Action::None;
@@ -1153,6 +1150,19 @@ impl Model {
                 self.filter(false);
             }
             PaletteAction::Search => self.search_focus = true,
+            PaletteAction::ClearSearch => {
+                if !self.query.value.is_empty() {
+                    self.query.set("");
+                    self.filter(true);
+                }
+            }
+            PaletteAction::ClearFilters => {
+                self.query.set("");
+                self.source_filter = None;
+                self.favorites_only = false;
+                self.show_hidden = false;
+                self.filter(true);
+            }
             PaletteAction::Palette => palette::open(self, palette::Scope::List),
             PaletteAction::Quit => return Action::Quit,
         }

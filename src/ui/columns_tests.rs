@@ -185,8 +185,8 @@ fn columns_selector_toggle_reorder_name_lock_reset_and_hidden_width() {
     );
     m.key(key(KeyCode::Esc));
     m.key(key(KeyCode::F(2)));
-    for _ in 0..26 {
-        m.key(key(KeyCode::Down));
+    for c in "colonnes".chars() {
+        m.key(key(KeyCode::Char(c)));
     }
     m.key(key(KeyCode::Enter));
     assert!(matches!(m.view, View::Columns(_)));

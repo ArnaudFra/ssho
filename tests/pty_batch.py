@@ -71,7 +71,7 @@ def resize(w,h):
 try:
  expect('alpha')
  send(b'xB');expect('xB');assert not (ROOT/'attempts.jsonl').exists()
- send(b'\x1b');send(b'\x1b') # clear then table
+ send(b'\x15');send(b'\x1b') # Ctrl+U clears the text, Esc returns to the table
  # Choose secondary alias, then mark only that active alias.
  send(b'\x1bOR');expect('secondary');send(b'\x1b[B');send(b'\r')
  send(b'x');send(b'B');expect('1 targets');expect('secondary')

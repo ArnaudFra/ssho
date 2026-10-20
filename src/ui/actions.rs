@@ -41,6 +41,8 @@ pub(super) enum PaletteAction {
     SortName,
     SortRecent,
     Search,
+    ClearSearch,
+    ClearFilters,
     Palette,
     Quit,
 }
@@ -77,7 +79,7 @@ impl Category {
 impl PaletteAction {
     /// Every catalogue entry, grouped by category. The palette lists them in this
     /// order; only the action that opens the palette itself is left out of it.
-    pub(super) const CATALOGUE: [Self; 38] = [
+    pub(super) const CATALOGUE: [Self; 40] = [
         Self::Connect,
         Self::Tunnel,
         Self::Profiles,
@@ -95,6 +97,8 @@ impl PaletteAction {
         Self::Note,
         Self::ChooseAlias,
         Self::Search,
+        Self::ClearSearch,
+        Self::ClearFilters,
         Self::FavoritesOnly,
         Self::ToggleHidden,
         Self::SourceFilter,
@@ -157,6 +161,8 @@ impl PaletteAction {
             Self::SortName => "sort.name",
             Self::SortRecent => "sort.recent",
             Self::Search => "search.focus",
+            Self::ClearSearch => "search.clear",
+            Self::ClearFilters => "filter.clear",
             Self::Palette => "app.palette",
             Self::Quit => "app.quit",
         }
@@ -200,6 +206,8 @@ impl PaletteAction {
             Self::SortName => "Tri : par nom",
             Self::SortRecent => "Tri : par connexion récente",
             Self::Search => "Rechercher",
+            Self::ClearSearch => "Effacer la recherche",
+            Self::ClearFilters => "Effacer tous les filtres",
             Self::Palette => "Palette d'actions",
             Self::Quit => "Quitter",
         }
@@ -224,6 +232,8 @@ impl PaletteAction {
             | Self::Note
             | Self::ChooseAlias => Category::Host,
             Self::Search
+            | Self::ClearSearch
+            | Self::ClearFilters
             | Self::FavoritesOnly
             | Self::ToggleHidden
             | Self::SourceFilter
@@ -265,6 +275,8 @@ impl PaletteAction {
             Self::Note => "commentaire mémo",
             Self::ChooseAlias => "cible exacte nom bloc",
             Self::Search => "filtrer chercher trouver find",
+            Self::ClearSearch => "vider retirer texte requête",
+            Self::ClearFilters => "réinitialiser reset vider tout",
             Self::FavoritesOnly => "filtre étoile épinglés",
             Self::ToggleHidden => "cachés hidden visibilité",
             Self::SourceFilter => "include config fichier filtre",
@@ -313,6 +325,10 @@ impl PaletteAction {
             Self::Note => "Édite la note personnelle, conservée hors du fichier SSH.",
             Self::ChooseAlias => "Choisit l'alias exact du bloc utilisé pour se connecter.",
             Self::Search => "Place le curseur dans la recherche de la liste.",
+            Self::ClearSearch => "Vide la recherche ; les autres filtres restent actifs.",
+            Self::ClearFilters => {
+                "Vide la recherche et retire les filtres par fichier, favoris et masqués."
+            }
             Self::FavoritesOnly => "N'affiche que les favoris, ou revient à tous les hôtes.",
             Self::ToggleHidden => "Affiche ou cache les hôtes portant le tag hidden.",
             Self::SourceFilter => "Limite la liste aux hôtes d'un fichier de configuration.",
@@ -379,6 +395,8 @@ impl PaletteAction {
             Self::ClearSourceFilter if !context.source_filter => {
                 Err("Aucun filtre de fichier actif")
             }
+            Self::ClearSearch if !context.query => Err("Aucune recherche active"),
+            Self::ClearFilters if !context.filters => Err("Aucun filtre actif"),
             Self::BatchClear if context.marks == 0 => Err("Aucune cible marquée"),
             Self::BatchResults if !context.batch_results => Err("Aucun lot lancé"),
             _ => Ok(()),
@@ -393,6 +411,10 @@ pub(super) struct Context {
     /// A group header is selected instead of a host.
     pub group: bool,
     pub source_filter: bool,
+    /// The search holds text.
+    pub query: bool,
+    /// Any of search, file, favorites or hidden-hosts filters is active.
+    pub filters: bool,
     pub marks: usize,
     pub batch_results: bool,
 }
@@ -418,7 +440,7 @@ pub(super) fn fold(text: &str) -> String {
 
 /// Historical direct shortcuts of the host list. Printable keys only apply while
 /// the table has the focus; function keys also apply from the search input.
-const HISTORICAL: [(&str, PaletteAction); 36] = [
+const HISTORICAL: [(&str, PaletteAction); 37] = [
     ("enter", PaletteAction::Connect),
     ("f2", PaletteAction::Palette),
     ("f3", PaletteAction::ChooseAlias),
@@ -429,6 +451,7 @@ const HISTORICAL: [(&str, PaletteAction); 36] = [
     ("f8", PaletteAction::Backups),
     ("/", PaletteAction::Search),
     ("ctrl+f", PaletteAction::Search),
+    ("backspace", PaletteAction::ClearSearch),
     ("K", PaletteAction::Keys),
     ("v", PaletteAction::Columns),
     ("P", PaletteAction::Availability),
@@ -493,6 +516,17 @@ pub(super) fn quick_action(letter: char) -> Option<PaletteAction> {
         .iter()
         .find(|(bound, _)| *bound == letter)
         .map(|(_, action)| *action)
+}
+
+/// Keys a focused text input consumes: characters, with or without a modifier
+/// (its editing chords), and the keys that erase. An action bound to one of
+/// them only applies outside inputs.
+pub(super) fn owned_by_text(key: &str) -> bool {
+    let base = match key.split_once('+') {
+        Some((_, base)) if !base.is_empty() => base,
+        _ => key,
+    };
+    base.chars().count() == 1 || matches!(base, "backspace" | "delete")
 }
 
 /// Preferences accept `Ctrl+G` or `F6`; one-character keys keep their case.
@@ -648,6 +682,8 @@ pub(super) fn display_key(key: &str) -> String {
         "enter" => "Enter".to_owned(),
         "esc" => "Esc".to_owned(),
         "tab" => "Tab".to_owned(),
+        "backspace" => "Backspace".to_owned(),
+        "delete" => "Del".to_owned(),
         " " => "Space".to_owned(),
         _ if base.len() > 1 && base.starts_with('f') && base[1..].parse::<u8>().is_ok() => {
             base.to_uppercase()

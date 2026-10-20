@@ -81,10 +81,14 @@ fn search_first_selection_and_escape() {
         m.key(key(KeyCode::Enter)),
         Action::Connect("alpha".into(), None)
     );
-    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
-    assert!(m.query.value.is_empty());
+    // Esc closes the edit; the filter stays applied until it is cleared explicitly.
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
     assert!(!m.search_focus);
+    assert_eq!(m.query.value, "deploy work");
+    assert_eq!(m.visible.len(), 1);
+    assert_eq!(m.key(key(KeyCode::Backspace)), Action::None);
+    assert!(m.query.value.is_empty());
+    assert_eq!(m.visible.len(), 2);
     // Esc goes back one level; the list is the root and stays open.
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
     assert!(matches!(m.view, View::List));
@@ -722,9 +726,10 @@ fn adaptive_list_keeps_selection_counts_and_scroll_range_visible() {
     use ratatui::style::Color;
     for (width, height, first_range, last_range, minimum_rows) in [
         (28, 8, "1-3", "38-40", 3),
-        (70, 18, "1-6", "35-40", 6),
-        (80, 18, "1-6", "35-40", 6),
-        (120, 35, "1-23", "18-40", 23),
+        // Without an inactive search box the table gains two rows.
+        (70, 18, "1-8", "33-40", 8),
+        (80, 18, "1-8", "33-40", 8),
+        (120, 35, "1-25", "16-40", 25),
     ] {
         let mut m = adaptive_model();
         m.key(key(KeyCode::Tab));
@@ -890,7 +895,7 @@ fn adaptive_compact_notices_reserve_real_selected_host_rows() {
         "secret",
         "Error",
         "Update",
-        "Hidden",
+        "Filtres : Masqués",
         "41/41",
         "40-41",
         "F2: actions",
@@ -1132,7 +1137,7 @@ fn details_split_preserves_list_row_capacity_and_high_contrast_selection() {
     terminal.draw(|f| render::draw(f, &mut m)).unwrap();
     assert_eq!(m.page, capacity);
     let output = screen(&mut m, 120, 35);
-    for text in ["fleet39-", "40/41", "40/40", "18-40"] {
+    for text in ["fleet39-", "40/41", "40/40", "16-40"] {
         assert!(output.contains(text), "missing {text}: {output}");
     }
     assert!(
@@ -1271,9 +1276,7 @@ fn navigation_escape_leaves_search_focus_and_backtab_matches_tab() {
     assert!(m.search_focus);
     typing(&mut m, "beta");
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
-    assert!(m.query.value.is_empty());
-    assert!(m.search_focus);
-    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+    assert_eq!(m.query.value, "beta");
     assert!(!m.search_focus);
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
     let text = screen(&mut m, 100, 20);
@@ -4967,7 +4970,8 @@ fn empty_filter_banner_survives_query_reload_and_compact_errors() {
     choose_source(&mut m, &root, Some(&empty));
     assert!(m.visible.is_empty());
     typing(&mut m, "missing");
-    m.key(key(KeyCode::Esc));
+    m.key(ctrl('u'));
+    assert!(m.query.value.is_empty() && m.search_focus);
     assert_eq!(m.source_filter.as_ref(), Some(&empty));
     let inspector = runtime::effective::Inspector::default();
     drop(reload_hosts(&inspector, &mut m, &root).unwrap());
@@ -4977,7 +4981,7 @@ fn empty_filter_banner_survives_query_reload_and_compact_errors() {
     m.filter(true);
     for (w, h) in [(100, 25), (60, 10), (24, 8)] {
         let s = screen(&mut m, w, h);
-        assert!(s.contains("File:"), "{w}x{h}: {s}");
+        assert!(s.contains("Fichier"), "{w}x{h}: {s}");
         assert!(s.contains("C/F2"), "{w}x{h}: {s}");
     }
     screen(&mut m, 1, 1);
@@ -5150,8 +5154,9 @@ fn availability_p_opens_selector_but_remains_search_text_and_f2_is_palette() {
     m.key(key(KeyCode::Char('P')));
     assert_eq!(m.query.value, "P");
     assert!(matches!(m.view, View::List));
+    // Esc leaves the edit and keeps the text; the table then owns the letter.
     m.key(key(KeyCode::Esc));
-    m.key(key(KeyCode::Tab));
+    assert_eq!(m.query.value, "P");
     m.key(key(KeyCode::Char('P')));
     let rendered = screen(&mut m, 80, 24);
     assert!(rendered.contains("Availability method"), "{rendered}");

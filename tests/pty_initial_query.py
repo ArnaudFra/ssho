@@ -119,7 +119,9 @@ class Session:
         end = time.monotonic() + 5
         while time.monotonic() < end:
             text = self.drain(.05)
-            if b'\x1b[2J' in self.raw[mark:] and ('/ > ' if width < 40 else 'Search') in text and 'F2: actions' in text:
+            # The search zone is an input while editing and a filter band otherwise.
+            zone = any(marker in text for marker in ('/ > ', 'Search: > ', 'Filtres', 'Rechercher'))
+            if b'\x1b[2J' in self.raw[mark:] and zone and 'F2: actions' in text:
                 return
         raise AssertionError(f'{self.name}: missing fresh compact frame:\n{self.screen.text()}')
 

@@ -200,7 +200,7 @@ fn conflicting_preferences_are_refused_and_explained() {
         "{list}"
     );
     // Compact terminals keep a badge instead of dropping the warning.
-    m.show_hidden = true;
+    m.error = "boom".into();
     let compact = screen(&mut m, 80, 10);
     assert!(compact.contains("Raccourcis refusés"), "{compact}");
     m.key(key(KeyCode::F(1)));
@@ -444,7 +444,7 @@ fn search_ignores_case_and_accents_and_never_runs_on_its_own() {
         ("methode", PaletteAction::Availability),
         ("forwarding socks", PaletteAction::Tunnel),
         ("copier", PaletteAction::Duplicate),
-        ("effacer filtre", PaletteAction::ClearSourceFilter),
+        ("effacer filtre fichier", PaletteAction::ClearSourceFilter),
         ("  restaurer ", PaletteAction::Backups),
     ] {
         typing(&mut m, words);
@@ -599,4 +599,168 @@ fn contextual_palette_keeps_the_draft_and_offers_compatible_actions() {
         m.key(key(KeyCode::Enter)),
         Action::Connect("alpha".into(), None)
     );
+}
+
+#[test]
+fn no_inactive_input_remains_after_tab_and_the_filter_stays_visible() {
+    let mut m = model(serde_json::json!({}));
+    m.search_focus = true;
+    let editing = screen(&mut m, 100, 24);
+    assert!(
+        editing.contains("● Recherche") && editing.contains("Search: > "),
+        "{editing}"
+    );
+    assert!(
+        !editing.contains("● Hôtes"),
+        "one element has the focus: {editing}"
+    );
+    typing(&mut m, "alp");
+    m.key(key(KeyCode::Left));
+    m.key(key(KeyCode::Tab));
+    let browsing = screen(&mut m, 100, 24);
+    // No boxed input is left behind; the table is named as the focused element.
+    assert!(
+        !browsing.contains("Search: > ") && !browsing.contains("Recherche──"),
+        "{browsing}"
+    );
+    assert!(browsing.contains("● Hôtes"), "{browsing}");
+    assert!(browsing.contains("Filtres : alp"), "{browsing}");
+    assert!(
+        browsing.contains("(/ : modifier • Backspace : effacer)"),
+        "{browsing}"
+    );
+    assert!(browsing.contains("1 hôte sur 2"), "{browsing}");
+    assert_eq!(m.visible.len(), 1);
+    // Going back to the search finds the text and its cursor again.
+    m.key(key(KeyCode::Char('/')));
+    typing(&mut m, "X");
+    assert_eq!(m.query.value, "alXp");
+}
+
+#[test]
+fn escape_closes_the_edit_and_clearing_is_an_explicit_action() {
+    let mut m = model(serde_json::json!({}));
+    m.search_focus = true;
+    typing(&mut m, "beta");
+    assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
+    assert!(!m.search_focus);
+    assert_eq!(m.query.value, "beta", "Esc never erases the filter");
+    assert_eq!(m.selected_host().unwrap().name, "beta");
+    // In the input Backspace edits; from the table it clears the whole search.
+    m.key(key(KeyCode::Char('/')));
+    m.key(key(KeyCode::Backspace));
+    assert_eq!(m.query.value, "bet");
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Backspace));
+    assert!(m.query.value.is_empty());
+    assert_eq!(m.visible.len(), 2);
+    assert!(!m.search_focus);
+    // The same action exists in the palette and explains when it has nothing to do.
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "effacer la recherche");
+    assert!(screen(&mut m, 100, 30).contains("Indisponible : Aucune recherche active."));
+    m.key(key(KeyCode::Esc));
+    m.query.set("alpha");
+    m.filter(true);
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "effacer la recherche");
+    m.key(key(KeyCode::Enter));
+    assert!(m.query.value.is_empty() && matches!(m.view, View::List));
+}
+
+#[test]
+fn band_lists_every_active_criterion_in_both_focus_states() {
+    let mut m = model(serde_json::json!({}));
+    m.all[0].source_file = "/etc/ssh/work".into();
+    m.all[1].source_file = "/etc/ssh/home".into();
+    m.metadata.insert(
+        "alpha".into(),
+        HostMetadata {
+            favorite: true,
+            ..HostMetadata::default()
+        },
+    );
+    m.query.set("alp");
+    m.source_filter = Some("/etc/ssh/work".into());
+    m.favorites_only = true;
+    m.show_hidden = true;
+    m.preferences.group_mode = GroupMode::Files;
+    m.filter(true);
+    for focus in [false, true] {
+        m.search_focus = focus;
+        let text = screen(&mut m, 120, 30);
+        for criterion in [
+            "alp",
+            "Favoris seuls",
+            "Masqués visibles (H)",
+            "Groupes : ",
+            "Fichier : /etc/ssh/work",
+            "(C/F2 : tous les fichiers)",
+            "1 hôte sur 2",
+        ] {
+            assert!(
+                text.contains(criterion),
+                "focus={focus}: missing {criterion}: {text}"
+            );
+        }
+    }
+    // Compact terminals keep the file scope and its clear key on the single row.
+    m.search_focus = false;
+    let compact = screen(&mut m, 60, 10);
+    assert!(
+        compact.contains("Filtres : Fichier (C/F2) : /etc/ssh/work"),
+        "{compact}"
+    );
+    // One action resets every filter; grouping is a presentation and is kept.
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "effacer tous les filtres");
+    m.key(key(KeyCode::Enter));
+    assert!(m.query.value.is_empty() && m.source_filter.is_none());
+    assert!(!m.favorites_only && !m.show_hidden);
+    assert_eq!(m.preferences.group_mode, GroupMode::Files);
+    let text = screen(&mut m, 120, 30);
+    assert!(
+        !text.contains("Filtres :") && text.contains("/ Rechercher"),
+        "{text}"
+    );
+    assert!(text.contains("2 hôtes"), "{text}");
+}
+
+#[test]
+fn count_names_hosts_and_never_counts_group_headers() {
+    let mut m = model(serde_json::json!({}));
+    m.all[0].source_file = "/one".into();
+    m.all[1].source_file = "/two".into();
+    m.preferences.group_mode = GroupMode::Files;
+    m.filter(false);
+    assert_eq!(m.rows.len(), 4, "two headers and two hosts are displayed");
+    assert!(screen(&mut m, 120, 30).contains("2 hôtes"));
+    m.query.set("alpha");
+    m.filter(true);
+    let text = screen(&mut m, 120, 30);
+    assert!(text.contains("1 hôte sur 2"), "{text}");
+    // A syntax error keeps its explanation next to the search.
+    m.query.set("tag:\"");
+    m.filter(true);
+    let text = screen(&mut m, 120, 30);
+    assert!(text.contains("Search: Unclosed quote"), "{text}");
+    assert!(text.contains("Filtres : tag:\""), "{text}");
+}
+
+#[test]
+fn editing_keys_stay_text_and_shortcuts_stay_out_of_the_input() {
+    let mut m = model(serde_json::json!({}));
+    m.search_focus = true;
+    typing(&mut m, "adDq/?");
+    assert_eq!(m.query.value, "adDq/?");
+    m.key(key(KeyCode::Backspace));
+    m.key(key(KeyCode::Delete));
+    assert_eq!(
+        m.query.value, "adDq/",
+        "Backspace edits, it does not clear the search"
+    );
+    m.key(ctrl('a'));
+    m.key(ctrl('k'));
+    assert!(m.query.value.is_empty() && m.search_focus);
+    assert!(matches!(m.view, View::List));
 }

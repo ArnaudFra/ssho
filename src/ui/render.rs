@@ -196,35 +196,28 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
     }
     let viewport_width = area.width;
     let area = if area.height >= 12 { inset(area) } else { area };
-    let area = if let Some(path) = &m.source_filter {
-        let parts = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
-        f.render_widget(
-            Paragraph::new(format!(
-                "File: {}/F2 clear • {}",
-                m.keymap().hint(PaletteAction::ClearSourceFilter),
-                path.display()
-            ))
-            .style(accent()),
-            parts[0],
-        );
-        parts[1]
-    } else {
-        area
-    };
     let search_error = m.search.as_ref().err();
     let keymap = m.keymap();
     let notice_count = u16::from(search_error.is_some())
         + u16::from(!keymap.conflicts.is_empty())
         + u16::from(!m.error.is_empty())
-        + u16::from(m.update.as_ref().is_some_and(|u| u.available))
-        + u16::from(m.show_hidden)
-        + u16::from(m.favorites_only);
+        + u16::from(m.update.as_ref().is_some_and(|u| u.available));
     let notice_height = if area.height < 12 {
         notice_count.min(1)
     } else {
         notice_count
     };
-    let search_height = if area.height < 12 { 1 } else { 3 };
+    // While editing, the query lives in an input with a caret; every other
+    // criterion, and the query itself once the table has the focus, is listed
+    // in a band so no active filter is ever out of sight.
+    let compact = area.height < 12;
+    let band = filter_band(m, &keymap, area.width, !m.search_focus, compact);
+    let edit_height = match (m.search_focus, compact) {
+        (false, _) => 0,
+        (true, true) => 1,
+        (true, false) => 3,
+    };
+    let search_height = edit_height + band.len() as u16;
     let mut help = list_footer(area.width, m.search_focus, &keymap);
     if m.details.shown && viewport_width < 110 {
         help.push(Line::from(details::narrow_hint(area.width, m.search_focus)));
@@ -310,18 +303,6 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
             Style::default().fg(Color::Yellow),
         ));
     }
-    if m.show_hidden {
-        notices.push(Line::styled(
-            "[showing hidden hosts — press H to hide]",
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-    if m.favorites_only {
-        notices.push(Line::styled(
-            "[favorites only — F2: Favoris seuls to show all]",
-            Style::default().fg(Color::Yellow),
-        ));
-    }
     if notice_height < notice_count {
         let mut badges = vec![];
         if !keymap.conflicts.is_empty() {
@@ -329,12 +310,6 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         }
         if m.update.as_ref().is_some_and(|u| u.available) {
             badges.push("Update");
-        }
-        if m.show_hidden {
-            badges.push("Hidden");
-        }
-        if m.favorites_only {
-            badges.push("Favorites (F2)");
         }
         let suffix = format!(" • {}", badges.join(" • "));
         let mut spans = vec![];
@@ -361,43 +336,50 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         notices = vec![Line::from(spans)];
     }
     f.render_widget(Paragraph::new(notices), chunks[1]);
-    let prompt = if chunks[2].width < 40 {
-        if m.search_focus {
+    let zone =
+        Layout::vertical([Constraint::Length(edit_height), Constraint::Min(0)]).split(chunks[2]);
+    if m.search_focus {
+        let prompt = if zone[0].width < 40 {
             "/ > "
         } else {
-            "/: "
+            "Search: > "
+        };
+        // The focus is named, not only coloured.
+        let border = block("● Recherche", true).title_bottom(
+            Line::from(format!(" {} ", host_count(m)))
+                .right_aligned()
+                .style(Style::default().fg(GRAY)),
+        );
+        let search_area = if zone[0].height >= 3 {
+            border.inner(zone[0])
+        } else {
+            zone[0]
+        };
+        let width = search_area.width.saturating_sub(prompt.len() as u16) as usize;
+        let search = Paragraph::new(Line::from(vec![
+            Span::raw(prompt),
+            input_span(&m.query, true, width),
+        ]));
+        if zone[0].height >= 3 {
+            f.render_widget(search.block(border), zone[0]);
+        } else {
+            f.render_widget(search, zone[0]);
         }
-    } else if m.search_focus {
-        "Search: > "
-    } else {
-        "Search (/ or Tab to focus): "
-    };
-    let search_area = if chunks[2].height >= 3 {
-        block("", m.search_focus).inner(chunks[2])
-    } else {
-        chunks[2]
-    };
-    let width = search_area.width.saturating_sub(prompt.len() as u16) as usize;
-    let search = Paragraph::new(Line::from(vec![
-        Span::raw(prompt),
-        input_span(&m.query, m.search_focus, width),
-    ]));
-    if chunks[2].height >= 3 {
-        f.render_widget(search.block(block("", m.search_focus)), chunks[2]);
-    } else {
-        f.render_widget(search, chunks[2]);
+        if matches!(m.view, View::List) {
+            input_cursor(f, &m.query, search_area, prompt.len() as u16, 0);
+        }
     }
-    if m.search_focus && matches!(m.view, View::List) {
-        input_cursor(f, &m.query, search_area, prompt.len() as u16, 0);
-    }
+    f.render_widget(Paragraph::new(band), zone[1]);
     let (table_area, detail_area) = details::split(&mut m.details, viewport_width, chunks[3]);
     if let Some(area) = detail_area {
         details::draw(f, m, area);
     }
     let border = if area.height < 12 {
         Block::default()
+    } else if m.search_focus {
+        block("Hôtes", false)
     } else {
-        block("", !m.search_focus)
+        block("● Hôtes", true)
     };
     let inner = border.inner(table_area);
     let plan = columns::layout(&m.preferences.host_columns, inner.width);
@@ -604,6 +586,130 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
     inner.width
 }
 
+/// Hosts kept by the filters out of all loaded hosts. Group headers are rows of
+/// the table, never SSH targets, so they are not part of this count.
+fn host_count(m: &Model) -> String {
+    let (shown, total) = (m.matching.len(), m.all.len());
+    if shown == total {
+        format!("{total} hôte{}", if total > 1 { "s" } else { "" })
+    } else {
+        format!(
+            "{shown} hôte{} sur {total}",
+            if shown > 1 { "s" } else { "" }
+        )
+    }
+}
+
+/// Every active criterion of the list in one place: search text (when it is not
+/// being edited), exact file, favorites, hidden hosts and grouping.
+fn filter_band(
+    m: &Model,
+    keymap: &Keymap,
+    width: u16,
+    with_query: bool,
+    compact: bool,
+) -> Vec<Line<'static>> {
+    use PaletteAction as A;
+    let width = usize::from(width);
+    let query = with_query && !m.query.value.is_empty();
+    let mut filters = vec![];
+    if query {
+        filters.push(m.query.value.clone());
+    }
+    if m.favorites_only {
+        filters.push("Favoris seuls".to_owned());
+    }
+    if m.show_hidden {
+        filters.push(format!(
+            "Masqués visibles ({})",
+            keymap.hint(A::ToggleHidden)
+        ));
+    }
+    let file = m
+        .source_filter
+        .as_ref()
+        .map(|path| format!("Fichier : {}", path.display()));
+    if let (Some(path), true) = (&m.source_filter, compact) {
+        // One row only: the file scope leads the criteria, with its clear key.
+        filters.insert(
+            0,
+            format!(
+                "Fichier ({}/F2) : {}",
+                keymap.hint(A::ClearSourceFilter),
+                path.display()
+            ),
+        );
+    }
+    let grouping = groups::MODES
+        .iter()
+        .find(|(mode, _)| *mode == m.preferences.group_mode && *mode != GroupMode::Flat)
+        .map(|(_, label)| format!("Groupes : {label}"));
+    let mut lines = vec![];
+    let count = host_count(m);
+    if with_query || !filters.is_empty() || grouping.is_some() {
+        let mut left = if filters.is_empty() {
+            format!("{} Rechercher", keymap.hint(A::Search))
+        } else {
+            format!("Filtres : {}", filters.join(" • "))
+        };
+        if let Some(grouping) = &grouping {
+            left.push_str(" • ");
+            left.push_str(grouping);
+        }
+        if query {
+            let hint = format!(
+                "  ({} : modifier • {} : effacer)",
+                keymap.hint(A::Search),
+                keymap.hint(A::ClearSearch)
+            );
+            if left.width() + hint.width() + count.width() + 2 <= width {
+                left.push_str(&hint);
+            }
+        }
+        // The count sits on the right while there is room; filters win otherwise.
+        let room = width.saturating_sub(count.width() + 2);
+        let active = !filters.is_empty();
+        let style = if active {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(GRAY)
+        };
+        if with_query && left.width() <= room {
+            let padding = width - left.width() - count.width();
+            lines.push(Line::from(vec![
+                Span::styled(left, style),
+                Span::raw(" ".repeat(padding)),
+                Span::styled(count, Style::default().fg(GRAY)),
+            ]));
+        } else {
+            lines.push(Line::styled(ellipsize(&left, width), style));
+        }
+    }
+    if let (Some(file), false) = (file, compact) {
+        let hint = format!(
+            "  ({}/F2 : tous les fichiers)",
+            keymap.hint(A::ClearSourceFilter)
+        );
+        let text = if file.width() + hint.width() <= width {
+            format!("{file}{hint}")
+        } else if let Some(path) = &m.source_filter {
+            // Keep the distinguishing tail of a long path.
+            let label = "Fichier : ";
+            format!(
+                "{label}{}",
+                group_label(
+                    &path.display().to_string(),
+                    width.saturating_sub(label.width())
+                )
+            )
+        } else {
+            file
+        };
+        lines.push(Line::styled(text, Style::default().fg(Color::Yellow)));
+    }
+    lines
+}
+
 fn highlight(m: &Model, text: &str, field: search::Field, selected: bool) -> Line<'static> {
     let ranges = m
         .search
@@ -796,7 +902,7 @@ fn list_footer(width: u16, search_focus: bool, keymap: &Keymap) -> Vec<Line<'sta
     let lines = if width >= 105 {
         if search_focus {
             vec![format!(
-                "{}: actions • {}: reload • ↑/↓: select • {}: connect • Tab: table • Esc: clear/unfocus",
+                "{}: actions • {}: reload • ↑/↓: select • {}: connect • Tab/Esc: table, filter kept",
                 k(A::Palette), k(A::Reload), k(A::Connect)
             )]
         } else {
@@ -815,7 +921,7 @@ fn list_footer(width: u16, search_focus: bool, keymap: &Keymap) -> Vec<Line<'sta
     } else if width >= 65 {
         if search_focus {
             vec![format!(
-                "{}: actions • ↑↓: select • {}: connect • Tab: table • Esc: clear",
+                "{}: actions • ↑↓: select • {}: connect • Tab/Esc: table",
                 k(A::Palette),
                 k(A::Connect)
             )]
@@ -1598,7 +1704,8 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
             "tag:work ET is:online",
             "file:\"Team Hosts\" is:favorite",
             "Tab/Shift+Tab switch search / table",
-            "Esc    clear search / leave search / back one level",
+            "Esc    leave search, filter kept / back one level",
+            "Backspace (table) or Ctrl+U (input) clears the search",
         ]
         .map(String::from),
     );

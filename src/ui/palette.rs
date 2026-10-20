@@ -189,6 +189,11 @@ impl Model {
             host: self.selected_host().is_some(),
             group: self.selected_group().is_some(),
             source_filter: self.source_filter.is_some(),
+            query: !self.query.value.is_empty(),
+            filters: !self.query.value.is_empty()
+                || self.source_filter.is_some()
+                || self.favorites_only
+                || self.show_hidden,
             marks: self.batch.marks.len(),
             batch_results: !self.batch.manager.records().is_empty(),
         }

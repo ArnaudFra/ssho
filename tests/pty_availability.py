@@ -67,16 +67,16 @@ def check_stopped(pid):
 
 try:
  expect('alpha');send(b'P');expect('P');assert not (ROOT/'ping.jsonl').exists()
- send(b'\x1b');send(b'\x1b');send(b'P');expect('Availability method');expect('ICMP local')
+ send(b'\x15');send(b'\x1b');send(b'P');expect('Availability method');expect('ICMP local')
  resize(36,12);expect('Enter: save');resize(110,32)
  send(b'\x1b[B');send(b'\r');expect('ICMP local');expect('+ Online')
  preferences=json.loads((app/'config.json').read_text());assert preferences['availability_method']=='icmp' and preferences['future']['kept']==7
  send(b'i');expect('network availability');expect('no bastion');expect('diagnostic');send(b'\x1b')
- send(b'/');send(b'is:online');expect('alpha');send(b'\x1b');send(b'\x1b')
+ send(b'/');send(b'is:online');expect('alpha');send(b'\x15');send(b'\x1b')
  # Failure stays in the selector; retry after restoring a valid preferences file.
  send(b'P');send(b'\x1b[A');(app/'config.json').rename(app/'saved.json');(app/'config.json').mkdir();send(b'\r');expect('Availability method');expect('expected a regular file')
  (app/'config.json').rmdir();(app/'saved.json').rename(app/'config.json');send(b'\x1b');expect('ICMP local')
- (ROOT/'mode').write_text('offline');send(b'p');expect('! Offline');send(b'/');send(b'is:offline');expect('alpha');send(b'\x1b');send(b'\x1b')
+ (ROOT/'mode').write_text('offline');send(b'p');expect('! Offline');send(b'/');send(b'is:offline');expect('alpha');send(b'\x15');send(b'\x1b')
  (ROOT/'mode').write_text('denied');send(b'p');expect('? Unknown');send(b'i');expect('Operation not permitted');send(b'\x1b')
  # F2 is still the palette; the action is found by typing its name, without accents.
  send(b'\x1bOQ');expect('Actions');send(b'methode');send(b'\r');expect('Availability method');send(b'\x1b')
