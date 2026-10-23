@@ -124,6 +124,8 @@ enum View {
         host: Option<Host>,
         seed: String,
         duplicate: Option<Box<Host>>,
+        /// Opened from an add or copy draft: the choice goes back to that draft.
+        retarget: bool,
     },
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -147,6 +149,8 @@ enum Action {
     StartBatch,
     CancelBatch,
     Add(String),
+    /// Change the destination file of the open add or copy draft.
+    Retarget,
     Move(Host),
     Duplicate(Host),
     SaveCopy(Box<Host>, PathBuf),
@@ -640,11 +644,11 @@ impl Model {
                 input
             }
             View::Host(form) => {
-                if form.name_focus {
-                    &mut form.names[form.focus]
-                } else {
-                    &mut form.inputs[form.focus]
-                }
+                // A focused button or section header receives no text.
+                let Some(input) = form.focused_input() else {
+                    return;
+                };
+                input
             }
             View::Forward(form) if form.focus != 0 => &mut form.inputs[form.focus],
             _ => return,
@@ -742,7 +746,7 @@ impl Model {
                     FormEvent::Submit => {
                         Action::SaveNote(editor.host.clone(), editor.input.value.clone())
                     }
-                    FormEvent::None => Action::None,
+                    _ => Action::None,
                 };
             }
             View::Host(f) => {
@@ -769,8 +773,19 @@ impl Model {
                             Action::None
                         }
                     },
-                    _ => Action::None,
-                }
+                    FormEvent::PickKey => Action::OpenKeys(true),
+                    FormEvent::ChooseFile => Action::Retarget,
+                    FormEvent::EditNote => {
+                        // The note belongs to the application data of the edited
+                        // alias; its editor returns to this draft untouched.
+                        if let Some(name) = f.original.as_ref().map(|host| host.name.clone()) {
+                            let note = self.note(&name).to_owned();
+                            self.open_view(View::Note(notes::Editor::new(name, &note)));
+                        }
+                        Action::None
+                    }
+                    FormEvent::None => Action::None,
+                };
             }
             View::Aliases { .. } => return aliases::key(self, k),
             View::Availability { selected } => {
@@ -892,6 +907,7 @@ impl Model {
                 host,
                 seed,
                 duplicate,
+                retarget,
             } => {
                 match k.code {
                     _ if nav::cancels(k) => self.back(),
@@ -906,6 +922,14 @@ impl Model {
                     KeyCode::End => *selected = files.len().saturating_sub(1),
                     KeyCode::Enter => {
                         if let Some(target) = files.get(*selected) {
+                            if *retarget {
+                                let target = target.clone();
+                                self.back();
+                                if let View::Host(form) = &mut self.view {
+                                    form.retarget(target);
+                                }
+                                return Action::None;
+                            }
                             if let Some(host) = host {
                                 return Action::MoveTo(host.clone(), target.clone());
                             }
@@ -1400,8 +1424,35 @@ fn select_files(m: &mut Model, config: &Path, host: Option<Host>, seed: String) 
             host,
             seed,
             duplicate: None,
+            retarget: false,
         });
     }
+    Ok(())
+}
+/// Open the file selector over an add or copy draft; the draft keeps every value.
+fn select_target(m: &mut Model, config: &Path) -> Result<()> {
+    let View::Host(form) = &mut m.view else {
+        return Ok(());
+    };
+    let files = config::config_files(config)?;
+    if files.len() <= 1 {
+        form.error = "Un seul fichier de configuration SSH : aucune autre destination".into();
+        return Ok(());
+    }
+    let selected = files
+        .iter()
+        .position(|file| file == &form.target)
+        .unwrap_or(0);
+    let duplicate = form.copy_source().cloned().map(Box::new);
+    form.error.clear();
+    m.open_view(View::Files {
+        files,
+        selected,
+        host: None,
+        seed: String::new(),
+        duplicate,
+        retarget: true,
+    });
     Ok(())
 }
 /// Duplication needs the source alias's effective connection target, never add defaults.
@@ -1426,6 +1477,7 @@ fn select_duplicate_files(m: &mut Model, config: &Path, mut source: Host) -> Res
         host: None,
         seed: String::new(),
         duplicate: Some(Box::new(source)),
+        retarget: false,
     });
     m.error.clear();
     Ok(())
@@ -1639,6 +1691,7 @@ pub fn run(
             .map(|_| false),
             Action::SourceFilter => source_filter::open(&mut m, config).map(|_| false),
             Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
+            Action::Retarget => select_target(&mut m, config).map(|_| false),
             Action::Duplicate(host) => select_duplicate_files(&mut m, config, host).map(|_| false),
             Action::Move(host) => {
                 select_files(&mut m, config, Some(host), String::new()).map(|_| false)

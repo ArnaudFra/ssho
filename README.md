@@ -167,6 +167,22 @@ L'accueil distingue trois états, et un seul élément a le focus (son cadre por
 
 Le décompte « n hôtes sur total » compte les hôtes retenus par les filtres, jamais les lignes de groupe ; la position de sélection et la plage de lignes restent sous le tableau. Une erreur de syntaxe de recherche s'affiche juste au-dessus de la zone, et la liste reste telle quelle.
 
+### Créer, modifier, dupliquer un hôte
+
+Le formulaire d'hôte tient sur **une page**, sans onglets, et son titre nomme le mode : « Hôtes > Ajouter un hôte », « Modifier alpha », « Dupliquer alpha ».
+
+- **Fichier cible toujours visible**, en tête. Pour un ajout ou une copie, le bouton **Changer** ouvre le sélecteur de fichiers puis revient au même brouillon : valeurs, curseurs et focus sont conservés, et les tags hérités suivent le nouveau fichier. Un bloc existant se déplace par l'action Déplacer (`m`), qui affiche sa source et sa destination.
+- **L'essentiel d'abord** : Alias, Adresse, Utilisateur, Port, Clé SSH (avec **Choisir**, équivalent de F9). Trois sections dépliables suivent : **Alias supplémentaires**, **Options avancées** (ProxyJump, ProxyCommand, options SSH, commande distante, RequestTTY) et **Tags et note**. Elles sont fermées pour un ajout ; à l'édition ou à la copie, une section qui contient déjà des valeurs est ouverte, et son titre indique ce qu'elle contient.
+- **Un seul ordre de parcours** : Tab et ↓ avancent, Maj+Tab et ↑ reculent, à travers les champs, les titres de section et les boutons, en boucle. Tab ne déplie jamais une section ; Entrée ou Espace sur son titre la déplie ou la replie.
+- **Entrée ne soumet plus** : dans un champ elle passe au champ suivant, et après le dernier elle place le focus sur **Prévisualiser les modifications**. Seul ce bouton, ou Ctrl+S depuis n'importe où, ouvre l'aperçu ; l'écriture demande ensuite la confirmation de l'aperçu. *Auparavant Entrée sur le dernier champ de l'onglet Avancé lançait l'enregistrement.*
+- **Un champ vide dit ce qu'il signifie** au lieu d'afficher un exemple grisé ressemblant à une valeur : « requis », « laissé à OpenSSH », « 22 — défaut OpenSSH, non écrit », ou, pour l'utilisateur d'un nouvel hôte, « nom — défaut, écrit à l'enregistrement ». L'exemple du champ actif s'affiche sous le formulaire (« ex. : … »).
+- **Alias supplémentaires** : commandes visibles **+ Ajouter un alias** et **Retirer** (Alt+A et Alt+D restent des accélérateurs). Un nouvel hôte peut désormais déclarer plusieurs alias dès sa création. Ils partagent le même bloc ; favoris, notes et connexions visent un alias précis.
+- **Note personnelle** : à l'édition, la section Tags et note donne accès à la note, conservée dans les données de `ssho` et non dans le fichier SSH ; son éditeur revient au brouillon.
+- **Erreurs** : un résumé en tête, le message sous le champ concerné, le focus sur ce champ, et seule la section de la première erreur est dépliée. Les autres valeurs sont conservées.
+- **Édition de texte** : Ctrl+K efface de nouveau jusqu'à la fin de la ligne ; Ctrl+J/Ctrl+K ne changent plus d'onglet.
+
+Sur un terminal de moins de 44 colonnes, le libellé passe au-dessus de sa saisie. Le curseur natif reste visible dans le champ actif ; un bouton ou un titre de section ayant le focus n'a pas de curseur et ne reçoit ni frappe ni collage.
+
 ### Retour, fermeture et confirmations
 
 - **Échap revient d'un niveau**, partout. À la liste, qui est la racine, Échap ne ferme plus l'application : une ligne rappelle les touches de sortie. Ajouter `"esc"` à `key_bindings.quit_keys` rétablit l'ancienne sortie par Échap ; `disable_esc_quit: true` l'interdit toujours. *Changement par rapport aux versions précédentes, où Échap quittait depuis le tableau.*
@@ -220,7 +236,7 @@ L'écran principal utilise un titre compact et toute la hauteur disponible pour 
 | Note personnelle | Ctrl+S enregistre, Entrée ajoute une ligne, ↑/↓ et Début/Fin déplacent le curseur ; Échap/Ctrl+C annule avec confirmation si modifiée |
 | Tri | s alterne nom/date, n trie par nom, r par dernière connexion |
 | Tunnel | f ; ←/→ pour Local, Remote ou Dynamic, puis ports et adresses |
-| Formulaire hôte | Tab/Shift+Tab pour naviguer, Ctrl+J/Ctrl+K pour changer d'onglet, Ctrl+S ou Entrée sur le dernier champ pour enregistrer, Échap ou Ctrl+C pour annuler |
+| Formulaire hôte | Tab/↓ et Maj+Tab/↑ parcourent champs, sections et boutons ; Entrée : champ suivant ou activer ; Entrée/Espace sur un titre : déplier ; Ctrl+S : prévisualiser ; Échap ou Ctrl+C : annuler |
 | Assistant de clés | K depuis le tableau ou F2 → Clés OpenSSH ; F9 depuis un formulaire remplit seulement IdentityFile ; ↑/↓, Page précédente/suivante, Début/Fin naviguent ; F4 affiche les détails/erreurs complets |
 | Profils de tunnels | F6 ou F2 → Profils de tunnels ; a crée, Entrée/e/r édite ou renomme, d supprime avec confirmation, Ctrl+L lance |
 | Sauvegardes | F8 ou F2 → Sauvegardes ; Entrée ouvre le diff, Entrée confirme, Échap revient |
@@ -230,11 +246,11 @@ L'écran principal utilise un titre compact et toute la hauteur disponible pour 
 | Résultats du lot | ↑/↓ : hôte ; Tab : stdout/stderr ; Page précédente/suivante : sortie ; s : annuler le lot ; q, Échap ou Ctrl+C : retour, le lot continue |
 | Tunnels actifs | F7 ou F2 → Tunnels actifs ; s arrête le processus sélectionné ; q, Échap ou Ctrl+C reviennent sans rien arrêter |
 | Formulaire tunnel | Ctrl+T choisit session shell ou tunnel seul ; Ctrl+S enregistre le profil nommé sans SSH ; Ctrl+L lance le forwarding courant ; Entrée avance sans lancer ; Échap/Ctrl+C annule |
-| Édition de texte | Ctrl+A/E ou Début/Fin pour début/fin de ligne ; ←/→ ou Ctrl+B/F pour un caractère ; Ctrl+←/→ ou Alt+B/F pour un mot ; Retour arrière/Ctrl+H efface avant, Suppr/Ctrl+D après ; Ctrl+U efface avant le curseur, Ctrl+K après (hors formulaire hôte où il change d’onglet), Ctrl+W ou Alt+Retour arrière efface le mot précédent |
+| Édition de texte | Ctrl+A/E ou Début/Fin pour début/fin de ligne ; ←/→ ou Ctrl+B/F pour un caractère ; Ctrl+←/→ ou Alt+B/F pour un mot ; Retour arrière/Ctrl+H efface avant, Suppr/Ctrl+D après ; Ctrl+U efface avant le curseur, Ctrl+K après, Ctrl+W ou Alt+Retour arrière efface le mot précédent |
 | Abandon des modifications | Tab ou ←/→ choisit entre Continuer l'édition (focus initial) et Abandonner ; Entrée valide le choix marqué ; Échap ou Ctrl+C reprend exactement le formulaire |
-| Alias en édition | Alt+A ajoute un nom, Alt+D supprime le nom actif lorsqu'il en reste plusieurs |
+| Alias supplémentaires | Boutons « + Ajouter un alias » et « Retirer » dans la section ; Alt+A ajoute, Alt+D retire l'alias supplémentaire actif |
 
-Sur un terminal court, les champs occupent deux lignes (libellé et saisie). Chaque erreur apparaît sous son champ et la validation place le focus sur la première erreur, dans le bon onglet. Le curseur natif reste visible pendant la saisie, y compris avec caractères larges, accents combinés et emoji. Une annulation quitte immédiatement un formulaire inchangé ; seules des valeurs, des alias ou un type de tunnel modifiés demandent confirmation. Revenir aux valeurs initiales enlève cette confirmation. Échap dans la confirmation reprend le formulaire avec son texte, son curseur et sa navigation ; Entrée abandonne et revient à la vue parente.
+Chaque erreur apparaît sous son champ et la validation place le focus sur la première erreur, en dépliant sa section. Le curseur natif reste visible pendant la saisie, y compris avec caractères larges, accents combinés et emoji. Une annulation quitte immédiatement un formulaire inchangé ; seules des valeurs, des alias ou un type de tunnel modifiés demandent confirmation. Revenir aux valeurs initiales enlève cette confirmation. Dans la confirmation, Échap ou Entrée sur le choix marqué « Continuer l'édition » reprennent le formulaire avec son texte, son curseur et sa navigation ; « Abandonner », choisi avec Tab puis Entrée, revient à la vue parente.
 
 Les hôtes masqués restent accessibles en connexion directe. La recherche de la TUI combine plusieurs mots sur le nom, l'adresse, l'utilisateur et les tags. La recherche CLI conserve ses propres filtres de champs.
 

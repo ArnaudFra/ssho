@@ -178,6 +178,10 @@ pub(super) enum FormEvent {
     None,
     Cancel,
     Submit,
+    /// Choose another destination file, then come back to the same draft.
+    ChooseFile,
+    PickKey,
+    EditNote,
 }
 /// Structured location shared by validation, focus and inline rendering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,9 +197,57 @@ pub(super) struct FieldError {
 fn input_values(inputs: &[Input]) -> Vec<String> {
     inputs.iter().map(|i| i.value.clone()).collect()
 }
+
+/// Collapsible parts of the host form. Essential fields are outside any section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Section {
+    Aliases,
+    Advanced,
+    Organization,
+}
+
+/// Focusable controls of the host form that are not text inputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Control {
+    File,
+    KeyPicker,
+    Section(Section),
+    AddAlias,
+    RemoveAlias(usize),
+    Note,
+    Preview,
+    Cancel,
+}
+
+/// One stop of the Tab order, in the order the form is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Stop {
+    Field(FormField),
+    Control(Control),
+}
+
+/// Input indices: 0 alias (add/copy), 1 address, 2 user, 3 port, 4 key, 5 ProxyJump,
+/// 6 ProxyCommand, 7 options, 8 tags, 9 remote command, 10 RequestTTY.
+const ADVANCED: [usize; 5] = [5, 6, 7, 9, 10];
+const EXAMPLES: [&str; 11] = [
+    "ex. : api-prod",
+    "ex. : 192.168.1.100 ou example.com",
+    "ex. : deploy",
+    "ex. : 2222",
+    "ex. : ~/.ssh/id_ed25519 — F9 ou [Choisir] liste les clés",
+    "ex. : user@bastion:22 ou un alias existant",
+    "ex. : ssh -W %h:%p bastion",
+    "ex. : -o Compression=yes -o ServerAliveInterval=60",
+    "ex. : production, web — « hidden » masque l'hôte dans la liste",
+    "ex. : htop — laissé vide : shell de connexion",
+    "yes, no, force ou auto",
+];
+
 #[derive(Clone, Debug)]
 pub(super) struct HostForm {
     pub inputs: Vec<Input>,
+    /// Edit: every alias of the block, the first being the primary one.
+    /// Add: only the additional aliases; the primary one is `inputs[0]`.
     pub names: Vec<Input>,
     pub original: Option<Host>,
     copy_source: Option<Host>,
@@ -203,11 +255,13 @@ pub(super) struct HostForm {
     pub file_tags: Vec<String>,
     pub name_focus: bool,
     pub focus: usize,
-    pub tab: usize,
+    /// A focused button or section header; text inputs then have no caret.
+    pub control: Option<Control>,
+    open: [bool; 3],
     pub error: String,
     pub scroll: usize,
     pub default_user: String,
-    baseline: (Vec<String>, Vec<String>),
+    baseline: (Vec<String>, Vec<String>, PathBuf),
     pub errors: Vec<FieldError>,
 }
 impl HostForm {
@@ -216,38 +270,12 @@ impl HostForm {
         let user = std::env::var("USER")
             .or_else(|_| std::env::var("USERNAME"))
             .unwrap_or_else(|_| "root".into());
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        let mut identity = home.join(".ssh/id_rsa");
-        for name in ["id_ed25519", "id_ecdsa", "id_rsa"] {
-            let p = home.join(".ssh").join(name);
-            if p.exists() {
-                identity = p;
-                break;
-            }
-        }
-        let hints = [
-            "server-name".into(),
-            "192.168.1.100 or example.com".into(),
-            user.clone(),
-            "22".into(),
-            identity.display().to_string(),
-            "user@jump-host:port or existing-host-name".into(),
-            "ssh -W %h:%p Jumphost".into(),
-            "-o Compression=yes -o ServerAliveInterval=60".into(),
-            "production, web, database".into(),
-            "ls -la, htop, bash".into(),
-            "yes, no, force, auto".into(),
-        ];
-        for (i, hint) in hints.into_iter().enumerate() {
-            inputs[i].placeholder = hint;
-            inputs[i].limit = [50, 100, 50, 5, 200, 200, 200, 500, 200, 300, 10][i];
+        for (i, input) in inputs.iter_mut().enumerate() {
+            input.limit = [50, 100, 50, 5, 200, 200, 200, 500, 200, 300, 10][i];
         }
         inputs[0].set(&name);
-        let baseline = (input_values(&inputs), vec![]);
-        Self {
-            baseline,
+        let mut form = Self {
+            baseline: (vec![], vec![], target.clone()),
             errors: vec![],
             inputs,
             names: vec![],
@@ -257,11 +285,15 @@ impl HostForm {
             target,
             name_focus: false,
             focus: 0,
-            tab: 0,
+            control: None,
+            open: [false; 3],
             error: String::new(),
             scroll: 0,
             default_user: user,
-        }
+        };
+        form.describe_empty_fields();
+        form.rebase();
+        form
     }
     pub fn edit(host: Host) -> Self {
         let mut f = Self::add(String::new(), host.source_file.clone());
@@ -274,7 +306,9 @@ impl HostForm {
         f.prefill(&host);
         f.original = Some(host);
         f.name_focus = true;
-        f.baseline = (input_values(&f.inputs), input_values(&f.names));
+        f.describe_empty_fields();
+        f.open_filled_sections();
+        f.rebase();
         f
     }
     fn prefill(&mut self, host: &Host) {
@@ -301,8 +335,65 @@ impl HostForm {
         form.prefill(&source);
         form.copy_source = Some(source);
         form.inputs[0].set("");
-        form.baseline = (input_values(&form.inputs), vec![]);
+        form.describe_empty_fields();
+        form.open_filled_sections();
+        form.rebase();
         form
+    }
+    fn rebase(&mut self) {
+        self.baseline = (
+            input_values(&self.inputs),
+            input_values(&self.names),
+            self.target.clone(),
+        );
+    }
+    /// What an empty field means, shown in its place: a value is never suggested
+    /// by a greyed example that looks like one already entered.
+    fn describe_empty_fields(&mut self) {
+        let openssh = "laissé à OpenSSH";
+        let user = if self.original.is_none() && self.copy_source.is_none() {
+            format!("{} — défaut, écrit à l'enregistrement", self.default_user)
+        } else {
+            openssh.to_owned()
+        };
+        let port = if self.copy_source.is_some() {
+            openssh.to_owned()
+        } else {
+            "22 — défaut OpenSSH, non écrit".to_owned()
+        };
+        let texts = [
+            "requis".to_owned(),
+            "requis".to_owned(),
+            user,
+            port,
+            openssh.to_owned(),
+            openssh.to_owned(),
+            openssh.to_owned(),
+            "aucune option supplémentaire".to_owned(),
+            "aucun tag".to_owned(),
+            "aucune : shell de connexion".to_owned(),
+            openssh.to_owned(),
+        ];
+        for (input, text) in self.inputs.iter_mut().zip(texts) {
+            input.placeholder = text;
+        }
+        for name in &mut self.names {
+            name.placeholder = "requis".into();
+        }
+    }
+    /// Existing values are never hidden behind a closed section.
+    fn open_filled_sections(&mut self) {
+        self.open = [
+            !self.extra_aliases().is_empty(),
+            ADVANCED.iter().any(|&i| !self.inputs[i].value.is_empty()),
+            !self.inputs[8].value.is_empty() || !self.file_tags.is_empty(),
+        ];
+    }
+    pub fn example(field: FormField) -> &'static str {
+        match field {
+            FormField::Input(i) => EXAMPLES[i],
+            FormField::Name(_) => "partage le bloc de configuration de l'alias principal",
+        }
     }
     pub fn extra_identities(&self) -> &[String] {
         self.original
@@ -314,24 +405,163 @@ impl HostForm {
     pub fn is_duplicate(&self) -> bool {
         self.copy_source.is_some()
     }
+    pub fn copy_source(&self) -> Option<&Host> {
+        self.copy_source.as_ref()
+    }
     pub fn dirty(&self) -> bool {
-        self.baseline != (input_values(&self.inputs), input_values(&self.names))
+        self.baseline
+            != (
+                input_values(&self.inputs),
+                input_values(&self.names),
+                self.target.clone(),
+            )
+    }
+    /// The destination can be changed from an add or copy draft; an existing
+    /// block is moved by its own action.
+    pub fn retarget(&mut self, target: PathBuf) {
+        self.file_tags = config::file_tags(&target).unwrap_or_default();
+        self.target = target;
+        self.control = Some(Control::File);
+    }
+    pub fn is_open(&self, section: Section) -> bool {
+        self.open[section as usize]
+    }
+    #[cfg(test)]
+    pub fn reveal(&mut self, section: Section) {
+        self.open[section as usize] = true;
+    }
+    /// Indices in `names` of the aliases listed under "additional aliases".
+    pub fn extra_aliases(&self) -> std::ops::Range<usize> {
+        usize::from(self.original.is_some()).min(self.names.len())..self.names.len()
+    }
+    fn primary(&self) -> FormField {
+        if self.original.is_some() {
+            FormField::Name(0)
+        } else {
+            FormField::Input(0)
+        }
+    }
+    fn section_of(&self, field: FormField) -> Option<Section> {
+        match field {
+            FormField::Name(i) if self.extra_aliases().contains(&i) => Some(Section::Aliases),
+            FormField::Input(i) if ADVANCED.contains(&i) => Some(Section::Advanced),
+            FormField::Input(8) => Some(Section::Organization),
+            _ => None,
+        }
+    }
+    /// Every focusable element in visual order. Tab never opens a section: closed
+    /// sections contribute their header only.
+    pub fn stops(&self) -> Vec<Stop> {
+        use Control as C;
+        let mut stops = vec![];
+        if self.original.is_none() {
+            stops.push(Stop::Control(C::File));
+        }
+        stops.push(Stop::Field(self.primary()));
+        stops.extend((1..=4).map(|i| Stop::Field(FormField::Input(i))));
+        stops.push(Stop::Control(C::KeyPicker));
+        if !self.is_duplicate() {
+            stops.push(Stop::Control(C::Section(Section::Aliases)));
+            if self.is_open(Section::Aliases) {
+                for i in self.extra_aliases() {
+                    stops.push(Stop::Field(FormField::Name(i)));
+                    stops.push(Stop::Control(C::RemoveAlias(i)));
+                }
+                stops.push(Stop::Control(C::AddAlias));
+            }
+        }
+        stops.push(Stop::Control(C::Section(Section::Advanced)));
+        if self.is_open(Section::Advanced) {
+            stops.extend(ADVANCED.map(|i| Stop::Field(FormField::Input(i))));
+        }
+        stops.push(Stop::Control(C::Section(Section::Organization)));
+        if self.is_open(Section::Organization) {
+            stops.push(Stop::Field(FormField::Input(8)));
+            if self.original.is_some() {
+                stops.push(Stop::Control(C::Note));
+            }
+        }
+        stops.push(Stop::Control(C::Preview));
+        stops.push(Stop::Control(C::Cancel));
+        stops
+    }
+    pub fn current(&self) -> Stop {
+        match self.control {
+            Some(control) => Stop::Control(control),
+            None if self.name_focus => Stop::Field(FormField::Name(self.focus)),
+            None => Stop::Field(FormField::Input(self.focus)),
+        }
+    }
+    pub fn focus_on(&mut self, stop: Stop) {
+        match stop {
+            Stop::Control(control) => self.control = Some(control),
+            Stop::Field(FormField::Name(i)) => {
+                self.control = None;
+                self.name_focus = true;
+                self.focus = i;
+            }
+            Stop::Field(FormField::Input(i)) => {
+                self.control = None;
+                self.name_focus = false;
+                self.focus = i;
+            }
+        }
+    }
+    /// The text input owning the caret, if a field has the focus.
+    pub fn focused_input(&mut self) -> Option<&mut Input> {
+        match self.current() {
+            Stop::Field(FormField::Name(i)) => self.names.get_mut(i),
+            Stop::Field(FormField::Input(i)) => self.inputs.get_mut(i),
+            Stop::Control(_) => None,
+        }
+    }
+    fn step(&mut self, back: bool) {
+        let stops = self.stops();
+        let position = stops
+            .iter()
+            .position(|stop| *stop == self.current())
+            .unwrap_or(0);
+        let next = if back {
+            (position + stops.len() - 1) % stops.len()
+        } else {
+            (position + 1) % stops.len()
+        };
+        self.focus_on(stops[next]);
+    }
+    fn add_alias(&mut self) {
+        self.names.push(Input {
+            placeholder: "requis".into(),
+            limit: 50,
+            ..Input::default()
+        });
+        self.open[Section::Aliases as usize] = true;
+        self.focus_on(Stop::Field(FormField::Name(self.names.len() - 1)));
+    }
+    fn remove_alias(&mut self, index: usize) {
+        if !self.extra_aliases().contains(&index) {
+            return;
+        }
+        self.names.remove(index);
+        self.errors.clear();
+        // Stay in the aliases: on the one that took this place, else on Add.
+        if self.extra_aliases().contains(&index) {
+            self.focus_on(Stop::Field(FormField::Name(index)));
+        } else {
+            self.focus_on(Stop::Control(Control::AddAlias));
+        }
+    }
+    fn toggle(&mut self, section: Section) {
+        self.open[section as usize] = !self.open[section as usize];
     }
     pub fn validate(&mut self) -> bool {
         self.errors = self.validation_errors();
         self.error.clear();
-        if let Some(error) = self.errors.first() {
-            match error.field {
-                FormField::Name(i) => {
-                    self.name_focus = true;
-                    self.focus = i;
-                }
-                FormField::Input(i) => {
-                    self.name_focus = false;
-                    self.focus = i;
-                    self.tab = usize::from([7, 9, 10].contains(&i));
-                }
+        if let Some(field) = self.errors.first().map(|error| error.field) {
+            // Only the section holding the first error is opened to show it.
+            if let Some(section) = self.section_of(field) {
+                self.open[section as usize] = true;
             }
+            self.focus_on(Stop::Field(field));
         }
         self.errors.is_empty()
     }
@@ -352,25 +582,23 @@ impl HostForm {
                 });
             }
         };
-        if self.original.is_some() {
-            if self.names.is_empty() {
-                check(
-                    FormField::Input(0),
-                    Host {
-                        name: String::new(),
-                        ..valid()
-                    },
-                );
-            }
-            for (i, name) in self.names.iter().enumerate() {
-                check(
-                    FormField::Name(i),
-                    Host {
-                        name: name.value.trim().into(),
-                        ..valid()
-                    },
-                );
-            }
+        if self.original.is_some() && self.names.is_empty() {
+            check(
+                FormField::Input(0),
+                Host {
+                    name: String::new(),
+                    ..valid()
+                },
+            );
+        }
+        for (i, name) in self.names.iter().enumerate() {
+            check(
+                FormField::Name(i),
+                Host {
+                    name: name.value.trim().into(),
+                    ..valid()
+                },
+            );
         }
         for (i, input) in self.inputs.iter().enumerate() {
             if i == 0 && self.original.is_some() {
@@ -411,119 +639,82 @@ impl HostForm {
                 });
             }
         }
-        // Aliases, General (including tags), then Advanced: match navigation order.
+        // Report in the order the form is read, whatever is currently unfolded.
+        let primary = self.primary();
         errors.sort_by_key(|error| match error.field {
-            FormField::Name(i) => (0, i),
-            FormField::Input(i) => (
-                1,
-                match i {
-                    8 => 7,
-                    7 => 8,
-                    _ => i,
-                },
-            ),
+            field if field == primary => (0, 0),
+            FormField::Input(i @ 1..=4) => (1, i),
+            FormField::Name(i) => (2, i),
+            FormField::Input(8) => (4, 0),
+            FormField::Input(i) => (3, i),
         });
         errors
-    }
-    pub fn fields(&self) -> Vec<usize> {
-        if self.tab == 1 {
-            vec![7, 9, 10]
-        } else if self.original.is_some() {
-            vec![1, 2, 3, 4, 5, 6, 8]
-        } else {
-            vec![0, 1, 2, 3, 4, 5, 6, 8]
-        }
     }
     pub fn key(&mut self, k: KeyEvent) -> FormEvent {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         if k.code == KeyCode::Esc || (ctrl && k.code == KeyCode::Char('c')) {
             return FormEvent::Cancel;
         }
-        if ctrl {
-            match k.code {
-                KeyCode::Char('s') => return FormEvent::Submit,
-                KeyCode::Char('j' | 'k') => {
-                    self.tab = 1 - self.tab;
-                    if !self.name_focus {
-                        self.focus = self.fields()[0];
-                    }
+        if ctrl && k.code == KeyCode::Char('s') {
+            return FormEvent::Submit;
+        }
+        let current = self.current();
+        if k.modifiers.contains(KeyModifiers::ALT) && !self.is_duplicate() {
+            match (k.code, current) {
+                (KeyCode::Char('a'), _) => {
+                    self.add_alias();
+                    return FormEvent::None;
+                }
+                (KeyCode::Char('d'), Stop::Field(FormField::Name(i))) => {
+                    self.remove_alias(i);
                     return FormEvent::None;
                 }
                 _ => {}
             }
         }
-        if k.modifiers.contains(KeyModifiers::ALT) {
-            match k.code {
-                KeyCode::Char('a') if self.original.is_some() => {
-                    self.names.push(Input::default());
-                    self.name_focus = true;
-                    self.focus = self.names.len() - 1;
-                    return FormEvent::None;
-                }
-                KeyCode::Char('d')
-                    if self.original.is_some() && self.name_focus && self.names.len() > 1 =>
-                {
-                    self.names.remove(self.focus);
-                    self.focus = self.focus.min(self.names.len() - 1);
-                    return FormEvent::None;
-                }
-                _ => {}
+        match (k.code, current) {
+            (KeyCode::Tab | KeyCode::Down, _) => self.step(false),
+            (KeyCode::BackTab | KeyCode::Up, _) => self.step(true),
+            // Enter walks the fields and stops on the main action; only a button
+            // continues the journey, so reaching the end never submits.
+            (KeyCode::Enter, Stop::Field(_)) => {
+                let stops = self.stops();
+                let position = stops.iter().position(|stop| *stop == current).unwrap_or(0);
+                let next = stops[position + 1..]
+                    .iter()
+                    .find(|stop| matches!(stop, Stop::Field(_)))
+                    .copied()
+                    .unwrap_or(Stop::Control(Control::Preview));
+                self.focus_on(next);
             }
-        }
-        match k.code {
-            KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter | KeyCode::Up | KeyCode::Down => {
-                let back = matches!(k.code, KeyCode::BackTab | KeyCode::Up);
-                if self.name_focus {
-                    if back {
-                        self.focus = if self.focus == 0 {
-                            self.names.len() - 1
-                        } else {
-                            self.focus - 1
-                        };
-                    } else if self.focus + 1 < self.names.len() {
-                        self.focus += 1;
-                    } else {
-                        self.name_focus = false;
-                        self.focus = self.fields()[0];
-                    }
-                } else {
-                    let fields = self.fields();
-                    let p = fields.iter().position(|&i| i == self.focus).unwrap_or(0);
-                    if !back && p + 1 == fields.len() && self.tab == 1 && k.code == KeyCode::Enter {
-                        return FormEvent::Submit;
-                    }
-                    if back && p == 0 {
-                        if self.tab == 1 {
-                            self.tab = 0;
-                            self.focus = *self.fields().last().unwrap();
-                        } else if !self.names.is_empty() {
-                            self.name_focus = true;
-                            self.focus = self.names.len() - 1;
-                        } else {
-                            self.focus = *fields.last().unwrap();
-                        }
-                    } else if !back && p + 1 == fields.len() {
-                        if self.tab == 0 {
-                            self.tab = 1;
-                            self.focus = 7;
-                        } else if !self.names.is_empty() {
-                            self.name_focus = true;
-                            self.focus = 0;
-                        } else {
-                            self.focus = 7;
-                        }
-                    } else {
-                        self.focus = fields[if back { p - 1 } else { p + 1 }];
-                    }
+            (KeyCode::Enter | KeyCode::Char(' '), Stop::Control(control)) => match control {
+                Control::Preview => return FormEvent::Submit,
+                Control::Cancel => return FormEvent::Cancel,
+                Control::File => return FormEvent::ChooseFile,
+                Control::KeyPicker => return FormEvent::PickKey,
+                Control::Note => return FormEvent::EditNote,
+                Control::Section(section) => self.toggle(section),
+                Control::AddAlias => self.add_alias(),
+                Control::RemoveAlias(i) => self.remove_alias(i),
+            },
+            (KeyCode::Right, Stop::Control(Control::Section(section))) => {
+                self.open[section as usize] = true;
+            }
+            (KeyCode::Left, Stop::Control(Control::Section(section))) => {
+                self.open[section as usize] = false;
+            }
+            (KeyCode::Left | KeyCode::Right, Stop::Control(Control::Preview)) => {
+                self.control = Some(Control::Cancel);
+            }
+            (KeyCode::Left | KeyCode::Right, Stop::Control(Control::Cancel)) => {
+                self.control = Some(Control::Preview);
+            }
+            (_, Stop::Field(_)) => {
+                if let Some(input) = self.focused_input() {
+                    input.key(k);
                 }
             }
-            _ => {
-                if self.name_focus {
-                    self.names[self.focus].key(k);
-                } else {
-                    self.inputs[self.focus].key(k);
-                }
-            }
+            _ => {}
         }
         FormEvent::None
     }
@@ -532,14 +723,15 @@ impl HostForm {
             bail!("{}", error.message);
         }
         let value = |i: usize| self.inputs[i].value.trim().to_string();
+        let listed = self
+            .names
+            .iter()
+            .map(|i| i.value.trim().to_string())
+            .filter(|s| !s.is_empty());
         let names: Vec<String> = if self.original.is_some() {
-            self.names
-                .iter()
-                .map(|i| i.value.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
+            listed.collect()
         } else {
-            vec![value(0)]
+            std::iter::once(value(0)).chain(listed).collect()
         };
         if names.is_empty() || names[0].is_empty() {
             bail!("at least one host name is required");
@@ -578,6 +770,9 @@ impl HostForm {
             }
             host.extra_identities = original.extra_identities.clone();
             host.line_number = original.line_number;
+            host.aliases = names.clone();
+        } else if names.len() > 1 {
+            // A new block declared with several aliases shares one configuration.
             host.aliases = names.clone();
         }
         if let Some(source) = &self.copy_source {
@@ -785,16 +980,3 @@ impl ForwardForm {
         Ok(f)
     }
 }
-pub(super) const LABELS: [&str; 11] = [
-    "Host Name *",
-    "Hostname/IP *",
-    "User",
-    "Port",
-    "Identity File",
-    "Proxy Jump",
-    "Proxy Command",
-    "SSH Options",
-    "Tags (comma-separated)",
-    "Remote Command",
-    "Request TTY",
-];

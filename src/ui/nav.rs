@@ -33,6 +33,21 @@ pub(super) enum Answer {
     Proceed,
 }
 
+/// A named action. The focused one carries a marker in addition to its colours.
+pub(super) fn button(label: &str, focused: bool) -> Span<'static> {
+    Span::styled(
+        format!("{} {label} ]", if focused { "[▶" } else { "[ " }),
+        if focused {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Rgb(0, 173, 216))
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        },
+    )
+}
+
 /// Two named choices. The safe one has the focus first, so a repeated Enter
 /// never discards a draft or stops owned work.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -66,19 +81,6 @@ impl Confirm {
         stay: &str,
         proceed: &str,
     ) {
-        let button = |label: &str, focused: bool| {
-            Span::styled(
-                format!("{} {label} ]", if focused { "[▶" } else { "[ " }),
-                if focused {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Rgb(0, 173, 216))
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                },
-            )
-        };
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             button(stay, !self.proceed),

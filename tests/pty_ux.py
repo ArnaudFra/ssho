@@ -169,9 +169,9 @@ def scenario_shortcuts():
     s.send(CTRL_G)
     s.absent('Actions rapides')
     s.send(b'e')                      # released historical key
-    s.absent('Edit SSH Host')
+    s.absent('Hôtes > Modifier')
     s.send(b'E')
-    s.expect('Edit SSH Host')
+    s.expect('Hôtes > Modifier')
     s.send(ESC)
     s.send(F2)
     s.send(b'modifier')
@@ -201,10 +201,10 @@ def scenario_navigation():
     s.send(b'i')
     s.expect('SSH Host Information: alpha')
     s.send(b'e')
-    s.expect('Edit SSH Host')
+    s.expect('Hôtes > Modifier')
     s.send(b'\x1b[18~')              # F7 over an untouched form
     s.expect('Owned tunnels')
-    for screen in ['Edit SSH Host', 'SSH Host Information: alpha', '?: help']:
+    for screen in ['Hôtes > Modifier', 'SSH Host Information: alpha', '?: help']:
         s.send(ESC)
         s.expect(screen)
     s.send(ESC)
@@ -219,7 +219,7 @@ def scenario_navigation():
         s.alive()
     # A modified draft survives Esc, Ctrl+C and Enter on the focused choice.
     s.send(b'e')
-    s.expect('Edit SSH Host')
+    s.expect('Hôtes > Modifier')
     s.send(b'-draft')
     for keep in [ESC, CTRL_C, b'\r']:
         s.send(ESC)
@@ -296,7 +296,7 @@ def scenario_palette():
     s.send(ESC)
     # Contextual palette over a modified draft: the draft is found again.
     s.send(b'e')
-    s.expect('Edit SSH Host')
+    s.expect('Hôtes > Modifier')
     s.send(b'-draft')
     s.send(F2)
     s.expect('Actions — brouillon conservé')
@@ -375,7 +375,84 @@ def scenario_search():
           'explicit clearing from table and palette, combined criteria, terminal restored')
 
 
-SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation}
+def scenario_host_form():
+    preferences()
+    work = ROOT / '.ssh/work'
+    work.write_text('Host gamma\n HostName 127.0.0.3\n')
+    CONFIG.write_text('Include work\n' + ORIGINAL_CONFIG.decode())
+    main_before = CONFIG.read_bytes()
+    try:
+        s = Session('host_form', width=100, height=30)
+        s.expect('?: help')
+        s.send(b'a')
+        s.expect('Select config file to add host to:')
+        s.send(b'\r')
+        # One page: destination visible, essentials first, advanced folded away.
+        s.expect('Hôtes > Ajouter un hôte')
+        s.expect('Fichier : ' + str(CONFIG))
+        s.expect('[  Changer ]')
+        s.expect('▸ Options avancées')
+        s.absent('ProxyJump')
+        s.expect('ex. : api-prod')
+        s.send(b'web-01\r')
+        s.expect('ex. : 192.168.1.100 ou example.com')
+        s.send(b'web.example\r\r\r')
+        s.expect('ex. : ~/.ssh/id_ed25519')
+        # Enter after the last field focuses the main action; nothing is submitted.
+        s.send(b'\r')
+        s.expect('[▶ Prévisualiser les modifications ]')
+        s.absent('confirm exact changes')
+        # Change the target file from the draft and come back to the same draft.
+        s.send(b'\t\t')
+        s.expect('[▶ Changer ]')
+        s.send(b'\r')
+        s.expect('Select config file to add host to:')
+        s.send(DOWN + b'\r')
+        s.expect('Hôtes > Ajouter un hôte')
+        s.expect('Fichier : ' + str(work))
+        s.expect('web-01')
+        s.expect('web.example')
+        # Ctrl+S previews from anywhere; writing needs the explicit confirmation.
+        s.send(b'\x13')
+        s.expect('confirm exact changes')
+        s.expect(str(work))
+        assert 'web-01' not in work.read_text()
+        s.send(b'\r')
+        s.expect('web-01')
+        s.expect('?: help')
+        assert 'Host web-01' in work.read_text() and 'web.example' in work.read_text()
+        assert CONFIG.read_bytes() == main_before, 'only the chosen file is written'
+        # Edit names its mode; Ctrl+K edits text instead of switching tabs.
+        s.send(b'/web-01\t')
+        s.send(b'e')
+        s.expect('Hôtes > Modifier web-01')
+        s.absent('[  Changer ]')
+        s.send(b'\x01\x0b')             # Ctrl+A, Ctrl+K: empty the alias input
+        s.expect('> Alias *           requis')
+        s.send(b'web-02')
+        # Sections unfold on demand, from their header.
+        s.send(b'\t' * 7)
+        s.expect('> ▸ Options avancées')
+        s.send(b' ')
+        s.expect('> ▾ Options avancées')
+        s.expect('ProxyJump')
+        s.send(ESC)
+        s.expect("[▶ Continuer l'édition ]")
+        s.send(b'\t\r')
+        s.expect('?: help')
+        assert 'web-02' not in work.read_text()
+        assert not connections()
+        s.send(CTRL_C)
+        s.close()
+    finally:
+        CONFIG.write_bytes(ORIGINAL_CONFIG)
+        work.unlink(missing_ok=True)
+    print('PTY PASS [host_form]: one-page add with visible target, Enter never submits, file '
+          'changed from the draft, preview then explicit write to the chosen file only, '
+          'named edit mode, Ctrl+K as text editing, on-demand section, terminal restored')
+
+
+SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

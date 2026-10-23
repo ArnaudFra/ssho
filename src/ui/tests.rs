@@ -182,16 +182,44 @@ fn form_inputs_show_a_cursor_on_the_placeholder_after_scrolling() {
     )));
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
     terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    // An empty field says what it means ("requis"); the caret sits on its start.
     let position = terminal.backend_mut().get_cursor_position().unwrap();
-    assert_eq!(terminal.backend().buffer()[position].symbol(), "s");
+    assert_eq!(terminal.backend().buffer()[position].symbol(), "r");
     assert_eq!(terminal.backend().buffer()[position].fg, Color::DarkGray);
-    for _ in 0..7 {
-        m.key(key(KeyCode::Tab));
-    }
+    // The last advanced field is below the first screen: the form scrolls to it.
+    let View::Host(form) = &mut m.view else {
+        panic!()
+    };
+    form.reveal(forms::Section::Advanced);
+    form.focus_on(forms::Stop::Field(forms::FormField::Input(10)));
     terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    let View::Host(form) = &m.view else { panic!() };
+    assert!(form.scroll > 0, "the focused field is scrolled into view");
     let position = terminal.backend_mut().get_cursor_position().unwrap();
-    assert_eq!(terminal.backend().buffer()[position].symbol(), "p");
+    assert_eq!(terminal.backend().buffer()[position].symbol(), "l");
     assert_eq!(terminal.backend().buffer()[position].fg, Color::DarkGray);
+    let row: String = (0..80)
+        .map(|x| {
+            terminal.backend().buffer()[(x, position.y)]
+                .symbol()
+                .to_owned()
+        })
+        .collect();
+    assert!(
+        row.contains("> RequestTTY") && row.contains("laissé à OpenSSH"),
+        "{row}"
+    );
+    // A focused button owns no caret: the terminal cursor is left where it was.
+    let View::Host(form) = &mut m.view else {
+        panic!()
+    };
+    form.focus_on(forms::Stop::Control(forms::Control::Preview));
+    terminal
+        .backend_mut()
+        .set_cursor_position((79, 19))
+        .unwrap();
+    terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
+    terminal.backend_mut().assert_cursor_position((79, 19));
 }
 
 #[test]
@@ -217,11 +245,18 @@ fn forms_aliases_navigation_identity_and_validation() {
     f.names[2].set("three");
     f.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT));
     assert_eq!(f.names.len(), 2);
+    // The focus stays among the aliases, on the visible Add command.
+    use forms::{Control, FormField, Section, Stop};
+    assert_eq!(f.current(), Stop::Control(Control::AddAlias));
     f.key(key(KeyCode::Tab));
-    assert!(!f.name_focus);
-    f.key(ctrl('j'));
-    assert_eq!(f.tab, 1);
-    assert_eq!(f.focus, 7);
+    assert_eq!(
+        f.current(),
+        Stop::Control(Control::Section(Section::Advanced))
+    );
+    assert!(!f.is_open(Section::Advanced), "Tab never unfolds a section");
+    f.key(key(KeyCode::Enter));
+    f.key(key(KeyCode::Tab));
+    assert_eq!(f.current(), Stop::Field(FormField::Input(5)));
     let result = f.host().unwrap();
     assert_eq!(result.extra_identities, ["~/.ssh/extra key"]);
     assert_eq!(result.aliases, ["one", "two"]);
@@ -242,18 +277,27 @@ fn form_render_fields_and_readonly_keys() {
     m.view = View::Host(Box::new(forms::HostForm::edit(h)));
     let s = screen(&mut m, 120, 60);
     for label in [
-        "Host Names",
-        "Common Properties",
-        "General",
-        "Advanced",
-        "Hostname/IP *",
-        "Proxy Jump",
-        "Proxy Command",
-        "Tags (comma-separated)",
-        "extra key",
+        "Hôtes > Modifier one",
+        "Fichier : ",
+        "Alias *",
+        "Adresse *",
+        "Utilisateur",
+        "Clé SSH",
+        "[  Choisir ]",
+        "extra key (lecture seule, conservée)",
+        "▸ Alias supplémentaires (0)",
+        "▸ Options avancées (0 renseignée(s))",
+        "▸ Tags et note",
+        "[  Prévisualiser les modifications ]",
+        "[  Annuler ]",
     ] {
-        assert!(s.contains(label), "missing {label}");
+        assert!(s.contains(label), "missing {label}: {s}");
     }
+    // Closed sections keep their fields out of the way.
+    assert!(
+        !s.contains("ProxyJump") && !s.contains("ProxyCommand"),
+        "{s}"
+    );
 }
 #[test]
 fn tunnel_dynamic_navigation_and_history() {
@@ -341,18 +385,47 @@ fn sorting_history_and_table_shortcuts() {
 }
 #[test]
 fn form_tab_order_and_submit_shortcuts() {
+    use forms::{Control as C, FormField as F, Section as S, Stop};
     let mut add = forms::HostForm::add("one".into(), PathBuf::from("config"));
-    for expected in [1, 2, 3, 4, 5, 6, 8, 7, 9, 10] {
+    assert_eq!(add.current(), Stop::Field(F::Input(0)));
+    // Tab follows the visual order through fields, section headers and buttons,
+    // wraps around, and never unfolds a section.
+    for expected in [
+        Stop::Field(F::Input(1)),
+        Stop::Field(F::Input(2)),
+        Stop::Field(F::Input(3)),
+        Stop::Field(F::Input(4)),
+        Stop::Control(C::KeyPicker),
+        Stop::Control(C::Section(S::Aliases)),
+        Stop::Control(C::Section(S::Advanced)),
+        Stop::Control(C::Section(S::Organization)),
+        Stop::Control(C::Preview),
+        Stop::Control(C::Cancel),
+        Stop::Control(C::File),
+        Stop::Field(F::Input(0)),
+    ] {
         assert_eq!(add.key(key(KeyCode::Tab)), forms::FormEvent::None);
-        assert_eq!(add.focus, expected);
+        assert_eq!(add.current(), expected);
     }
-    assert_eq!(add.tab, 1);
+    assert!(!add.is_open(S::Aliases) && !add.is_open(S::Advanced) && !add.is_open(S::Organization));
+    // Enter walks the fields and stops on the main action: reaching the end of
+    // the fields never submits; only the button does.
+    for expected in 1..=4 {
+        assert_eq!(add.key(key(KeyCode::Enter)), forms::FormEvent::None);
+        assert_eq!(add.current(), Stop::Field(F::Input(expected)));
+    }
+    assert_eq!(add.key(key(KeyCode::Enter)), forms::FormEvent::None);
+    assert_eq!(add.current(), Stop::Control(C::Preview));
     assert_eq!(add.key(key(KeyCode::Enter)), forms::FormEvent::Submit);
     add.key(key(KeyCode::BackTab));
-    assert_eq!(add.focus, 9);
+    assert_eq!(add.current(), Stop::Control(C::Section(S::Organization)));
+    // Ctrl+K is text editing again, not a tab switch.
+    add.focus_on(Stop::Field(F::Input(1)));
+    add.inputs[1].set("abc");
+    add.inputs[1].cursor = 1;
     add.key(ctrl('k'));
-    assert_eq!(add.tab, 0);
-    assert_eq!(add.focus, 0);
+    assert_eq!(add.inputs[1].value, "a");
+    assert_eq!(add.current(), Stop::Field(F::Input(1)));
     assert_eq!(add.key(ctrl('s')), forms::FormEvent::Submit);
     let mut m = model();
     m.key(key(KeyCode::Tab));
@@ -376,6 +449,7 @@ fn selectors_and_tunnels_return_precise_actions() {
         host: Some(h.clone()),
         seed: String::new(),
         duplicate: None,
+        retarget: false,
     };
     m.key(key(KeyCode::Char('j')));
     assert_eq!(
@@ -390,6 +464,7 @@ fn selectors_and_tunnels_return_precise_actions() {
         host: None,
         seed: "new".into(),
         duplicate: None,
+        retarget: false,
     };
     m.key(key(KeyCode::Enter));
     let View::Host(ref form) = m.view else {
@@ -435,6 +510,7 @@ fn secondary_views_render_and_scroll_without_panics() {
             host: None,
             seed: String::new(),
             duplicate: None,
+            retarget: false,
         },
     ] {
         m.view = view;
@@ -1258,6 +1334,7 @@ fn navigation_files_add_cancel_returns_to_selector() {
         host: None,
         seed: "new".into(),
         duplicate: None,
+        retarget: false,
     };
     m.key(key(KeyCode::Enter));
     assert!(matches!(m.view, View::Host(_)));
@@ -1354,6 +1431,7 @@ fn navigation_added_host_selected_after_file_picker_and_incompatible_search() {
         host: None,
         seed: String::new(),
         duplicate: None,
+        retarget: false,
     });
     m.key(key(KeyCode::Enter));
     let added = Host {
@@ -1607,12 +1685,19 @@ fn host_validation_attaches_each_error_and_focuses_its_field() {
         let mut form = HostForm::add("valid".into(), "config".into());
         form.inputs[1].set("valid.example");
         form.inputs[field].set(invalid);
-        form.tab = 1;
-        form.focus = 10;
+        form.focus_on(forms::Stop::Control(forms::Control::Cancel));
         assert!(!form.validate(), "field {field}");
-        assert_eq!(form.focus, field);
-        assert!(!form.name_focus);
-        assert_eq!(form.tab, usize::from([7, 9, 10].contains(&field)));
+        // The focus goes to the field and only its own section is unfolded.
+        assert_eq!(
+            form.current(),
+            forms::Stop::Field(FormField::Input(field)),
+            "field {field}"
+        );
+        assert_eq!(
+            form.is_open(forms::Section::Advanced),
+            [5, 6, 7, 9, 10].contains(&field)
+        );
+        assert_eq!(form.is_open(forms::Section::Organization), field == 8);
         assert_eq!(form.errors[0].field, FormField::Input(field));
         let error = form.errors[0].message.clone();
         let mut m = model();
@@ -1655,7 +1740,7 @@ fn forward_validation_attaches_and_focuses_each_active_field() {
 }
 
 #[test]
-fn compact_fields_have_two_lines_and_errors_stay_beside_their_field() {
+fn fields_take_one_row_and_errors_stay_under_their_field() {
     let mut m = model();
     let mut f = HostForm::add("valid".into(), "config".into());
     f.inputs[1].set("bad address");
@@ -1664,15 +1749,26 @@ fn compact_fields_have_two_lines_and_errors_stay_beside_their_field() {
     m.open_view(View::Host(Box::new(f)));
     let text = screen(&mut m, 100, 26);
     let rows: Vec<_> = text.lines().collect();
-    let name = rows.iter().position(|s| s.contains("Host Name *")).unwrap();
-    let address = rows
+    assert!(
+        text.contains("2 champ(s) à corriger — invalid hostname"),
+        "{text}"
+    );
+    let name = rows.iter().position(|s| s.contains("Alias *")).unwrap();
+    let address = rows.iter().position(|s| s.contains("Adresse *")).unwrap();
+    assert_eq!(address, name + 1);
+    assert!(rows[address].contains("> Adresse *") && rows[address].contains("bad address"));
+    assert!(rows[address + 1].contains("invalid hostname"));
+    let port = rows
         .iter()
-        .position(|s| s.contains("Hostname/IP *"))
+        .position(|s| s.trim_start().starts_with("Port "))
         .unwrap();
-    assert_eq!(address, name + 2);
-    assert!(rows[address + 2].contains("invalid hostname"));
-    let port = rows.iter().position(|s| s.trim() == "Port").unwrap();
-    assert!(rows[port + 2].contains("port must"));
+    assert!(rows[port].contains("70000") && rows[port + 1].contains("port must"));
+    // On a narrow terminal the label goes above its input.
+    let narrow = screen(&mut m, 40, 26);
+    let rows: Vec<_> = narrow.lines().collect();
+    let address = rows.iter().position(|s| s.contains("Adresse *")).unwrap();
+    assert!(rows[address + 1].contains("> bad address"), "{narrow}");
+    assert!(rows[address + 2].contains("invalid hostname"), "{narrow}");
 }
 
 #[test]
@@ -1724,9 +1820,8 @@ fn host_confirmation_resume_preserves_advanced_tab_cursor_errors_and_parents() {
     let mut form = HostForm::edit(m.all[0].clone());
     form.inputs[3].set("0");
     form.validate();
-    form.tab = 1;
-    form.name_focus = false;
-    form.focus = 9;
+    form.reveal(forms::Section::Advanced);
+    form.focus_on(forms::Stop::Field(forms::FormField::Input(9)));
     form.inputs[9].set("echo 界e\u{301}");
     form.inputs[9].cursor = 3;
     form.scroll = 9;
@@ -4536,6 +4631,7 @@ fn preview_move_cancel_keeps_file_selection_and_shows_both_paths() {
         host: Some(host),
         seed: String::new(),
         duplicate: None,
+        retarget: false,
     });
     let picker = format!("{:?}", m.view);
     let parents = format!("{:?}", m.parents);
@@ -4709,11 +4805,18 @@ fn final_review_validation_errors_follow_visual_order_including_copy_name() {
     form.inputs[7].set("-o X=bad\0value");
     form.inputs[8].set("bad\ntag");
     assert!(!form.validate());
-    assert_eq!(form.focus, 8, "General tags precede Advanced options");
-    assert_eq!(form.tab, 0);
+    assert_eq!(
+        form.focus, 7,
+        "the form is read top to bottom: options, then tags"
+    );
+    assert!(form.is_open(forms::Section::Advanced));
+    assert!(
+        !form.is_open(forms::Section::Organization),
+        "only the section of the first error is unfolded"
+    );
     assert_eq!(
         form.errors.iter().map(|e| e.field).collect::<Vec<_>>(),
-        vec![FormField::Input(8), FormField::Input(7)]
+        vec![FormField::Input(7), FormField::Input(8)]
     );
 }
 
@@ -4759,6 +4862,7 @@ fn final_review_picker_errors_wrap_without_losing_destination_or_parent() {
         host: Some(host),
         seed: String::new(),
         duplicate: None,
+        retarget: false,
     });
     let picker = format!("{:?}", m.view);
     let parents = format!("{:?}", m.parents);

@@ -301,6 +301,7 @@ fn simple_selectors_wrap_while_the_host_table_stays_bounded() {
         host: None,
         seed: String::new(),
         duplicate: None,
+        retarget: false,
     };
     m.key(key(KeyCode::Down));
     assert!(matches!(m.view, View::Files { selected: 0, .. }));
@@ -763,4 +764,311 @@ fn editing_keys_stay_text_and_shortcuts_stay_out_of_the_input() {
     m.key(ctrl('k'));
     assert!(m.query.value.is_empty() && m.search_focus);
     assert!(matches!(m.view, View::List));
+}
+
+fn host_form(m: &Model) -> &forms::HostForm {
+    let View::Host(form) = &m.view else {
+        panic!("the host form is open")
+    };
+    form
+}
+
+fn add_form(m: &mut Model, target: &str) {
+    m.open_view(View::Host(Box::new(forms::HostForm::add(
+        String::new(),
+        target.into(),
+    ))));
+}
+
+#[test]
+fn simple_host_is_created_without_visiting_advanced_options() {
+    use forms::{Control, Section, Stop};
+    let mut m = model(serde_json::json!({}));
+    add_form(&mut m, "/etc/ssh/work");
+    let text = screen(&mut m, 100, 30);
+    // The destination is known before any preview, and essentials come first.
+    for expected in [
+        "Hôtes > Ajouter un hôte",
+        "Fichier : /etc/ssh/work",
+        "[  Changer ]",
+        "> Alias *",
+        "Adresse *",
+        "▸ Options avancées",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    typing(&mut m, "api-prod");
+    m.key(key(KeyCode::Enter));
+    typing(&mut m, "api.example.net");
+    // Enter walks user, port and key, then stops on the main action.
+    for _ in 0..3 {
+        assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    }
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert_eq!(host_form(&m).current(), Stop::Control(Control::Preview));
+    assert!(!host_form(&m).is_open(Section::Advanced));
+    assert!(screen(&mut m, 100, 30).contains("[▶ Prévisualiser les modifications ]"));
+    let Action::Save(None, host, target) = m.key(key(KeyCode::Enter)) else {
+        panic!("the Preview button continues to the review")
+    };
+    assert_eq!(
+        (host.name.as_str(), host.hostname.as_str()),
+        ("api-prod", "api.example.net")
+    );
+    assert_eq!(target, PathBuf::from("/etc/ssh/work"));
+    assert!(host.aliases.is_empty() && host.proxy_jump.is_empty() && host.identity.is_empty());
+}
+
+#[test]
+fn empty_fields_say_what_they_mean_and_examples_are_never_values() {
+    let mut m = model(serde_json::json!({}));
+    add_form(&mut m, "config");
+    let user = host_form(&m).default_user.clone();
+    let text = screen(&mut m, 110, 30);
+    for expected in [
+        "requis".to_owned(),
+        format!("{user} — défaut, écrit à l'enregistrement"),
+        "22 — défaut OpenSSH, non écrit".to_owned(),
+        "laissé à OpenSSH".to_owned(),
+        // The example of the focused field is a hint under the form, not a value.
+        "ex. : api-prod".to_owned(),
+    ] {
+        assert!(text.contains(&expected), "missing {expected}: {text}");
+    }
+    assert!(
+        !text.contains("192.168.1.100"),
+        "another field's example is not shown: {text}"
+    );
+    typing(&mut m, "host");
+    m.key(key(KeyCode::Tab));
+    assert!(screen(&mut m, 110, 30).contains("ex. : 192.168.1.100 ou example.com"));
+    // What is written matches what the form announced.
+    typing(&mut m, "host.example");
+    let Action::Save(None, host, _) = m.key(ctrl('s')) else {
+        panic!("Ctrl+S previews from any field")
+    };
+    assert_eq!(host.user, user);
+    assert_eq!(
+        host.port, "22",
+        "default port: never serialised as a directive"
+    );
+    assert!(host.identity.is_empty(), "the key example is not written");
+    // An existing block leaves an empty user to OpenSSH.
+    let mut edit = forms::HostForm::edit(Host {
+        name: "one".into(),
+        hostname: "h".into(),
+        ..Host::default()
+    });
+    assert_eq!(edit.host().unwrap().user, "");
+    edit.focus_on(forms::Stop::Field(forms::FormField::Input(2)));
+    m.view = View::Host(Box::new(edit));
+    assert!(screen(&mut m, 110, 30).contains("> Utilisateur       laissé à OpenSSH"));
+}
+
+#[test]
+fn changing_the_target_file_returns_to_the_same_draft() {
+    use forms::{Control, Stop};
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    let work = temp.path().join("work");
+    std::fs::write(&root, "Include work\nHost a\n HostName a.example\n").unwrap();
+    std::fs::write(&work, "# FileTags: team\nHost b\n HostName b.example\n").unwrap();
+    let mut m = model(serde_json::json!({}));
+    add_form(&mut m, root.to_str().unwrap());
+    typing(&mut m, "draft-host");
+    m.key(key(KeyCode::Tab));
+    typing(&mut m, "draft.example");
+    m.key(key(KeyCode::Left));
+    let before = (
+        host_form(&m).inputs[0].value.clone(),
+        host_form(&m).inputs[1].cursor,
+    );
+    // Shift+Tab twice reaches the file control above the alias.
+    m.key(key(KeyCode::BackTab));
+    m.key(key(KeyCode::BackTab));
+    assert_eq!(host_form(&m).current(), Stop::Control(Control::File));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::Retarget);
+    select_target(&mut m, &root).unwrap();
+    let View::Files {
+        files,
+        selected,
+        retarget: true,
+        ..
+    } = &m.view
+    else {
+        panic!("the file selector opens over the draft")
+    };
+    assert_eq!(files[*selected], root, "the current file is preselected");
+    // Cancelling changes nothing.
+    m.key(key(KeyCode::Esc));
+    assert_eq!(host_form(&m).target, root);
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::Retarget);
+    select_target(&mut m, &root).unwrap();
+    m.key(key(KeyCode::Down));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    let form = host_form(&m);
+    assert_eq!(form.target, work);
+    assert_eq!(
+        form.file_tags,
+        ["team"],
+        "inherited tags follow the new file"
+    );
+    assert_eq!(
+        (form.inputs[0].value.clone(), form.inputs[1].cursor),
+        before
+    );
+    assert_eq!(form.inputs[1].value, "draft.example");
+    assert!(form.dirty());
+    let text = screen(&mut m, 110, 30);
+    assert!(
+        text.contains(&format!("Fichier : {}", work.display())),
+        "{text}"
+    );
+    assert!(text.contains("hérités : %team"), "{text}");
+    let Action::Save(None, _, target) = m.key(ctrl('s')) else {
+        panic!()
+    };
+    assert_eq!(target, work);
+    // A single configuration file has no other destination: explained, not silent.
+    std::fs::write(&root, "Host a\n HostName a.example\n").unwrap();
+    add_form(&mut m, root.to_str().unwrap());
+    m.key(key(KeyCode::BackTab));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::Retarget);
+    select_target(&mut m, &root).unwrap();
+    assert!(matches!(m.view, View::Host(_)));
+    assert!(screen(&mut m, 110, 30).contains("Un seul fichier de configuration SSH"));
+}
+
+#[test]
+fn sections_unfold_on_demand_and_for_the_first_error_only() {
+    use forms::{Control, FormField, Section, Stop};
+    let mut m = model(serde_json::json!({}));
+    add_form(&mut m, "config");
+    typing(&mut m, "host");
+    m.key(key(KeyCode::Tab));
+    typing(&mut m, "host.example");
+    let View::Host(form) = &mut m.view else {
+        panic!()
+    };
+    form.focus_on(Stop::Control(Control::Section(Section::Advanced)));
+    assert!(!screen(&mut m, 110, 34).contains("ProxyJump"));
+    m.key(key(KeyCode::Char(' ')));
+    let text = screen(&mut m, 110, 34);
+    assert!(
+        text.contains("▾ Options avancées") && text.contains("ProxyJump"),
+        "{text}"
+    );
+    m.key(key(KeyCode::Left));
+    assert!(!host_form(&m).is_open(Section::Advanced));
+    // A hidden invalid value unfolds its own section, focuses the field, and
+    // every other value is preserved.
+    let View::Host(form) = &mut m.view else {
+        panic!()
+    };
+    form.inputs[10].set("bad\ntty");
+    form.focus_on(Stop::Control(Control::Preview));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    let form = host_form(&m);
+    assert_eq!(form.current(), Stop::Field(FormField::Input(10)));
+    assert!(form.is_open(Section::Advanced) && !form.is_open(Section::Organization));
+    assert_eq!(form.inputs[1].value, "host.example");
+    let text = screen(&mut m, 110, 34);
+    assert!(text.contains("1 champ(s) à corriger"), "{text}");
+    assert!(text.contains("> RequestTTY"), "{text}");
+}
+
+#[test]
+fn additional_aliases_have_visible_add_and_remove_commands() {
+    use forms::{Control, FormField, Section, Stop};
+    let mut m = model(serde_json::json!({}));
+    add_form(&mut m, "config");
+    typing(&mut m, "web");
+    m.key(key(KeyCode::Tab));
+    typing(&mut m, "web.example");
+    let View::Host(form) = &mut m.view else {
+        panic!()
+    };
+    form.focus_on(Stop::Control(Control::Section(Section::Aliases)));
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Tab));
+    assert_eq!(host_form(&m).current(), Stop::Control(Control::AddAlias));
+    let text = screen(&mut m, 110, 34);
+    assert!(text.contains("[▶ + Ajouter un alias ]"), "{text}");
+    assert!(text.contains("Les alias partagent ce bloc"), "{text}");
+    m.key(key(KeyCode::Enter));
+    assert_eq!(host_form(&m).current(), Stop::Field(FormField::Name(0)));
+    typing(&mut m, "www");
+    m.key(key(KeyCode::Tab));
+    assert_eq!(
+        host_form(&m).current(),
+        Stop::Control(Control::RemoveAlias(0))
+    );
+    assert!(screen(&mut m, 110, 34).contains("[▶ Retirer ]"));
+    // A new block may declare several aliases sharing one configuration.
+    let Action::Save(None, host, _) = m.key(ctrl('s')) else {
+        panic!()
+    };
+    assert_eq!(host.name, "web");
+    assert_eq!(host.aliases, ["web", "www"]);
+    m.key(key(KeyCode::Enter));
+    assert!(host_form(&m).names.is_empty());
+    assert_eq!(host_form(&m).current(), Stop::Control(Control::AddAlias));
+    let Action::Save(None, host, _) = m.key(ctrl('s')) else {
+        panic!()
+    };
+    assert!(host.aliases.is_empty());
+}
+
+#[test]
+fn modes_are_named_and_the_note_returns_to_the_draft() {
+    use forms::{Control, Section, Stop};
+    let mut m = model(serde_json::json!({}));
+    m.metadata.insert(
+        "alpha".into(),
+        HostMetadata {
+            note: "Bastion requis\nseconde ligne".into(),
+            ..HostMetadata::default()
+        },
+    );
+    m.key(key(KeyCode::Char('e')));
+    let text = screen(&mut m, 110, 34);
+    assert!(text.contains("Hôtes > Modifier alpha"), "{text}");
+    assert!(
+        !text.contains("[  Changer ]"),
+        "an existing block is moved by its own action"
+    );
+    typing(&mut m, "-draft");
+    let View::Host(form) = &mut m.view else {
+        panic!()
+    };
+    form.focus_on(Stop::Control(Control::Section(Section::Organization)));
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Tab));
+    assert_eq!(host_form(&m).current(), Stop::Control(Control::Note));
+    let text = screen(&mut m, 110, 34);
+    assert!(
+        text.contains("Note personnelle") && text.contains("Bastion requis"),
+        "{text}"
+    );
+    assert!(text.contains("hors du fichier SSH"), "{text}");
+    let draft = format!("{:?}", m.view);
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(&m.view, View::Note(editor) if editor.host == "alpha"));
+    m.key(key(KeyCode::Esc));
+    assert_eq!(format!("{:?}", m.view), draft);
+    // Paste never types into a button.
+    m.paste("ignored");
+    assert_eq!(format!("{:?}", m.view), draft);
+    let copy = forms::HostForm::duplicate(m.all[0].clone(), "config".into());
+    m.view = View::Host(Box::new(copy));
+    let text = screen(&mut m, 110, 34);
+    assert!(
+        text.contains("Hôtes > Dupliquer alpha — saisir un NOUVEAU nom"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Alias supplémentaires"),
+        "a copy takes one new name: {text}"
+    );
 }

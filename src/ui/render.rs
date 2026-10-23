@@ -1123,12 +1123,24 @@ fn field_error(errors: &[forms::FieldError], field: forms::FormField) -> Option<
         .find(|e| e.field == field)
         .map(|e| e.message.as_str())
 }
+/// One page: destination file, essential fields, collapsible sections and the
+/// buttons, all in a single Tab order. Each row is built with the stop it draws.
 fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
+    use forms::{Control, FormField, Section, Stop};
+    let note = match &m.view {
+        View::Host(form) => form.original.as_ref().map(|host| {
+            m.note(&host.name)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        }),
+        _ => None,
+    };
     let View::Host(form) = &mut m.view else {
         return;
     };
     let area = inset(area);
-    let compact = area.height < 30;
     let footer_height = if area.height >= 12 {
         4
     } else if area.height >= 6 {
@@ -1142,153 +1154,325 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
         Constraint::Length(footer_height),
     ])
     .split(area);
-    f.render_widget(
-        Paragraph::new(if form.original.is_some() {
-            "Edit SSH Host"
-        } else if form.is_duplicate() {
-            "Duplicate SSH Host - enter a NEW name"
+    let title = if let Some(original) = &form.original {
+        format!("Hôtes > Modifier {}", original.name)
+    } else if let Some(source) = form.copy_source() {
+        format!("Hôtes > Dupliquer {} — saisir un NOUVEAU nom", source.name)
+    } else {
+        "Hôtes > Ajouter un hôte".to_owned()
+    };
+    f.render_widget(Paragraph::new(title).style(accent()), parts[0]);
+
+    let width = usize::from(parts[1].width);
+    // Narrow terminals stack the label above its input.
+    let stacked = width < 44;
+    let label_width = if stacked { 0 } else { 18 };
+    let current = form.current();
+    let marker = |focused: bool| {
+        if width < 3 {
+            ""
+        } else if focused {
+            "> "
         } else {
-            "Add SSH Host Configuration"
-        })
-        .style(accent()),
-        parts[0],
-    );
-    let mut lines = vec![];
+            "  "
+        }
+    };
+    let label_style = |focused: bool| if focused { accent() } else { Style::default() };
+    let mut lines: Vec<Line<'static>> = vec![];
     let mut focus_y = 0;
-    let width = parts[1].width as usize;
-    if !form.file_tags.is_empty() {
+    // Where the caret goes: line, column offset and the width left to the input.
+    let mut caret: Option<(usize, usize, usize)> = None;
+
+    if !form.errors.is_empty() {
         lines.push(Line::styled(
-            format!(
-                "Inherited (read only): {}",
-                form.file_tags
-                    .iter()
-                    .map(|tag| format!("%{tag}"))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ),
-            Style::default().fg(GRAY),
-        ));
-    }
-    if form.original.is_some() {
-        lines.push(Line::styled(
-            format!("Config file: {}", form.target.display()),
-            Style::default().fg(GRAY),
-        ));
-        lines.push(Line::from(""));
-        lines.push(Line::styled("Host Names", accent()));
-        lines.push(Line::from(""));
-        for (i, name) in form.names.iter().enumerate() {
-            let selected = form.name_focus && form.focus == i;
-            let y = field_lines(
-                &mut lines,
-                format!("Host Name {} *", i + 1),
-                name,
-                selected,
+            ellipsize(
+                &format!(
+                    "{} champ(s) à corriger — {}",
+                    form.errors.len(),
+                    form.errors[0].message
+                ),
                 width,
-                compact,
-                field_error(&form.errors, forms::FormField::Name(i)),
-            );
-            if selected {
-                focus_y = y;
-            }
-        }
-        lines.push(Line::styled("Common Properties", accent()));
-        lines.push(Line::from(""));
+            ),
+            Style::default().fg(Color::Red),
+        ));
     }
-    lines.push(Line::from(vec![
-        Span::styled(
-            if form.tab == 0 {
-                "[ General ]"
-            } else {
-                "  General  "
-            },
-            if form.tab == 0 {
-                accent()
-            } else {
-                Style::default().fg(GRAY)
-            },
-        ),
-        Span::raw("  "),
-        Span::styled(
-            if form.tab == 1 {
-                "[ Advanced ]"
-            } else {
-                "  Advanced  "
-            },
-            if form.tab == 1 {
-                accent()
-            } else {
-                Style::default().fg(GRAY)
-            },
-        ),
-    ]));
-    lines.push(Line::from(""));
-    for i in form.fields() {
-        let selected = !form.name_focus && form.focus == i;
-        let label = if form.original.is_none() && i == 5 {
-            "ProxyJump"
-        } else if form.original.is_none() && i == 6 {
-            "ProxyCommand"
-        } else {
-            forms::LABELS[i]
-        };
-        let y = field_lines(
-            &mut lines,
-            label.into(),
-            &form.inputs[i],
-            selected,
-            width,
-            compact,
-            field_error(&form.errors, forms::FormField::Input(i)),
-        );
-        if selected {
-            focus_y = y;
+    let labels = [
+        "Alias *",
+        "Adresse *",
+        "Utilisateur",
+        "Port",
+        "Clé SSH",
+        "ProxyJump",
+        "ProxyCommand",
+        "Options SSH",
+        "Tags",
+        "Commande distante",
+        "RequestTTY",
+    ];
+    for stop in form.stops() {
+        let focused = stop == current;
+        if focused {
+            focus_y = lines.len();
         }
-        if i == 4 {
-            for identity in form.extra_identities() {
+        match stop {
+            Stop::Control(Control::File) => {
+                let button = nav::button("Changer", focused);
+                let room = width.saturating_sub(marker(focused).width() + 10 + button.width() + 1);
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{}Fichier : ", marker(focused)),
+                        label_style(focused),
+                    ),
+                    Span::raw(format!(
+                        "{} ",
+                        group_label(&form.target.display().to_string(), room)
+                    )),
+                    button,
+                ]));
+                lines.push(Line::from(""));
+            }
+            Stop::Field(field) => {
+                if field == FormField::Name(0) {
+                    // An existing block is moved by its own action, not from here.
+                    lines.push(Line::styled(
+                        ellipsize(&format!("  Fichier : {}", form.target.display()), width),
+                        Style::default().fg(GRAY),
+                    ));
+                    lines.push(Line::from(""));
+                    if focused {
+                        focus_y = lines.len();
+                    }
+                }
+                let (input, label, trailing) = match field {
+                    FormField::Input(i) => (
+                        &form.inputs[i],
+                        labels[i].to_owned(),
+                        (i == 4).then(|| {
+                            nav::button("Choisir", current == Stop::Control(Control::KeyPicker))
+                        }),
+                    ),
+                    FormField::Name(0) if form.original.is_some() => {
+                        (&form.names[0], "Alias *".to_owned(), None)
+                    }
+                    FormField::Name(i) => (
+                        &form.names[i],
+                        format!("  Alias {}", i + 1 + usize::from(form.original.is_none())),
+                        Some(nav::button(
+                            "Retirer",
+                            current == Stop::Control(Control::RemoveAlias(i)),
+                        )),
+                    ),
+                };
+                let prefix = marker(focused).width() + label_width;
+                let reserved = trailing.as_ref().map_or(0, |button| button.width() + 1);
+                let room = width.saturating_sub(prefix + reserved);
+                let mut row = vec![];
+                if stacked {
+                    lines.push(Line::styled(label, label_style(focused)));
+                    row.push(Span::raw(marker(focused)));
+                } else {
+                    row.push(Span::styled(
+                        format!("{}{label:<label_width$}", marker(focused)),
+                        label_style(focused),
+                    ));
+                }
+                let text = input_span(input, focused, room);
+                let padding = room.saturating_sub(text.width());
+                row.push(text);
+                if let Some(button) = trailing {
+                    row.push(Span::raw(" ".repeat(padding + 1)));
+                    row.push(button);
+                }
+                if focused {
+                    focus_y = lines.len() - usize::from(stacked);
+                    caret = Some((lines.len(), prefix, room));
+                }
+                lines.push(Line::from(row));
+                if let Some(error) = field_error(&form.errors, field) {
+                    // Explicit wrapping keeps the caret row aligned with later inputs.
+                    let mut line = String::new();
+                    let mut columns = 0;
+                    let span = Span::raw(error);
+                    for grapheme in span.styled_graphemes(Style::default()) {
+                        let size = grapheme.symbol.width();
+                        if columns + size > width.max(1) && !line.is_empty() {
+                            lines.push(Line::styled(
+                                std::mem::take(&mut line),
+                                Style::default().fg(Color::Red),
+                            ));
+                            columns = 0;
+                        }
+                        line.push_str(grapheme.symbol);
+                        columns += size;
+                    }
+                    lines.push(Line::styled(line, Style::default().fg(Color::Red)));
+                }
+                if field == FormField::Input(4) {
+                    for identity in form.extra_identities() {
+                        lines.push(Line::styled(
+                            format!("  aussi : {identity} (lecture seule, conservée)"),
+                            Style::default().fg(GRAY),
+                        ));
+                    }
+                    lines.push(Line::from(""));
+                }
+            }
+            // Drawn on the row of the input they belong to.
+            Stop::Control(Control::KeyPicker | Control::RemoveAlias(_)) => {
+                if focused {
+                    focus_y = lines.len().saturating_sub(1);
+                    if matches!(stop, Stop::Control(Control::KeyPicker)) {
+                        // The key row is followed by read-only identities and a blank.
+                        focus_y = lines
+                            .iter()
+                            .rposition(|line| {
+                                line.spans
+                                    .iter()
+                                    .any(|span| span.content.contains("Choisir"))
+                            })
+                            .unwrap_or(focus_y);
+                    }
+                }
+            }
+            Stop::Control(Control::Section(section)) => {
+                let open = form.is_open(section);
+                let summary = match section {
+                    Section::Aliases => {
+                        format!("Alias supplémentaires ({})", form.extra_aliases().len())
+                    }
+                    Section::Advanced => format!(
+                        "Options avancées ({} renseignée(s))",
+                        [5, 6, 7, 9, 10]
+                            .iter()
+                            .filter(|&&i| !form.inputs[i].value.is_empty())
+                            .count()
+                    ),
+                    Section::Organization => {
+                        let inherited = form
+                            .file_tags
+                            .iter()
+                            .map(|tag| format!("%{tag}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        if inherited.is_empty() {
+                            "Tags et note".to_owned()
+                        } else {
+                            format!("Tags et note — hérités : {inherited}")
+                        }
+                    }
+                };
                 lines.push(Line::styled(
-                    format!("  also: {identity} (read-only, kept on save)"),
+                    ellipsize(
+                        &format!(
+                            "{}{} {summary}",
+                            marker(focused),
+                            if open { "▾" } else { "▸" }
+                        ),
+                        width,
+                    ),
+                    label_style(focused),
+                ));
+            }
+            Stop::Control(Control::AddAlias) => {
+                lines.push(Line::from(vec![
+                    Span::raw(format!("{}  ", marker(focused))),
+                    nav::button("+ Ajouter un alias", focused),
+                ]));
+                lines.push(Line::styled(
+                    ellipsize(
+                        "    Les alias partagent ce bloc ; favoris, notes et connexions visent un alias précis.",
+                        width,
+                    ),
                     Style::default().fg(GRAY),
                 ));
             }
-        }
-        if i == 8 && selected {
-            lines.push(Line::styled(
-                "  tip: use \"hidden\" to hide this host from the list",
-                Style::default().fg(GRAY),
-            ));
+            Stop::Control(Control::Note) => {
+                let preview = match note.as_deref() {
+                    Some("") | None => "(vide)".to_owned(),
+                    Some(text) => text.to_owned(),
+                };
+                let button = nav::button("Modifier", focused);
+                let head = format!("{}  {:<16}", marker(focused), "Note personnelle");
+                let room = width.saturating_sub(head.width() + button.width() + 1);
+                lines.push(Line::from(vec![
+                    Span::styled(head, label_style(focused)),
+                    Span::styled(
+                        format!("{:<room$} ", ellipsize(&preview, room)),
+                        Style::default().fg(GRAY),
+                    ),
+                    button,
+                ]));
+            }
+            Stop::Control(Control::Preview) => {
+                lines.push(Line::from(""));
+                if focused {
+                    focus_y = lines.len();
+                }
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    nav::button("Prévisualiser les modifications", focused),
+                    Span::raw("   "),
+                    nav::button("Annuler", current == Stop::Control(Control::Cancel)),
+                ]));
+            }
+            Stop::Control(Control::Cancel) => {
+                if focused {
+                    focus_y = lines.len() - 1;
+                }
+            }
         }
     }
-    let focused_field = if form.name_focus {
-        forms::FormField::Name(form.focus)
-    } else {
-        forms::FormField::Input(form.focus)
+    let focused_error = match current {
+        Stop::Field(field) => field_error(&form.errors, field).is_some(),
+        Stop::Control(_) => false,
     };
     scroll_focus(
         &mut form.scroll,
         focus_y,
         parts[1].height,
         lines.len(),
-        field_error(&form.errors, focused_field).is_some(),
+        focused_error,
     );
     f.render_widget(
         Paragraph::new(lines).scroll((form.scroll as u16, 0)),
         parts[1],
     );
-    let input = if form.name_focus {
-        form.names.get(form.focus)
-    } else {
-        form.inputs.get(form.focus)
+    let input = match current {
+        Stop::Field(FormField::Name(i)) => form.names.get(i),
+        Stop::Field(FormField::Input(i)) => form.inputs.get(i),
+        Stop::Control(_) => None,
     };
-    if let (Some(input), Some(row)) = (input, (focus_y + 1).checked_sub(form.scroll)) {
-        input_cursor(
-            f,
-            input,
-            parts[1],
-            if parts[1].width < 3 { 0 } else { 2 },
-            row,
-        );
+    if let (Some(input), Some((line, prefix, room))) = (input, caret) {
+        if let Some(row) = line.checked_sub(form.scroll) {
+            let field = Rect::new(
+                parts[1].x,
+                parts[1].y,
+                (prefix + room).min(width) as u16,
+                parts[1].height,
+            );
+            input_cursor(f, input, field, prefix as u16, row);
+        }
     }
+    // What the focused element is or does, then the keys that always apply.
+    let hint = match current {
+        Stop::Field(field) => forms::HostForm::example(field),
+        Stop::Control(Control::File) => {
+            "Entrée : choisir un autre fichier ; le brouillon est conservé"
+        }
+        Stop::Control(Control::KeyPicker) => {
+            "Entrée ou F9 : choisir une clé existante ; seul ce champ est rempli"
+        }
+        Stop::Control(Control::Section(_)) => "Entrée ou Espace : déplier / replier",
+        Stop::Control(Control::AddAlias) => "Entrée : ajouter un alias à ce bloc (Alt+A)",
+        Stop::Control(Control::RemoveAlias(_)) => "Entrée : retirer cet alias du bloc (Alt+D)",
+        Stop::Control(Control::Note) => {
+            "Entrée : éditer la note, conservée dans les données de ssho, hors du fichier SSH"
+        }
+        Stop::Control(Control::Preview) => {
+            "Entrée : afficher l'aperçu ; rien n'est écrit avant « Enregistrer »"
+        }
+        Stop::Control(Control::Cancel) => "Entrée : fermer ce formulaire",
+    };
     let mut footer = vec![];
     if !form.error.is_empty() {
         footer.push(Line::styled(
@@ -1296,16 +1480,9 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
             Style::default().fg(Color::Red),
         ));
     }
+    footer.push(Line::styled(hint, Style::default().fg(GRAY)));
     footer.push(Line::styled(
-        if form.original.is_some() {
-            "Tab/↑↓/Enter: navigate • Ctrl+J/K: switch tabs • Alt+A/D: add/delete alias"
-        } else {
-            "Tab/Shift+Tab: navigate • Ctrl+J/K: switch tabs"
-        },
-        Style::default().fg(GRAY),
-    ));
-    footer.push(Line::styled(
-        "F9: key picker • Ctrl+S: save • Ctrl+C/Esc: cancel • * Required fields",
+        "Tab/↓ suivant • Maj+Tab/↑ précédent • Entrée : champ suivant / activer • Ctrl+S : prévisualiser • Échap : annuler • * requis",
         Style::default().fg(GRAY),
     ));
     f.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), parts[2]);
@@ -1586,7 +1763,17 @@ fn files(f: &mut Frame, m: &mut Model, area: Rect) {
     let title = duplicate
         .as_deref()
         .or(host.as_ref())
-        .map(|h| format!("Select destination config file for host '{}':", h.name))
+        .map(|h| {
+            // A move names its source; the destination list never includes it.
+            let source = host
+                .as_ref()
+                .map(|h| format!("\nSource : {}", h.source_file.display()))
+                .unwrap_or_default();
+            format!(
+                "Select destination config file for host '{}':{source}",
+                h.name
+            )
+        })
         .unwrap_or_else(|| "Select config file to add host to:".into());
     f.render_widget(Paragraph::new(title).style(accent()), parts[0]);
     let count = parts[1].height.max(1) as usize;
@@ -1724,8 +1911,10 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
             "Alt+↑↓ scroll details (Ctrl+PgUp/PgDn; width >=110)",
             "",
             "Forms and reviews",
-            "Ctrl+S save • Ctrl+L launch tunnel/batch review",
-            "Ctrl+J/K tabs; Alt+A/D aliases; F9 key picker",
+            "Ctrl+S preview/save • Ctrl+L launch tunnel/batch review",
+            "Host form: Tab/↑↓ fields, sections, buttons; F9 keys",
+            "Enter: next field or activate; never submits a field",
+            "Alt+A/D add/remove an additional alias",
             "Ctrl+T forwarding: shell session / tunnel only",
             "Ctrl+A/E start/end of input",
             "Review: Enter confirms, Esc returns",
