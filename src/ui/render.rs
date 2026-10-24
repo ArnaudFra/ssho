@@ -218,7 +218,18 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         (true, false) => 3,
     };
     let search_height = edit_height + band.len() as u16;
-    let mut help = list_footer(area.width, m.search_focus, &keymap);
+    let mut help = list_footer(
+        area.width,
+        m.search_focus,
+        &keymap,
+        m.selected_group().is_some(),
+    );
+    // A legend of the signs in use, where the terminal has rows to spare.
+    if area.height >= 20 {
+        if let Some(line) = legend(m, area.width) {
+            help.insert(0, line);
+        }
+    }
     if m.details.shown && viewport_width < 110 {
         help.push(Line::from(details::narrow_hint(area.width, m.search_focus)));
     }
@@ -405,6 +416,8 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         .enumerate()
         .map(|(index, path)| (path, index + 1))
         .collect();
+    let marking = !m.batch.marks.is_empty();
+    let mark_width = if marking { 4 } else { 0 };
     let rows = m.rows.iter().enumerate().map(|(position, row)| {
         let index = match row {
             groups::Row::Host(index) => *index,
@@ -419,7 +432,25 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
                     _ => String::new(),
                 };
                 let prefix = format!("{}{marker} {ordinal}", "  ".repeat(*depth));
-                let suffix = format!(" ({count})");
+                // A header is never a target; it only counts those of its hosts,
+                // including the ones a collapsed group hides.
+                let marked = if marking {
+                    m.visible
+                        .iter()
+                        .map(|&index| &m.all[index])
+                        .filter(|host| {
+                            m.batch.marked(host)
+                                && groups::ancestors(host, m.preferences.group_mode).contains(key)
+                        })
+                        .count()
+                } else {
+                    0
+                };
+                let suffix = match marked {
+                    0 => format!(" ({count})"),
+                    1 => format!(" ({count} • 1 cible)"),
+                    marked => format!(" ({count} • {marked} cibles)"),
+                };
                 let available =
                     usize::from(widths[0]).saturating_sub(prefix.width() + suffix.width());
                 let label = group_label(&key.label(), available);
@@ -448,10 +479,27 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
             Some(PingStatus::Connecting) => ("~", Color::Yellow),
             _ => ("?", GRAY),
         };
-        let mut name_spans = vec![Span::styled(
+        // Each sign has its own zone: batch target, availability, favorite, name.
+        // The target zone only exists while targets are marked.
+        let mut name_spans = vec![];
+        if marking {
+            let marked = m.batch.marked(h);
+            name_spans.push(Span::styled(
+                if marked { "[x] " } else { "[ ] " },
+                if position == m.selected {
+                    Style::default().fg(Color::Black)
+                } else if marked {
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(GRAY)
+                },
+            ));
+        }
+        name_spans.push(Span::styled(
             format!(
-                "{status}{}{}",
-                if m.batch.marked(h) { "x" } else { " " },
+                "{status} {}",
                 if m.metadata.get(&h.name).is_some_and(|entry| entry.favorite) {
                     "*"
                 } else {
@@ -463,14 +511,14 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
             } else {
                 color
             }),
-        )];
+        ));
         name_spans.extend(
             highlight(
                 m,
                 &alias_label(
                     h,
                     m.preferences.group_aliases,
-                    widths[0].saturating_sub(3) as usize,
+                    usize::from(widths[0]).saturating_sub(3 + mark_width),
                 ),
                 search::Field::Any,
                 position == m.selected,
@@ -629,6 +677,9 @@ fn filter_band(
         .source_filter
         .as_ref()
         .map(|path| format!("Fichier : {}", path.display()));
+    if !m.batch.marks.is_empty() && compact {
+        filters.push(format!("Lot : {} cible(s)", m.batch.marks.len()));
+    }
     if let (Some(path), true) = (&m.source_filter, compact) {
         // One row only: the file scope leads the criteria, with its clear key.
         filters.insert(
@@ -684,6 +735,37 @@ fn filter_band(
         } else {
             lines.push(Line::styled(ellipsize(&left, width), style));
         }
+    }
+    if !m.batch.marks.is_empty() && !compact {
+        // Marks are frozen targets: a search or a collapsed group never drops them.
+        let marks = m.batch.marks.len();
+        let shown = m
+            .matching
+            .iter()
+            .filter(|&&index| m.batch.marked(&m.all[index]))
+            .count();
+        let outside = marks.saturating_sub(shown);
+        let mut text = format!(
+            "Lot : {marks} cible{} marquée{}",
+            if marks > 1 { "s" } else { "" },
+            if marks > 1 { "s" } else { "" }
+        );
+        if outside > 0 {
+            text.push_str(&format!(", dont {outside} hors du filtre"));
+        }
+        let hint = format!(
+            " • {} : voir / préparer • F2 : tout retirer",
+            keymap.hint(A::BatchOpen)
+        );
+        if text.width() + hint.width() <= width {
+            text.push_str(&hint);
+        }
+        lines.push(Line::styled(
+            ellipsize(&text, width),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
     if let (Some(file), false) = (file, compact) {
         let hint = format!(
@@ -771,18 +853,57 @@ pub(super) fn highlight_details(m: &Model, lines: Vec<Line<'static>>) -> Vec<Lin
 /// single narrow name column. The arrow identifies the actual action target.
 fn alias_label(host: &Host, grouped: bool, width: usize) -> String {
     let primary = aliases::primary(host);
+    // One row stands for the whole block: say how many other aliases it holds,
+    // when that fits without shortening the alias used for the connection.
+    let others = host.aliases.len().saturating_sub(1);
+    let with_others = |label: String| {
+        let suffix = format!(" +{others} alias");
+        if grouped && others > 0 && label.width() + suffix.width() <= width {
+            format!("{label}{suffix}")
+        } else {
+            label
+        }
+    };
     if !grouped || primary == host.name {
-        return ellipsize(&host.name, width);
+        return with_others(ellipsize(&host.name, width));
     }
     let available = width.saturating_sub(1);
     let active_width = host.name.width().min(available.div_ceil(2));
     let primary_width = primary.width().min(available.saturating_sub(active_width));
     let active_width = available.saturating_sub(primary_width);
-    format!(
+    with_others(format!(
         "{}→{}",
         ellipsize(primary, primary_width),
         ellipsize(&host.name, active_width)
-    )
+    ))
+}
+
+/// Signs currently on screen, beyond the availability ones every row carries.
+fn legend(m: &Model, width: u16) -> Option<Line<'static>> {
+    let mut signs = vec![];
+    if !m.batch.marks.is_empty() {
+        signs.push("[x] cible de lot");
+    }
+    if m.visible
+        .iter()
+        .any(|&index| m.is_favorite(&m.all[index].name))
+    {
+        signs.push("* favori");
+    }
+    if m.preferences.group_mode != GroupMode::Flat {
+        signs.push("▼ ▶ groupe ouvert / replié");
+    }
+    if m.preferences.group_aliases {
+        signs.push("a→b alias actif d'un bloc");
+    }
+    if signs.is_empty() {
+        return None;
+    }
+    signs.push("+ en ligne  ! hors ligne  ~ en cours  ? inconnu");
+    Some(Line::from(ellipsize(
+        &format!("Légende : {}", signs.join(" · ")),
+        usize::from(width),
+    )))
 }
 
 fn browser_status(
@@ -896,19 +1017,21 @@ fn ellipsize(text: &str, width: usize) -> String {
     result
 }
 
-fn list_footer(width: u16, search_focus: bool, keymap: &Keymap) -> Vec<Line<'static>> {
+fn list_footer(width: u16, search_focus: bool, keymap: &Keymap, group: bool) -> Vec<Line<'static>> {
     use PaletteAction as A;
     let k = |action| keymap.hint(action);
+    // Enter connects to a host but opens or closes a group header.
+    let enter = if group { "open/close group" } else { "connect" };
     let lines = if width >= 105 {
         if search_focus {
             vec![format!(
-                "{}: actions • {}: reload • ↑/↓: select • {}: connect • Tab/Esc: table, filter kept",
+                "{}: actions • {}: reload • ↑/↓: select • {}: {enter} • Tab/Esc: table, filter kept",
                 k(A::Palette), k(A::Reload), k(A::Connect)
             )]
         } else {
             vec![
                 format!(
-                    "{}: actions • {}: reload • ↑/↓: navigate • {}: connect • Tab: search • {}: info • {}: help • {}: quit",
+                    "{}: actions • {}: reload • ↑/↓: navigate • {}: {enter} • Tab: search • {}: info • {}: help • {}: quit",
                     k(A::Palette), k(A::Reload), k(A::Connect), k(A::Info), k(A::Help), k(A::Quit)
                 ),
                 format!(
@@ -921,14 +1044,14 @@ fn list_footer(width: u16, search_focus: bool, keymap: &Keymap) -> Vec<Line<'sta
     } else if width >= 65 {
         if search_focus {
             vec![format!(
-                "{}: actions • ↑↓: select • {}: connect • Tab/Esc: table",
+                "{}: actions • ↑↓: select • {}: {enter} • Tab/Esc: table",
                 k(A::Palette),
                 k(A::Connect)
             )]
         } else {
             vec![
                 format!(
-                    "{}: actions • ↑↓: select • {}: connect • Tab: search • {}: quit",
+                    "{}: actions • ↑↓: select • {}: {enter} • Tab: search • {}: quit",
                     k(A::Palette), k(A::Connect), k(A::Quit)
                 ),
                 format!(
@@ -1885,6 +2008,11 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     }
     right.extend(
         [
+            "Signes de la liste",
+            "[x] cible de lot  * favori  ▼ ▶ groupe ouvert / replié",
+            "+ en ligne  ! hors ligne  ~ en cours  ? inconnu",
+            "a→b alias actif d'un bloc  +N alias : autres alias du bloc",
+            "",
             "Navigation",
             "↑↓     select (Ctrl+P/N in search)",
             "Group Enter/Space: expand/collapse; ←/→ parent/open",

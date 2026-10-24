@@ -526,7 +526,65 @@ def scenario_selectors():
           'for method and grouping with explanations, terminal restored')
 
 
-SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors}
+def scenario_list_marks():
+    (APP / 'config.json').write_text(json.dumps(dict(BASE, group_mode='files')))
+    (APP / 'metadata.json').write_text(json.dumps({'configs': {str(CONFIG.resolve()): {
+        'hosts': {'beta': {'favorite': True, 'note': ''}}}}}))
+    try:
+        s = Session('list_marks', width=110, height=30)
+        s.expect('2 hôtes')
+        row = lambda name: next(line for line in s.drain(.2).splitlines()
+                                if name in line and '│' in line)
+        # A favorite alone: no target zone, and a legend of the signs in use.
+        assert '? *beta' in row('beta') and '[' not in row('beta'), row('beta')
+        s.expect('Légende : * favori · ▼ ▶ groupe ouvert / replié')
+        # On a group header Enter toggles, and host shortcuts explain themselves.
+        s.send(b'\x1b[H')
+        s.expect('Enter: open/close group')
+        s.send(b'x')
+        s.expect("Lot : marquer l'alias — Sélectionnez un hôte, pas un groupe")
+        s.absent('Lot : 1 cible')
+        s.send(b'e')
+        s.expect('Modifier — Sélectionnez un hôte, pas un groupe')
+        s.absent('Hôtes > Modifier')
+        # Marking a host creates the target zone; the favorite keeps its own sign.
+        s.send(b'\x1b[F')                # End: last host
+        s.expect('Enter: connect')
+        s.send(b'x')
+        s.expect('Lot : 1 cible marquée • B : voir / préparer • F2 : tout retirer')
+        s.expect('(2 • 1 cible)')
+        marked = next(line for line in s.drain(.2).splitlines() if '[x]' in line)
+        other = next(line for line in s.drain(.2).splitlines() if '[ ]' in line)
+        assert ('beta' in marked) != ('beta' in other), (marked, other)
+        assert '*beta' in row('beta'), row('beta')
+        s.expect('Légende : [x] cible de lot · * favori')
+        # A search that hides the target keeps it counted, and says so.
+        hidden = 'alpha' if 'beta' in marked else 'beta'
+        s.send(b'/' + hidden.encode() + b'\t')
+        s.expect('Lot : 1 cible marquée, dont 1 hors du filtre')
+        s.send(b'\x7f')                  # Backspace: clear the search
+        s.expect('Lot : 1 cible marquée •')
+        # Collapsing the group hides rows, not the count.
+        s.send(b'\x1b[H')
+        s.send(b'\x1b[D')
+        s.expect('(2 • 1 cible)')
+        assert not any('[x]' in line and '│' in line for line in s.drain(.3).splitlines())
+        s.send(b'B')
+        s.expect('1 targets')
+        s.send(ESC)
+        assert not connections() and CONFIG.read_bytes() == ORIGINAL_CONFIG
+        s.send(CTRL_C)
+        s.close()
+    finally:
+        (APP / 'metadata.json').unlink(missing_ok=True)
+        preferences()
+    print('PTY PASS [list_marks]: separate zones for target and favorite, contextual legend, group '
+          'header explains instead of acting, Enter announced, selection counted through '
+          'search and collapse, terminal restored')
+
+
+SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,
+             'list_marks': scenario_list_marks}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

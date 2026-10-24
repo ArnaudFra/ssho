@@ -183,6 +183,24 @@ Le formulaire d'hôte tient sur **une page**, sans onglets, et son titre nomme l
 
 Sur un terminal de moins de 44 colonnes, le libellé passe au-dessus de sa saisie. Le curseur natif reste visible dans le champ actif ; un bouton ou un titre de section ayant le focus n'a pas de curseur et ne reçoit ni frappe ni collage.
 
+### Signes de la liste, groupes et sélection multiple
+
+Chaque signe de la colonne Name a sa zone, pour qu'un favori ne ressemble jamais à une cible de lot :
+
+| Zone | Signe | Sens |
+| --- | --- | --- |
+| Cible de lot | `[x]` / `[ ]` | L'alias est marqué pour un lot. Cette zone n'existe que lorsqu'au moins une cible est marquée. |
+| Disponibilité | `+` `!` `~` `?` | En ligne, hors ligne, mesure en cours, inconnu. |
+| Favori | `*` | Hôte épinglé. |
+| Groupe | `▼` / `▶` | En-tête ouvert ou replié ; « (4 • 2 cibles) » donne ses hôtes et ses cibles marquées, même replié. |
+| Alias | `principal→actif`, `+2 alias` | Bloc regroupé : alias utilisé pour la connexion, et nombre d'autres alias du bloc (F3 pour choisir). |
+
+Une **légende** des signes présents s'affiche au-dessus du pied de page lorsque le terminal a au moins 20 lignes ; l'aide (`?`) la donne toujours.
+
+- **Sélection multiple visible** : dès qu'une cible est marquée, la ligne « Lot : 4 cibles marquées, dont 1 hors du filtre • B : voir / préparer • F2 : tout retirer » reste affichée. Les marques sont des cibles figées : une recherche, un filtre ou un groupe replié ne les retirent pas et ne faussent pas le compte.
+- **Entrée** connecte sur un hôte et ouvre ou replie sur un en-tête de groupe ; le pied de page l'indique selon la ligne sélectionnée.
+- **Un en-tête de groupe n'est jamais la cible silencieuse d'une action** : `x`, `e`, `d`, `m`, `N`… sur un en-tête affichent « … — Sélectionnez un hôte, pas un groupe » au lieu de ne rien faire. Pour cibler tout un groupe, F2 → « Lot : cibler les résultats du filtre » après avoir filtré.
+
 ### Sélecteurs communs
 
 Le choix d'un fichier de destination, du filtre par fichier source, d'un alias exact, du regroupement et de la méthode de disponibilité utilisent un même écran :

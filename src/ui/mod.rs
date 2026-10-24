@@ -1110,6 +1110,11 @@ impl Model {
     }
     fn activate_action(&mut self, action: PaletteAction) -> Action {
         if !action.enabled(self.selected_host().is_some()) {
+            // A shortcut that cannot apply says why instead of doing nothing: a
+            // group header, in particular, is never the silent target of an action.
+            if let Err(reason) = action.availability(&self.action_context()) {
+                self.hint = format!("{} — {reason}", action.label());
+            }
             return Action::None;
         }
         match action {

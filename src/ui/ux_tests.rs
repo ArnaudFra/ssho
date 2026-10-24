@@ -1245,3 +1245,174 @@ fn alias_and_method_selectors_explain_each_choice() {
         "{text}"
     );
 }
+
+/// Real files: batch targets are frozen against the configuration on disk.
+fn marking_model(mode: GroupMode, group_aliases: bool) -> (tempfile::TempDir, Model) {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    std::fs::write(
+        &root,
+        "Host alpha secondary\n HostName alpha.invalid\nHost beta\n HostName beta.invalid\nHost gamma\n HostName gamma.invalid\n",
+    )
+    .unwrap();
+    let hosts = config::load_report(&root).unwrap().hosts;
+    let mut m = Model::new(hosts, AppConfig::default(), BTreeMap::new(), false);
+    m.search_focus = false;
+    m.batch.root = root;
+    m.batch.cache_sources(&m.all.clone());
+    m.preferences.group_mode = mode;
+    m.preferences.group_aliases = group_aliases;
+    m.filter(true);
+    (temp, m)
+}
+
+fn row_of<'a>(text: &'a str, name: &str) -> &'a str {
+    text.lines()
+        .find(|line| line.contains(name) && line.contains('│'))
+        .unwrap_or_else(|| panic!("no row for {name}: {text}"))
+}
+
+#[test]
+fn favorite_and_batch_target_use_distinct_zones() {
+    let (_temp, mut m) = marking_model(GroupMode::Flat, false);
+    m.metadata.insert(
+        "beta".into(),
+        HostMetadata {
+            favorite: true,
+            ..HostMetadata::default()
+        },
+    );
+    m.filter(false);
+    // Without any target there is no target zone at all.
+    let text = screen(&mut m, 110, 24);
+    assert!(row_of(&text, "beta").contains("│? *beta"), "{text}");
+    assert!(!text.contains("[ ]") && !text.contains("Lot :"), "{text}");
+    while m.selected_host().unwrap().name != "alpha" {
+        m.key(key(KeyCode::Down));
+    }
+    m.key(key(KeyCode::Char('x')));
+    let text = screen(&mut m, 110, 24);
+    // A favorite that is not a target, and a target that is not a favorite.
+    assert!(row_of(&text, "beta").contains("│[ ] ? *beta"), "{text}");
+    assert!(row_of(&text, "alpha").contains("[x] ?  alpha"), "{text}");
+    assert!(row_of(&text, "gamma").contains("│[ ] ?  gamma"), "{text}");
+    assert!(
+        text.contains("Légende : [x] cible de lot · * favori"),
+        "{text}"
+    );
+    // The legend is contextual and leaves small terminals to the table.
+    assert!(!screen(&mut m, 110, 18).contains("Légende"));
+}
+
+#[test]
+fn selection_stays_counted_and_visible_through_search_and_collapse() {
+    let (_temp, mut m) = marking_model(GroupMode::Files, false);
+    for name in ["alpha", "gamma"] {
+        while m.selected_host().map(|host| host.name).as_deref() != Some(name) {
+            m.key(key(KeyCode::Down));
+        }
+        m.key(key(KeyCode::Char('x')));
+    }
+    let text = screen(&mut m, 120, 24);
+    assert!(
+        text.contains("Lot : 2 cibles marquées • B : voir / préparer • F2 : tout retirer"),
+        "{text}"
+    );
+    assert!(
+        text.contains("(4 • 2 cibles)"),
+        "the header counts its marked hosts: {text}"
+    );
+    // A search hides one target: it stays counted, and is said to be outside.
+    m.query.set("alpha");
+    m.filter(true);
+    let text = screen(&mut m, 120, 24);
+    assert!(
+        text.contains("Lot : 2 cibles marquées, dont 1 hors du filtre"),
+        "{text}"
+    );
+    assert_eq!(
+        m.batch.marks.len(),
+        2,
+        "searching never replaces the selection"
+    );
+    m.query.set("");
+    m.filter(true);
+    // Collapsing the group hides the rows, not the count.
+    m.key(key(KeyCode::Home));
+    m.key(key(KeyCode::Left));
+    let text = screen(&mut m, 120, 24);
+    assert!(
+        !text.contains("gamma") && text.contains("(4 • 2 cibles)"),
+        "{text}"
+    );
+    assert!(text.contains("Lot : 2 cibles marquées •"), "{text}");
+    // A compact terminal keeps the count on its single band row.
+    assert!(screen(&mut m, 80, 10).contains("Lot : 2 cible(s)"));
+    m.key(key(KeyCode::Char('B')));
+    let View::Batch(editor) = &m.view else {
+        panic!("B shows the marked targets")
+    };
+    assert_eq!(editor.targets.len(), 2);
+}
+
+#[test]
+fn group_header_is_never_a_silent_target_and_enter_is_announced() {
+    let (_temp, mut m) = marking_model(GroupMode::Files, false);
+    m.key(key(KeyCode::Home));
+    assert!(m.selected_group().is_some());
+    let text = screen(&mut m, 120, 24);
+    assert!(text.contains("Enter: open/close group"), "{text}");
+    // Host shortcuts explain why they do nothing on a header.
+    assert_eq!(m.key(key(KeyCode::Char('x'))), Action::None);
+    assert!(m.batch.marks.is_empty());
+    assert!(screen(&mut m, 120, 24)
+        .contains("Lot : marquer l'alias — Sélectionnez un hôte, pas un groupe"));
+    for shortcut in ['e', 'd', 'm', 'N'] {
+        assert_eq!(
+            m.key(key(KeyCode::Char(shortcut))),
+            Action::None,
+            "{shortcut}"
+        );
+        assert!(matches!(m.view, View::List), "{shortcut}");
+        assert!(m.hint.contains("pas un groupe"), "{shortcut}: {}", m.hint);
+    }
+    // Enter toggles the header and connects to a host; the footer says which.
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(
+        m.hint.is_empty(),
+        "the explanation lasts until the next key"
+    );
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Down));
+    assert!(screen(&mut m, 120, 24).contains("Enter: connect"));
+    assert!(matches!(m.key(key(KeyCode::Enter)), Action::Connect(..)));
+}
+
+#[test]
+fn grouped_block_shows_its_connection_alias_and_other_aliases() {
+    let (_temp, mut m) = marking_model(GroupMode::Flat, true);
+    let text = screen(&mut m, 120, 24);
+    assert!(row_of(&text, "alpha").contains("alpha +1 alias"), "{text}");
+    assert!(!row_of(&text, "beta").contains("alias"), "{text}");
+    assert!(
+        text.contains("Légende : a→b alias actif d'un bloc"),
+        "{text}"
+    );
+    // Choosing the secondary alias keeps both names visible, target last.
+    m.key(key(KeyCode::Home));
+    m.key(key(KeyCode::F(3)));
+    m.key(key(KeyCode::Down));
+    m.key(key(KeyCode::Enter));
+    let text = screen(&mut m, 120, 24);
+    assert!(
+        row_of(&text, "secondary").contains("alpha→secondary +1 alias"),
+        "{text}"
+    );
+    assert_eq!(m.selected_host().unwrap().name, "secondary");
+    // A narrow column keeps the connection alias rather than the indicator.
+    let narrow = screen(&mut m, 30, 24);
+    assert!(
+        narrow.contains("→") && !narrow.contains("+1 alias"),
+        "{narrow}"
+    );
+}

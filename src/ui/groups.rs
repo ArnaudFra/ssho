@@ -127,7 +127,7 @@ fn primary_tag(host: &Host) -> Option<String> {
         .or_else(|| host.file_tags.first())
         .cloned()
 }
-fn ancestors(host: &Host, mode: GroupMode) -> Vec<Key> {
+pub(super) fn ancestors(host: &Host, mode: GroupMode) -> Vec<Key> {
     match mode {
         GroupMode::Flat => vec![],
         GroupMode::Files => vec![Key::File(host.source_file.clone())],
