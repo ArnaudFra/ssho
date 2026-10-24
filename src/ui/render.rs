@@ -1637,43 +1637,48 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     ));
     f.render_widget(Paragraph::new(footer), parts[2]);
 }
+/// Hosts declared in each file, for the selector's detail zone.
+fn hosts_in(m: &Model, path: &Path) -> usize {
+    m.all.iter().filter(|host| host.source_file == path).count()
+}
+
 fn source_files(f: &mut Frame, m: &Model, area: Rect) {
     let View::SourceFiles { files, selected } = &m.view else {
         return;
     };
-    let area = inset(area);
-    let parts = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .split(area);
-    f.render_widget(
-        Paragraph::new("Filtrer par fichier source").style(accent()),
-        parts[0],
-    );
-    let count = usize::from(parts[1].height).max(1);
-    let offset = selected.saturating_sub(count - 1);
-    let lines = std::iter::once("Tous les fichiers".to_owned())
-        .chain(files.iter().map(|path| path.display().to_string()))
-        .enumerate()
-        .skip(offset)
-        .map(|(i, label)| {
-            Line::styled(
-                format!("{} {label}", if i == *selected { "▶" } else { " " }),
-                if i == *selected {
-                    Style::default().bg(CYAN).fg(Color::Black)
-                } else {
-                    Style::default()
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    f.render_widget(Paragraph::new(lines), parts[1]);
-    f.render_widget(
-        Paragraph::new("↑/↓: navigate • Enter: select • Esc: cancel")
-            .style(Style::default().fg(GRAY)),
-        parts[2],
+    let labels = select::path_labels(files, area.width);
+    let all = select::Item {
+        label: "Tous les fichiers".into(),
+        aside: String::new(),
+        detail: vec![
+            "Aucun filtre par fichier.".into(),
+            format!("{} hôte(s) dans la configuration", m.all.len()),
+        ],
+        current: m.source_filter.is_none(),
+        search: String::new(),
+    };
+    let items = std::iter::once(all)
+        .chain(files.iter().zip(labels).map(|(path, label)| select::Item {
+            label,
+            aside: String::new(),
+            detail: select::file_detail(path, hosts_in(m, path)),
+            current: m.source_filter.as_ref() == Some(path),
+            search: path.display().to_string(),
+        }))
+        .collect();
+    select::draw(
+        f,
+        inset(area),
+        select::Spec {
+            title: "Filtrer par fichier source".into(),
+            subject: "Limiter la liste aux hôtes déclarés dans un fichier".into(),
+            items,
+            selected: *selected,
+            error: "",
+            apply: "appliquer",
+            query: Some(&m.selector_query),
+            empty: "Aucun fichier de configuration SSH.",
+        },
     );
 }
 
@@ -1681,51 +1686,45 @@ fn alias_chooser(f: &mut Frame, m: &Model, area: Rect) {
     let View::Aliases { hosts, selected } = &m.view else {
         return;
     };
-    let area = inset(area);
-    let parts = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .split(area);
-    f.render_widget(
-        Paragraph::new("Choose alias • exact connection target").style(accent()),
-        parts[0],
-    );
-    let count = usize::from(parts[1].height).max(1);
-    let offset = selected.saturating_sub(count - 1);
-    let lines = hosts
+    let active = m.selected_host().map(|host| host.name);
+    let primary = hosts.first().map(aliases::primary).unwrap_or_default();
+    let items = hosts
         .iter()
         .map(|host| {
             let effective = m
                 .effective
                 .get(&host.name)
                 .and_then(|value| value.as_ref().ok());
-            format!(
-                "{} • {}@{}",
-                host.name,
-                effective.map_or(host.user.as_str(), |e| &e.user),
-                effective.map_or(host.hostname.as_str(), |e| &e.hostname)
-            )
+            select::Item {
+                label: host.name.clone(),
+                aside: format!(
+                    "{}@{}",
+                    effective.map_or(host.user.as_str(), |e| &e.user),
+                    effective.map_or(host.hostname.as_str(), |e| &e.hostname)
+                ),
+                detail: vec![
+                    format!("Fichier : {}", host.source_file.display()),
+                    "Connexion, favori et note visent cet alias précis ; le bloc SSH est partagé."
+                        .into(),
+                ],
+                current: active.as_deref() == Some(host.name.as_str()),
+                search: String::new(),
+            }
         })
-        .enumerate()
-        .skip(offset)
-        .map(|(i, label)| {
-            Line::styled(
-                format!("{} {label}", if i == *selected { "▶" } else { " " }),
-                if i == *selected {
-                    Style::default().bg(CYAN).fg(Color::Black)
-                } else {
-                    Style::default()
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    f.render_widget(Paragraph::new(lines), parts[1]);
-    f.render_widget(
-        Paragraph::new("↑/↓: navigate • Enter: select • Esc: cancel")
-            .style(Style::default().fg(GRAY)),
-        parts[2],
+        .collect();
+    select::draw(
+        f,
+        inset(area),
+        select::Spec {
+            title: "Choisir un alias — cible exacte de connexion".into(),
+            subject: format!("Bloc de {primary} : {} alias", hosts.len()),
+            items,
+            selected: *selected,
+            error: "",
+            apply: "choisir",
+            query: Some(&m.selector_query),
+            empty: "Ce bloc n'a aucun alias.",
+        },
     );
 }
 
@@ -1735,81 +1734,63 @@ fn files(f: &mut Frame, m: &mut Model, area: Rect) {
         selected,
         host,
         duplicate,
+        retarget,
         ..
     } = &m.view
     else {
         return;
     };
-    let area = inset(area);
-    let errors = if m.error.is_empty() {
-        vec![]
+    // The draft under a retarget selector knows the destination in effect.
+    let current = match (retarget, m.parents.last()) {
+        (true, Some((View::Host(form), _))) => Some(form.target.clone()),
+        _ => None,
+    };
+    let (title, subject) = if *retarget {
+        (
+            "Changer le fichier de destination".to_owned(),
+            "Le brouillon est conservé ; seul son fichier cible change".to_owned(),
+        )
+    } else if let Some(host) = host {
+        (
+            format!("Hôtes > Déplacer {} — fichier de destination", host.name),
+            format!("Source : {}", host.source_file.display()),
+        )
+    } else if let Some(source) = duplicate.as_deref() {
+        (
+            format!("Hôtes > Dupliquer {} — fichier de destination", source.name),
+            "Le fichier de l'original est aussi une destination possible".to_owned(),
+        )
     } else {
-        details::wrapped(
-            m.error
-                .lines()
-                .map(|line| Line::styled(line.to_owned(), Style::default().fg(Color::Red)))
-                .collect(),
-            area.width,
+        (
+            "Hôtes > Ajouter un hôte — fichier de destination".to_owned(),
+            "Fichier SSH dans lequel le nouveau bloc sera écrit".to_owned(),
         )
     };
-    let error_height = errors.len().min(usize::from(area.height.saturating_sub(3))) as u16;
-    let parts = Layout::vertical([
-        Constraint::Length(if errors.is_empty() { 3 } else { 1 }),
-        Constraint::Min(1),
-        Constraint::Length(error_height),
-        Constraint::Length(1),
-    ])
-    .split(area);
-    let title = duplicate
-        .as_deref()
-        .or(host.as_ref())
-        .map(|h| {
-            // A move names its source; the destination list never includes it.
-            let source = host
-                .as_ref()
-                .map(|h| format!("\nSource : {}", h.source_file.display()))
-                .unwrap_or_default();
-            format!(
-                "Select destination config file for host '{}':{source}",
-                h.name
-            )
-        })
-        .unwrap_or_else(|| "Select config file to add host to:".into());
-    f.render_widget(Paragraph::new(title).style(accent()), parts[0]);
-    let count = parts[1].height.max(1) as usize;
-    let offset = selected.saturating_sub(count - 1);
-    let lines = files
+    let labels = select::path_labels(files, area.width);
+    let items = files
         .iter()
-        .enumerate()
-        .skip(offset)
-        .map(|(i, path)| {
-            Line::styled(
-                format!(
-                    "{} {}",
-                    if i == *selected { "▶" } else { " " },
-                    path.display()
-                ),
-                if i == *selected {
-                    Style::default().bg(CYAN).fg(Color::Indexed(229))
-                } else {
-                    Style::default()
-                },
-            )
+        .zip(labels)
+        .map(|(path, label)| select::Item {
+            label,
+            aside: String::new(),
+            detail: select::file_detail(path, hosts_in(m, path)),
+            current: current.as_ref() == Some(path),
+            search: path.display().to_string(),
         })
-        .collect::<Vec<_>>();
-    f.render_widget(
-        Paragraph::new(if files.is_empty() {
-            vec![Line::from("No SSH config files found.")]
-        } else {
-            lines
-        }),
-        parts[1],
-    );
-    f.render_widget(Paragraph::new(errors), parts[2]);
-    f.render_widget(
-        Paragraph::new("↑/↓: navigate • Enter: select • Esc: cancel")
-            .style(Style::default().fg(GRAY)),
-        parts[3],
+        .collect();
+    select::draw(
+        f,
+        inset(area),
+        select::Spec {
+            title,
+            subject,
+            items,
+            selected: *selected,
+            error: &m.error,
+            apply: "choisir",
+            query: Some(&m.selector_query),
+            empty: "Aucun fichier de configuration SSH.",
+        },
     );
 }
 fn info(f: &mut Frame, m: &mut Model, area: Rect) {
@@ -2166,43 +2147,37 @@ fn group_mode(f: &mut Frame, m: &Model, area: Rect) {
     let View::GroupMode { selected } = &m.view else {
         return;
     };
-    let area = inset(area);
-    let parts = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(if m.error.is_empty() { 0 } else { 2 }),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .split(area);
-    f.render_widget(
-        Paragraph::new("Groupes • Group view").style(accent()),
-        parts[0],
-    );
-    f.render_widget(
-        Paragraph::new(m.error.as_str())
-            .style(Style::default().fg(Color::LightRed))
-            .wrap(Wrap { trim: false }),
-        parts[1],
-    );
-    let capacity = usize::from(parts[2].height).max(1);
-    let offset = selected.saturating_sub(capacity - 1);
-    let lines: Vec<_> = groups::MODES
+    let items = groups::MODES
         .iter()
-        .enumerate()
-        .skip(offset)
-        .map(|(index, (_, label))| {
-            Line::styled(
-                format!("{} {label}", if index == *selected { "▶" } else { " " }),
-                if index == *selected {
-                    Style::default().bg(CYAN).fg(Color::Black)
-                } else {
-                    Style::default()
-                },
-            )
+        .map(|(mode, label)| select::Item {
+            label: (*label).to_owned(),
+            aside: String::new(),
+            detail: vec![match mode {
+                GroupMode::Flat => "Tous les hôtes dans une seule liste triée.",
+                GroupMode::Files => "Un groupe repliable par fichier de configuration.",
+                GroupMode::FileTags => {
+                    "Par fichier, puis par tag principal : premier tag propre, sinon premier tag hérité, sinon « Sans tag »."
+                }
+            }
+            .to_owned()],
+            current: *mode == m.preferences.group_mode,
+            search: String::new(),
         })
         .collect();
-    f.render_widget(Paragraph::new(lines), parts[2]);
-    f.render_widget(Paragraph::new("↑/↓ • Enter: save • Esc: cancel"), parts[3]);
+    select::draw(
+        f,
+        inset(area),
+        select::Spec {
+            title: "Groupes — présentation de la liste".into(),
+            subject: "Préférence enregistrée ; les replis restent ceux de la session".into(),
+            items,
+            selected: *selected,
+            error: &m.error,
+            apply: "enregistrer",
+            query: None,
+            empty: "",
+        },
+    );
 }
 
 pub(super) fn group_content(key: &groups::Key, count: usize, aliases: bool) -> Vec<Line<'static>> {
@@ -2245,39 +2220,39 @@ fn availability(f: &mut Frame, m: &Model, area: Rect) {
     let View::Availability { selected } = m.view else {
         return;
     };
-    let parts = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(3),
-        Constraint::Min(2),
-        Constraint::Length(1),
-    ])
-    .split(area);
-    f.render_widget(
-        Paragraph::new("Availability method").style(accent()),
-        parts[0],
-    );
-    f.render_widget(
-        Paragraph::new(m.error.as_str())
-            .style(Style::default().fg(Color::LightRed))
-            .wrap(Wrap { trim: false }),
-        parts[1],
-    );
-    let lines = [AvailabilityMethod::Ssh, AvailabilityMethod::Icmp]
+    let items = [AvailabilityMethod::Ssh, AvailabilityMethod::Icmp]
         .into_iter()
-        .enumerate()
-        .map(|(index, method)| {
-            Line::styled(
-                method.scope(),
-                if index == selected {
-                    Style::default().bg(CYAN).fg(Color::Black)
-                } else {
-                    Style::default()
-                },
-            )
+        .map(|method| select::Item {
+            label: method.label().to_owned(),
+            aside: String::new(),
+            detail: match method {
+                AvailabilityMethod::Ssh => vec![
+                    "Vérifie qu'un serveur SSH répond : poignée de main directe, ou contrôle via le proxy configuré.".to_owned(),
+                    "Ne prouve pas l'authentification.".to_owned(),
+                ],
+                AvailabilityMethod::Icmp => vec![
+                    "Ping depuis ce poste : disponibilité réseau seulement, sans bastion ni authentification SSH.".to_owned(),
+                    "État « inconnu » si la commande ping manque ou est refusée.".to_owned(),
+                ],
+            },
+            current: method == m.preferences.availability_method,
+            search: String::new(),
         })
-        .collect::<Vec<_>>();
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), parts[2]);
-    f.render_widget(Paragraph::new("↑/↓ • Enter: save • Esc: cancel"), parts[3]);
+        .collect();
+    select::draw(
+        f,
+        inset(area),
+        select::Spec {
+            title: "Méthode de disponibilité".into(),
+            subject: "Ce que mesure l'état affiché dans la liste".into(),
+            items,
+            selected,
+            error: &m.error,
+            apply: "enregistrer",
+            query: None,
+            empty: "",
+        },
+    );
 }
 
 fn columns_selector(f: &mut Frame, m: &Model, area: Rect, table_width: u16) {

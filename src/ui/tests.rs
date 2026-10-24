@@ -451,7 +451,7 @@ fn selectors_and_tunnels_return_precise_actions() {
         duplicate: None,
         retarget: false,
     };
-    m.key(key(KeyCode::Char('j')));
+    m.key(key(KeyCode::Down));
     assert_eq!(
         m.key(key(KeyCode::Enter)),
         Action::MoveTo(h, PathBuf::from("b"))
@@ -5263,7 +5263,7 @@ fn availability_p_opens_selector_but_remains_search_text_and_f2_is_palette() {
     assert_eq!(m.query.value, "P");
     m.key(key(KeyCode::Char('P')));
     let rendered = screen(&mut m, 80, 24);
-    assert!(rendered.contains("Availability method"), "{rendered}");
+    assert!(rendered.contains("Méthode de disponibilité"), "{rendered}");
     assert!(rendered.contains("ICMP local"));
     m.key(key(KeyCode::Esc));
     m.key(key(KeyCode::F(2)));
@@ -5394,8 +5394,12 @@ fn availability_selected_option_remains_visible_in_tiny_terminal() {
     m.open_availability();
     m.key(key(KeyCode::Down));
     let rendered = screen(&mut m, 28, 8);
-    assert!(rendered.contains("ICMP local"), "{rendered}");
-    assert!(rendered.contains("Enter: save"), "{rendered}");
+    assert!(rendered.contains("▶  ICMP local"), "{rendered}");
+    assert!(
+        rendered.contains("✓ SSH"),
+        "the value in effect stays marked: {rendered}"
+    );
+    assert!(rendered.contains("Entrée : enregistrer"), "{rendered}");
 }
 
 fn availability_external_preference_action(group_action: bool) {

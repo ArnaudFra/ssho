@@ -183,6 +183,16 @@ Le formulaire d'hôte tient sur **une page**, sans onglets, et son titre nomme l
 
 Sur un terminal de moins de 44 colonnes, le libellé passe au-dessus de sa saisie. Le curseur natif reste visible dans le champ actif ; un bouton ou un titre de section ayant le focus n'a pas de curseur et ne reçoit ni frappe ni collage.
 
+### Sélecteurs communs
+
+Le choix d'un fichier de destination, du filtre par fichier source, d'un alias exact, du regroupement et de la méthode de disponibilité utilisent un même écran :
+
+- un **titre** et une ligne disant ce que l'on choisit ; la **valeur en vigueur** porte une coche `✓` et la mention « (actuel) », distinctes du curseur `▶` ;
+- ↑/↓ **bouclent**, Début/Fin vont aux extrémités, **Entrée** applique, **Échap ou Ctrl+C** annulent sans rien changer ;
+- une **zone de détail** sous la liste décrit le choix survolé : chemin complet et nombre d'hôtes d'un fichier (« aucun hôte : fichier vide… »), fichier et portée d'un alias, ce que mesure SSH ou ICMP, effet d'un mode de regroupement ;
+- les **chemins** s'affichent en entier tant que la largeur le permet ; sinon sous la plus courte fin qui les distingue (`…/a/hosts` et `…/b/hosts`), le chemin complet restant dans la zone de détail. « Tous les fichiers » est un choix à part entière ;
+- dans les sélecteurs de fichiers et d'alias, **taper réduit la liste** (casse et accents ignorés, sur le chemin complet). Réduire ne choisit rien : la coche reste sur la valeur en vigueur jusqu'à Entrée. *Dans ces trois sélecteurs les lettres sont donc du texte de recherche : `j`, `k` et `q` n'y naviguent plus et n'y ferment plus ; ils gardent ce rôle dans les sélecteurs de regroupement et de méthode, qui n'ont pas de recherche.*
+
 ### Retour, fermeture et confirmations
 
 - **Échap revient d'un niveau**, partout. À la liste, qui est la racine, Échap ne ferme plus l'application : une ligne rappelle les touches de sortie. Ajouter `"esc"` à `key_bindings.quit_keys` rétablit l'ancienne sortie par Échap ; `disable_esc_quit: true` l'interdit toujours. *Changement par rapport aux versions précédentes, où Échap quittait depuis le tableau.*

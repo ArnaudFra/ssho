@@ -102,17 +102,14 @@ pub(super) fn open(m: &mut Model) {
 }
 
 pub(super) fn key(m: &mut Model, key: KeyEvent) -> Action {
+    let texts = m.view.selector_texts().unwrap_or_default();
     let View::Aliases { hosts, selected } = &mut m.view else {
         return Action::None;
     };
-    match key.code {
-        _ if nav::cancels(key) => m.back(),
-        KeyCode::Char('q') => m.back(),
-        KeyCode::Up | KeyCode::Char('k') => *selected = nav::wrap(*selected, hosts.len(), -1),
-        KeyCode::Down | KeyCode::Char('j') => *selected = nav::wrap(*selected, hosts.len(), 1),
-        KeyCode::Home => *selected = 0,
-        KeyCode::End => *selected = hosts.len().saturating_sub(1),
-        KeyCode::Enter => {
+    match select::key(selected, &texts, Some(&mut m.selector_query), key) {
+        select::Outcome::Cancel => m.back(),
+        select::Outcome::Stay => {}
+        select::Outcome::Apply => {
             let Some(host) = hosts.get(*selected).cloned() else {
                 return Action::None;
             };
@@ -131,7 +128,6 @@ pub(super) fn key(m: &mut Model, key: KeyEvent) -> Action {
             }
             m.refilter(Some(&host), m.selected);
         }
-        _ => {}
     }
     Action::None
 }

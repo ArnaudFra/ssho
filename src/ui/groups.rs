@@ -242,15 +242,11 @@ pub(super) fn key(m: &mut Model, key: KeyEvent) -> Action {
     let View::GroupMode { selected } = &mut m.view else {
         return Action::None;
     };
-    match key.code {
-        _ if nav::cancels(key) => m.back(),
-        KeyCode::Char('q') => m.back(),
-        KeyCode::Up | KeyCode::Char('k') => *selected = nav::wrap(*selected, MODES.len(), -1),
-        KeyCode::Down | KeyCode::Char('j') => *selected = nav::wrap(*selected, MODES.len(), 1),
-        KeyCode::Home => *selected = 0,
-        KeyCode::End => *selected = MODES.len() - 1,
-        KeyCode::Enter => return Action::GroupMode(MODES[*selected].0),
-        _ => {}
+    let texts: Vec<String> = MODES.iter().map(|(_, label)| (*label).to_owned()).collect();
+    match select::key(selected, &texts, None, key) {
+        select::Outcome::Cancel => m.back(),
+        select::Outcome::Apply => return Action::GroupMode(MODES[*selected].0),
+        select::Outcome::Stay => {}
     }
     Action::None
 }

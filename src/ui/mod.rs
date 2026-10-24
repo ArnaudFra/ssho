@@ -25,6 +25,7 @@ mod palette;
 mod profiles;
 mod render;
 mod search;
+mod select;
 mod source_filter;
 #[cfg(test)]
 mod tests;
@@ -128,6 +129,40 @@ enum View {
         retarget: bool,
     },
 }
+impl View {
+    /// Searchable text of each choice, for the selectors narrowed by typing.
+    fn selector_texts(&self) -> Option<Vec<String>> {
+        match self {
+            View::Files { files, .. } => Some(
+                files
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect(),
+            ),
+            // Entry 0 is "all files"; entry `n` is `files[n - 1]`.
+            View::SourceFiles { files, .. } => Some(
+                std::iter::once("tous les fichiers".to_owned())
+                    .chain(files.iter().map(|path| path.display().to_string()))
+                    .collect(),
+            ),
+            View::Aliases { hosts, .. } => Some(
+                hosts
+                    .iter()
+                    .map(|host| format!("{} {} {}", host.name, host.user, host.hostname))
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+    fn selector_cursor(&mut self) -> Option<&mut usize> {
+        match self {
+            View::Files { selected, .. }
+            | View::SourceFiles { selected, .. }
+            | View::Aliases { selected, .. } => Some(selected),
+            _ => None,
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq)]
 enum Action {
     Columns(Vec<HostColumn>),
@@ -212,6 +247,8 @@ struct Model {
     confirm: nav::Confirm,
     // One-line explanation of the last key, cleared by the next one.
     hint: String,
+    // Search text of the open selector; a selector never opens another one.
+    selector_query: Input,
     view: View,
     parents: Vec<(View, usize)>,
     preferences: AppConfig,
@@ -266,6 +303,10 @@ impl Model {
             discard: false,
             confirm: nav::Confirm::default(),
             hint: String::new(),
+            selector_query: Input {
+                limit: 64,
+                ..Input::default()
+            },
             view: View::List,
             parents: vec![],
             preferences,
@@ -584,6 +625,12 @@ impl Model {
             .min(self.rows.len().saturating_sub(1));
     }
     fn open_view(&mut self, view: View) {
+        if matches!(
+            view,
+            View::Files { .. } | View::SourceFiles { .. } | View::Aliases { .. }
+        ) {
+            self.selector_query.set("");
+        }
         let parent = std::mem::replace(&mut self.view, view);
         self.parents.push((parent, self.scroll));
         self.scroll = 0;
@@ -632,6 +679,10 @@ impl Model {
         let multiline = matches!(self.view, View::Note(_));
         let input = match &mut self.view {
             View::List if self.search_focus => &mut self.query,
+            View::Files { .. } | View::SourceFiles { .. } | View::Aliases { .. } => {
+                // Pasted text only narrows the list; applying still needs Enter.
+                &mut self.selector_query
+            }
             View::Note(editor) => &mut editor.input,
             View::Keys(editor) => {
                 let Some(input) = keys::input(editor) else {
@@ -670,6 +721,16 @@ impl Model {
         }
         if matches!(self.view, View::List) {
             self.filter(true);
+        }
+        // Pasting into a selector narrows it like typing: the cursor follows the
+        // matches, and nothing is applied.
+        if let Some(texts) = self.view.selector_texts() {
+            let shown = select::visible(&texts, &self.selector_query.value);
+            if let (Some(selected), Some(first)) = (self.view.selector_cursor(), shown.first()) {
+                if !shown.contains(selected) {
+                    *selected = *first;
+                }
+            }
         }
     }
     fn key(&mut self, k: KeyEvent) -> Action {
@@ -728,6 +789,7 @@ impl Model {
                 return Action::None;
             }
         }
+        let texts = self.view.selector_texts().unwrap_or_default();
         match &mut self.view {
             View::Columns(_) => return columns::key(self, k),
             View::Keys(_) => return keys::key(self, k),
@@ -789,22 +851,19 @@ impl Model {
             }
             View::Aliases { .. } => return aliases::key(self, k),
             View::Availability { selected } => {
-                match k.code {
-                    _ if nav::cancels(k) => self.back(),
-                    KeyCode::Up => *selected = nav::wrap(*selected, 2, -1),
-                    KeyCode::Down => *selected = nav::wrap(*selected, 2, 1),
-                    KeyCode::Home => *selected = 0,
-                    KeyCode::End => *selected = 1,
-                    KeyCode::Enter => {
-                        return Action::Availability(if *selected == 0 {
-                            AvailabilityMethod::Ssh
-                        } else {
-                            AvailabilityMethod::Icmp
-                        })
+                let texts = ["ssh".to_owned(), "icmp".to_owned()];
+                return match select::key(selected, &texts, None, k) {
+                    select::Outcome::Cancel => {
+                        self.back();
+                        Action::None
                     }
-                    _ => {}
-                }
-                return Action::None;
+                    select::Outcome::Apply => Action::Availability(if *selected == 0 {
+                        AvailabilityMethod::Ssh
+                    } else {
+                        AvailabilityMethod::Icmp
+                    }),
+                    select::Outcome::Stay => Action::None,
+                };
             }
             View::GroupMode { .. } => return groups::key(self, k),
             View::Profiles(_) => return self.profile_key(k),
@@ -909,18 +968,10 @@ impl Model {
                 duplicate,
                 retarget,
             } => {
-                match k.code {
-                    _ if nav::cancels(k) => self.back(),
-                    KeyCode::Char('q') if host.is_some() => self.back(),
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        *selected = nav::wrap(*selected, files.len(), -1)
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        *selected = nav::wrap(*selected, files.len(), 1)
-                    }
-                    KeyCode::Home => *selected = 0,
-                    KeyCode::End => *selected = files.len().saturating_sub(1),
-                    KeyCode::Enter => {
+                match select::key(selected, &texts, Some(&mut self.selector_query), k) {
+                    select::Outcome::Cancel => self.back(),
+                    select::Outcome::Stay => {}
+                    select::Outcome::Apply => {
                         if let Some(target) = files.get(*selected) {
                             if *retarget {
                                 let target = target.clone();
@@ -942,7 +993,6 @@ impl Model {
                             self.open_view(view);
                         }
                     }
-                    _ => {}
                 }
                 return Action::None;
             }

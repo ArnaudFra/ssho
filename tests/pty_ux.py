@@ -235,7 +235,7 @@ def scenario_navigation():
     s.absent('alpha-draft')
     # Simple selectors wrap at both ends.
     s.send(b'g')
-    s.expect('Group view')
+    s.expect('Groupes — présentation')
     first = next(line for line in s.screen.text().splitlines() if '▶' in line)
     s.send(UP)
     last = next(line for line in s.drain(.2).splitlines() if '▶' in line)
@@ -385,7 +385,7 @@ def scenario_host_form():
         s = Session('host_form', width=100, height=30)
         s.expect('?: help')
         s.send(b'a')
-        s.expect('Select config file to add host to:')
+        s.expect('Hôtes > Ajouter un hôte — fichier de destination')
         s.send(b'\r')
         # One page: destination visible, essentials first, advanced folded away.
         s.expect('Hôtes > Ajouter un hôte')
@@ -406,7 +406,9 @@ def scenario_host_form():
         s.send(b'\t\t')
         s.expect('[▶ Changer ]')
         s.send(b'\r')
-        s.expect('Select config file to add host to:')
+        s.expect('Changer le fichier de destination')
+        s.expect('Le brouillon est conservé')
+        s.expect('(actuel)')              # the file in effect is marked
         s.send(DOWN + b'\r')
         s.expect('Hôtes > Ajouter un hôte')
         s.expect('Fichier : ' + str(work))
@@ -452,7 +454,79 @@ def scenario_host_form():
           'named edit mode, Ctrl+K as text editing, on-demand section, terminal restored')
 
 
-SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form}
+def scenario_selectors():
+    preferences()
+    (ROOT / '.ssh/a').mkdir(exist_ok=True)
+    (ROOT / '.ssh/b').mkdir(exist_ok=True)
+    first, second = ROOT / '.ssh/a/hosts', ROOT / '.ssh/b/hosts'
+    first.write_text('Host one\n HostName 127.0.0.11\n')
+    second.write_text('Host two\n HostName 127.0.0.12\n')
+    CONFIG.write_text('Include a/hosts b/hosts\n' + ORIGINAL_CONFIG.decode())
+    try:
+        s = Session('selectors', width=100, height=30)
+        s.expect('4 hôtes')
+        row = lambda: next(line for line in s.drain(.2).splitlines() if '▶' in line)
+        # File filter: the value in effect is marked before anything is changed.
+        s.send(b'c')
+        s.expect('Filtrer par fichier source')
+        assert 'Tous les fichiers' in row() and '✓' in row() and '(actuel)' in row(), row()
+        s.expect('Aucun filtre par fichier.')
+        s.send(UP)                        # wraps to the last file
+        assert str(second) in row() and '✓' not in row(), row()
+        s.expect('1 hôte dans ce fichier')
+        s.send(ESC)                       # cancelling changes nothing
+        s.expect('4 hôtes')
+        s.absent('Fichier :')
+        # Typing narrows; two files of the same name remain distinguishable.
+        s.send(b'c')
+        s.send(b'hosts')
+        s.expect('Rechercher : hosts')
+        s.expect(str(first))
+        s.expect(str(second))
+        s.absent('Tous les fichiers')
+        s.send(b' b/')
+        assert str(second) in row(), row()
+        s.send(b'\r')
+        s.expect('Fichier : ' + str(second))
+        s.expect('1 hôte sur 4')
+        s.send(b'c')
+        assert str(second) in row() and '✓' in row(), row()
+        s.send(ESC)
+        s.send(b'C')
+        s.expect('4 hôtes')
+        # Narrow terminal: shortest distinguishing tails, full path in the detail.
+        n = Session('selectors-narrow', width=48, height=24)
+        n.expect('F2: actions')
+        n.send(b'c')
+        n.send(DOWN + DOWN)
+        n.expect('…/a/hosts')
+        n.expect('…/b/hosts')
+        n.send(ESC)
+        n.send(CTRL_C)
+        n.close()
+        # Method and grouping use the same component, with an explanation.
+        s.send(b'P')
+        s.expect('Méthode de disponibilité')
+        assert 'SSH' in row() and '✓' in row(), row()
+        s.expect("Ne prouve pas l'authentification.")
+        s.send(DOWN)
+        s.expect('sans bastion ni authentification SSH')
+        s.send(ESC)
+        s.send(b'g')
+        s.expect('Groupes — présentation de la liste')
+        s.expect('une seule liste triée')
+        s.send(ESC)
+        assert not connections()
+        s.send(CTRL_C)
+        s.close()
+    finally:
+        CONFIG.write_bytes(ORIGINAL_CONFIG)
+    print('PTY PASS [selectors]: marked current value, wrapping, cancel keeps the value, typed '
+          'narrowing, same-named files distinguishable wide and narrow, shared component '
+          'for method and grouping with explanations, terminal restored')
+
+
+SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

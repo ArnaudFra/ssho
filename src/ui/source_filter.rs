@@ -12,19 +12,16 @@ pub(super) fn open(m: &mut Model, config: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Entry 0 is "all files"; entry `n` is `files[n - 1]`.
 pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
+    let texts = m.view.selector_texts().unwrap_or_default();
     let View::SourceFiles { files, selected } = &mut m.view else {
         return Action::None;
     };
-    match k.code {
-        _ if nav::cancels(k) => m.back(),
-        KeyCode::Char('q') => m.back(),
-        // "All files" is the first entry of this selector.
-        KeyCode::Up | KeyCode::Char('k') => *selected = nav::wrap(*selected, files.len() + 1, -1),
-        KeyCode::Down | KeyCode::Char('j') => *selected = nav::wrap(*selected, files.len() + 1, 1),
-        KeyCode::Home => *selected = 0,
-        KeyCode::End => *selected = files.len(),
-        KeyCode::Enter => {
+    match select::key(selected, &texts, Some(&mut m.selector_query), k) {
+        select::Outcome::Cancel => m.back(),
+        select::Outcome::Stay => {}
+        select::Outcome::Apply => {
             m.source_filter = selected.checked_sub(1).and_then(|i| files.get(i)).cloned();
             // A result from the old scope must not rewrite this scope's search.
             // Expanding to all files (or retaining the same source) keeps the preference.
@@ -38,7 +35,6 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
             m.back();
             m.filter(false);
         }
-        _ => {}
     }
     Action::None
 }

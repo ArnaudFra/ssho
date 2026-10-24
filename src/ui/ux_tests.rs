@@ -1072,3 +1072,176 @@ fn modes_are_named_and_the_note_returns_to_the_draft() {
         "a copy takes one new name: {text}"
     );
 }
+
+fn source_selector(m: &mut Model, files: &[&str], selected: usize) {
+    m.open_view(View::SourceFiles {
+        files: files.iter().map(PathBuf::from).collect(),
+        selected,
+    });
+}
+
+#[test]
+fn current_choice_is_marked_and_cancelling_changes_nothing() {
+    let mut m = model(serde_json::json!({}));
+    m.all[0].source_file = "/etc/ssh/work".into();
+    m.all[1].source_file = "/etc/ssh/home".into();
+    m.source_filter = Some("/etc/ssh/work".into());
+    m.filter(false);
+    source_selector(
+        &mut m,
+        &["/etc/ssh/work", "/etc/ssh/home", "/etc/ssh/empty"],
+        1,
+    );
+    let text = screen(&mut m, 100, 24);
+    // The value in effect has its own mark, distinct from the cursor.
+    assert!(
+        text.contains("▶✓ /etc/ssh/work") && text.contains("(actuel)"),
+        "{text}"
+    );
+    assert!(text.contains("   Tous les fichiers"), "{text}");
+    assert!(text.contains("1 hôte dans ce fichier"), "{text}");
+    m.key(key(KeyCode::Down));
+    m.key(key(KeyCode::Down));
+    let text = screen(&mut m, 100, 24);
+    assert!(
+        text.contains(" ✓ /etc/ssh/work"),
+        "the mark stays on the value in effect: {text}"
+    );
+    assert!(text.contains("▶  /etc/ssh/empty"), "{text}");
+    assert!(
+        text.contains("aucun hôte : fichier vide ou sans bloc Host"),
+        "{text}"
+    );
+    for cancel in [key(KeyCode::Esc), ctrl('c')] {
+        m.key(cancel);
+        assert!(matches!(m.view, View::List));
+        assert_eq!(m.source_filter, Some(PathBuf::from("/etc/ssh/work")));
+        source_selector(
+            &mut m,
+            &["/etc/ssh/work", "/etc/ssh/home", "/etc/ssh/empty"],
+            3,
+        );
+    }
+    // "All files" is a choice of its own, applied like any other.
+    m.key(key(KeyCode::Down));
+    assert!(
+        matches!(m.view, View::SourceFiles { selected: 0, .. }),
+        "the list wraps"
+    );
+    assert!(screen(&mut m, 100, 24).contains("Aucun filtre par fichier."));
+    m.key(key(KeyCode::Enter));
+    assert!(m.source_filter.is_none());
+}
+
+#[test]
+fn same_named_files_stay_distinguishable_when_paths_are_shortened() {
+    let mut m = model(serde_json::json!({}));
+    let files = [
+        "/home/me/.ssh/config",
+        "/home/me/.ssh/customers/acme-corporation/hosts",
+        "/home/me/.ssh/customers/globex-industries/hosts",
+    ];
+    m.open_view(View::Files {
+        files: files.iter().map(PathBuf::from).collect(),
+        selected: 2,
+        host: None,
+        seed: String::new(),
+        duplicate: None,
+        retarget: false,
+    });
+    // Wide enough: full paths. Too narrow: the shortest tails that differ, and
+    // the full path of the highlighted file under the list.
+    assert!(screen(&mut m, 110, 24).contains("   /home/me/.ssh/customers/acme-corporation/hosts"));
+    let text = screen(&mut m, 56, 24);
+    assert!(text.contains("   …/acme-corporation/hosts"), "{text}");
+    assert!(text.contains("▶  …/globex-industries/hosts"), "{text}");
+    assert!(text.contains("   …/config"), "{text}");
+    assert!(
+        text.contains("/home/me/.ssh/customers/globex-industries/hosts"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Hôtes > Ajouter un hôte — fichier de destination"),
+        "{text}"
+    );
+}
+
+#[test]
+fn typing_narrows_a_selector_and_applies_nothing_before_enter() {
+    let mut m = model(serde_json::json!({}));
+    source_selector(&mut m, &["/etc/ssh/work", "/etc/ssh/home"], 0);
+    typing(&mut m, "HÔME");
+    let text = screen(&mut m, 100, 24);
+    assert!(
+        text.contains("Rechercher : HÔME") && text.contains("▶  /etc/ssh/home"),
+        "{text}"
+    );
+    assert!(!text.contains("/etc/ssh/work"), "{text}");
+    assert!(m.source_filter.is_none(), "narrowing is not choosing");
+    // Letters are search text here: `q` does not close, `j` does not move.
+    typing(&mut m, "qj");
+    assert!(matches!(m.view, View::SourceFiles { .. }));
+    assert!(screen(&mut m, 100, 24).contains("Aucun choix ne correspond à la recherche."));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(matches!(m.view, View::SourceFiles { .. }) && m.source_filter.is_none());
+    m.key(ctrl('u'));
+    m.paste("work\n");
+    assert!(
+        matches!(m.view, View::SourceFiles { .. }),
+        "paste never applies"
+    );
+    m.key(key(KeyCode::Enter));
+    assert_eq!(m.source_filter, Some(PathBuf::from("/etc/ssh/work")));
+    // The search of a previous selector is not carried into the next one.
+    source_selector(&mut m, &["/etc/ssh/work", "/etc/ssh/home"], 0);
+    assert!(m.selector_query.value.is_empty());
+}
+
+#[test]
+fn alias_and_method_selectors_explain_each_choice() {
+    let mut m = model(serde_json::json!({}));
+    let mut second = m.all[0].clone();
+    second.name = "alpha-admin".into();
+    second.user = "root".into();
+    second.source_file = "/etc/ssh/work".into();
+    m.open_view(View::Aliases {
+        hosts: vec![m.all[0].clone(), second],
+        selected: 1,
+    });
+    let text = screen(&mut m, 100, 24);
+    for expected in [
+        "Choisir un alias — cible exacte de connexion",
+        " ✓ alpha",
+        "▶  alpha-admin  root@alpha.example",
+        "Fichier : /etc/ssh/work",
+        "le bloc SSH est partagé",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Char('P')));
+    let text = screen(&mut m, 110, 24);
+    assert!(
+        text.contains("▶✓ SSH") && text.contains("Ne prouve pas l'authentification."),
+        "{text}"
+    );
+    m.key(key(KeyCode::Char('j')));
+    let text = screen(&mut m, 110, 24);
+    assert!(
+        text.contains("sans bastion ni authentification SSH"),
+        "{text}"
+    );
+    assert_eq!(m.key(key(KeyCode::Char('q'))), Action::None);
+    assert!(matches!(m.view, View::List));
+    assert_eq!(m.preferences.availability_method, AvailabilityMethod::Ssh);
+    m.key(key(KeyCode::Char('g')));
+    let text = screen(&mut m, 110, 24);
+    assert!(
+        text.contains("Groupes — présentation de la liste"),
+        "{text}"
+    );
+    assert!(
+        text.contains("▶✓ Flat — liste plate") && text.contains("une seule liste triée"),
+        "{text}"
+    );
+}
