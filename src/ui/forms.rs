@@ -260,16 +260,12 @@ pub(super) struct HostForm {
     open: [bool; 3],
     pub error: String,
     pub scroll: usize,
-    pub default_user: String,
     baseline: (Vec<String>, Vec<String>, PathBuf),
     pub errors: Vec<FieldError>,
 }
 impl HostForm {
     pub fn add(name: String, target: PathBuf) -> Self {
         let mut inputs = vec![Input::default(); 11];
-        let user = std::env::var("USER")
-            .or_else(|_| std::env::var("USERNAME"))
-            .unwrap_or_else(|_| "root".into());
         for (i, input) in inputs.iter_mut().enumerate() {
             input.limit = [50, 100, 50, 5, 200, 200, 200, 500, 200, 300, 10][i];
         }
@@ -289,7 +285,6 @@ impl HostForm {
             open: [false; 3],
             error: String::new(),
             scroll: 0,
-            default_user: user,
         };
         form.describe_empty_fields();
         form.rebase();
@@ -351,11 +346,9 @@ impl HostForm {
     /// by a greyed example that looks like one already entered.
     fn describe_empty_fields(&mut self) {
         let openssh = "laissé à OpenSSH";
-        let user = if self.original.is_none() && self.copy_source.is_none() {
-            format!("{} — défaut, écrit à l'enregistrement", self.default_user)
-        } else {
-            openssh.to_owned()
-        };
+        // An empty field writes nothing: OpenSSH then uses the local user name,
+        // or whatever an earlier `Host *` block declares.
+        let user = openssh.to_owned();
         let port = if self.copy_source.is_some() {
             openssh.to_owned()
         } else {
@@ -759,9 +752,6 @@ impl HostForm {
         };
         if host.port.is_empty() && !self.is_duplicate() {
             host.port = "22".into();
-        }
-        if self.original.is_none() && !self.is_duplicate() && host.user.is_empty() {
-            host.user = self.default_user.clone();
         }
         if let Some(original) = &self.original {
             // The selected alias identifies the edited host until explicitly removed.

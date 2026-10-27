@@ -823,17 +823,15 @@ fn simple_host_is_created_without_visiting_advanced_options() {
 fn empty_fields_say_what_they_mean_and_examples_are_never_values() {
     let mut m = model(serde_json::json!({}));
     add_form(&mut m, "config");
-    let user = host_form(&m).default_user.clone();
     let text = screen(&mut m, 110, 30);
     for expected in [
-        "requis".to_owned(),
-        format!("{user} — défaut, écrit à l'enregistrement"),
-        "22 — défaut OpenSSH, non écrit".to_owned(),
-        "laissé à OpenSSH".to_owned(),
+        "requis",
+        "Utilisateur       laissé à OpenSSH",
+        "22 — défaut OpenSSH, non écrit",
         // The example of the focused field is a hint under the form, not a value.
-        "ex. : api-prod".to_owned(),
+        "ex. : api-prod",
     ] {
-        assert!(text.contains(&expected), "missing {expected}: {text}");
+        assert!(text.contains(expected), "missing {expected}: {text}");
     }
     assert!(
         !text.contains("192.168.1.100"),
@@ -847,7 +845,8 @@ fn empty_fields_say_what_they_mean_and_examples_are_never_values() {
     let Action::Save(None, host, _) = m.key(ctrl('s')) else {
         panic!("Ctrl+S previews from any field")
     };
-    assert_eq!(host.user, user);
+    // An empty field writes nothing: the local user name is never added.
+    assert!(host.user.is_empty());
     assert_eq!(
         host.port, "22",
         "default port: never serialised as a directive"
@@ -1534,4 +1533,102 @@ fn group_sheet_explains_its_criterion() {
         text.contains("dont le tag principal est celui-ci"),
         "{text}"
     );
+}
+
+/// Column where `needle` starts on its row, in terminal cells.
+fn column_of(text: &str, needle: &str) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    let row = text
+        .lines()
+        .find(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("{needle} is displayed: {text}"));
+    row[..row.find(needle).unwrap()].width()
+}
+
+#[test]
+fn wide_terminals_keep_controls_and_counts_next_to_their_content() {
+    // Full HD, 4K and 32:9 terminals: nothing useful is pushed to the far edge.
+    for width in [200, 380, 500] {
+        let mut m = model(serde_json::json!({}));
+        m.metadata.insert(
+            "alpha".into(),
+            HostMetadata {
+                note: "note".into(),
+                ..HostMetadata::default()
+            },
+        );
+        // List: the host count follows the filters or the search hint.
+        let text = screen(&mut m, width, 50);
+        assert!(column_of(&text, "2 hôtes") < 40, "{width}: {text}");
+        m.query.set("alp");
+        m.filter(true);
+        let text = screen(&mut m, width, 50);
+        assert!(column_of(&text, "1 hôte sur 2") < 80, "{width}");
+        m.search_focus = true;
+        assert!(
+            column_of(&screen(&mut m, width, 50), "1 hôte sur 2") < 40,
+            "{width}"
+        );
+        m.search_focus = false;
+        m.query.set("");
+        m.filter(true);
+        // Table: the last column stays within reading distance of the name.
+        assert!(
+            column_of(&screen(&mut m, width, 50), "Last Attempt") < 140,
+            "{width}"
+        );
+        // Host form: every button sits right after its value.
+        m.key(key(KeyCode::Char('e')));
+        m.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT));
+        let View::Host(form) = &mut m.view else {
+            panic!()
+        };
+        form.reveal(forms::Section::Organization);
+        let text = screen(&mut m, width, 50);
+        for button in ["Choisir ]", "Retirer ]", "Modifier ]", "Annuler ]"] {
+            assert!(column_of(&text, button) < 70, "{width}: {button}: {text}");
+        }
+        // A long value moves its button along, still attached and within the form.
+        let View::Host(form) = &mut m.view else {
+            panic!()
+        };
+        form.inputs[4].set(&"k".repeat(60));
+        let text = screen(&mut m, width, 50);
+        let end_of_value = column_of(&text, "kkkk") + 60;
+        assert_eq!(
+            column_of(&text, "[  Choisir ]"),
+            end_of_value + 2,
+            "{width}"
+        );
+        m.view = View::List;
+        m.parents.clear();
+        // Add form: the destination path keeps its button attached.
+        add_form(&mut m, "/etc/ssh/config");
+        let text = screen(&mut m, width, 50);
+        assert!(column_of(&text, "Changer ]") < 50, "{width}: {text}");
+        m.view = View::List;
+        m.parents.clear();
+        // Sheet, palette and confirmation are bounded panels, never full width.
+        m.key(key(KeyCode::Char('i')));
+        let text = screen(&mut m, width, 50);
+        let fermer = column_of(&text, "Fermer ]");
+        assert!(fermer - column_of(&text, "Connexion ]") < 80, "{width}");
+        m.key(key(KeyCode::Esc));
+        // Tables of the other screens keep their last column in reach too.
+        m.key(key(KeyCode::F(7)));
+        assert!(
+            column_of(&screen(&mut m, width, 50), "State") < 160,
+            "{width}"
+        );
+        m.key(key(KeyCode::Esc));
+        m.tunnel_profiles.insert(
+            "alpha".into(),
+            BTreeMap::from([("db".to_owned(), Forward::default())]),
+        );
+        m.key(key(KeyCode::F(6)));
+        assert!(
+            column_of(&screen(&mut m, width, 50), "Forwarding") < 160,
+            "{width}"
+        );
+    }
 }

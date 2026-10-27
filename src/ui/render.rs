@@ -10,6 +10,9 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 const CYAN: Color = Color::Rgb(0, 173, 216);
 const GRAY: Color = Color::DarkGray;
+use nav::{FORM_WIDTH, TABLE_WIDTH};
+/// Smallest zone kept for a value before the button that follows it.
+const VALUE_ZONE: usize = 24;
 fn accent() -> Style {
     Style::default().fg(CYAN).add_modifier(Modifier::BOLD)
 }
@@ -358,9 +361,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         };
         // The focus is named, not only coloured.
         let border = block("● Recherche", true).title_bottom(
-            Line::from(format!(" {} ", host_count(m)))
-                .right_aligned()
-                .style(Style::default().fg(GRAY)),
+            Line::from(format!(" {} ", host_count(m))).style(Style::default().fg(GRAY)),
         );
         let search_area = if zone[0].height >= 3 {
             border.inner(zone[0])
@@ -394,7 +395,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         block("● Hôtes", true)
     };
     let inner = border.inner(table_area);
-    let plan = columns::layout(&m.preferences.host_columns, inner.width);
+    let plan = columns::layout(&m.preferences.host_columns, inner.width.min(TABLE_WIDTH));
     let widths: Vec<_> = plan.iter().map(|(_, width)| *width).collect();
     let header = Row::new(plan.iter().map(|(column, _)| {
         let sorted = match column {
@@ -632,7 +633,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         Paragraph::new(help).style(Style::default().fg(GRAY)),
         chunks[5],
     );
-    inner.width
+    inner.width.min(TABLE_WIDTH)
 }
 
 /// Hosts kept by the filters out of all loaded hosts. Group headers are rows of
@@ -714,12 +715,13 @@ fn filter_band(
                 keymap.hint(A::Search),
                 keymap.hint(A::ClearSearch)
             );
-            if left.width() + hint.width() + count.width() + 2 <= width {
+            if left.width() + hint.width() + count.width() + 3 <= width {
                 left.push_str(&hint);
             }
         }
-        // The count sits on the right while there is room; filters win otherwise.
-        let room = width.saturating_sub(count.width() + 2);
+        // The count follows the filters, never pushed to the far edge of a wide
+        // terminal; when the row is too short the filters win.
+        let room = width.saturating_sub(count.width() + 3);
         let active = !filters.is_empty();
         let style = if active {
             Style::default().fg(Color::Yellow)
@@ -727,11 +729,9 @@ fn filter_band(
             Style::default().fg(GRAY)
         };
         if with_query && left.width() <= room {
-            let padding = width - left.width() - count.width();
             lines.push(Line::from(vec![
                 Span::styled(left, style),
-                Span::raw(" ".repeat(padding)),
-                Span::styled(count, Style::default().fg(GRAY)),
+                Span::styled(format!(" • {count}"), Style::default().fg(GRAY)),
             ]));
         } else {
             lines.push(Line::styled(ellipsize(&left, width), style));
@@ -1287,7 +1287,7 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
     };
     f.render_widget(Paragraph::new(title).style(accent()), parts[0]);
 
-    let width = usize::from(parts[1].width);
+    let width = usize::from(parts[1].width).min(FORM_WIDTH);
     // Narrow terminals stack the label above its input.
     let stacked = width < 44;
     let label_width = if stacked { 0 } else { 18 };
@@ -1341,7 +1341,9 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
         match stop {
             Stop::Control(Control::File) => {
                 let button = nav::button("Changer", focused);
-                let room = width.saturating_sub(marker(focused).width() + 10 + button.width() + 1);
+                // A path may use the whole row: its button follows it directly.
+                let room = usize::from(parts[1].width)
+                    .saturating_sub(marker(focused).width() + 10 + button.width() + 1);
                 lines.push(Line::from(vec![
                     Span::styled(
                         format!("{}Fichier : ", marker(focused)),
@@ -1388,7 +1390,7 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
                     ),
                 };
                 let prefix = marker(focused).width() + label_width;
-                let reserved = trailing.as_ref().map_or(0, |button| button.width() + 1);
+                let reserved = trailing.as_ref().map_or(0, |button| button.width() + 2);
                 let room = width.saturating_sub(prefix + reserved);
                 let mut row = vec![];
                 if stacked {
@@ -1401,10 +1403,13 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
                     ));
                 }
                 let text = input_span(input, focused, room);
-                let padding = room.saturating_sub(text.width());
+                // The button stays next to its value: after a short zone that
+                // only grows with the text, never at the edge of the terminal.
+                let zone = text.width().max(VALUE_ZONE).min(room);
+                let padding = zone.saturating_sub(text.width());
                 row.push(text);
                 if let Some(button) = trailing {
-                    row.push(Span::raw(" ".repeat(padding + 1)));
+                    row.push(Span::raw(" ".repeat(padding + 2)));
                     row.push(button);
                 }
                 if focused {
@@ -1517,11 +1522,11 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
                 };
                 let button = nav::button("Modifier", focused);
                 let head = format!("{}  {:<16}", marker(focused), "Note personnelle");
-                let room = width.saturating_sub(head.width() + button.width() + 1);
+                let room = width.saturating_sub(head.width() + button.width() + 2);
                 lines.push(Line::from(vec![
                     Span::styled(head, label_style(focused)),
                     Span::styled(
-                        format!("{:<room$} ", ellipsize(&preview, room)),
+                        format!("{}  ", ellipsize(&preview, room)),
                         Style::default().fg(GRAY),
                     ),
                     button,
@@ -2306,7 +2311,7 @@ fn profile_list(f: &mut Frame, m: &Model, area: Rect) {
                         .bg(CYAN)
                         .add_modifier(Modifier::BOLD),
                 ),
-                parts[1],
+                nav::bounded(parts[1], TABLE_WIDTH),
                 &mut state,
             );
         }

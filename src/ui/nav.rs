@@ -10,6 +10,20 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+/// Widest a form or a table grows. On a very wide terminal the content stays
+/// together on the left instead of spreading: a button or a column pushed to
+/// the far edge is easy to miss.
+pub(super) const FORM_WIDTH: usize = 96;
+pub(super) const TABLE_WIDTH: u16 = 160;
+
+/// The left part of `area`, at most `width` columns wide.
+pub(super) fn bounded(area: Rect, width: u16) -> Rect {
+    Rect {
+        width: area.width.min(width),
+        ..area
+    }
+}
+
 /// Esc and Ctrl+C follow one rule everywhere: leave the local step, one level up.
 pub(super) fn cancels(key: KeyEvent) -> bool {
     key.code == KeyCode::Esc

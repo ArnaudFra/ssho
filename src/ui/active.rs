@@ -174,7 +174,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &Model, area: ratatui::layout::Rec
     .row_highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan));
     f.render_stateful_widget(
         table,
-        areas[1],
+        nav::bounded(areas[1], nav::TABLE_WIDTH),
         &mut TableState::default().with_selected(Some(selected)),
     );
     let detail = m.tunnels.get(selected).map(|r| format!("Config at launch: {}\nExit: {}\n{}", r.snapshot.config.display(), r.exit_code.map_or_else(|| "pending".into(), |n| n.to_string()), r.diagnostic)).unwrap_or_else(|| "No owned tunnels. Choose Tunnel only (Ctrl+T) in a forwarding form, then Ctrl+L to start.".into());
