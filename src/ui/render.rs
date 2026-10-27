@@ -155,6 +155,7 @@ fn draw_view(f: &mut Frame, m: &mut Model, area: Rect) {
         View::Active { .. } => active::draw(f, m, area),
         View::Profiles(_) => profile_list(f, m, area),
         View::Info(_) => info(f, m, area),
+        View::CopyValue { .. } => copy_value(f, m, area),
         View::GroupInfo { .. } => group_info(f, m, area),
         View::Help => help(f, m, area),
         View::Files { .. } => files(f, m, area),
@@ -1920,14 +1921,38 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     let View::Info(h) = &m.view else {
         return;
     };
-    let area = panel(area, 92, 28);
+    let area = panel(area, 96, 34);
     let title = format!("SSH Host Information: {}", h.name);
     let border = block(&title, true);
     let inner = border.inner(area);
     f.render_widget(border, area);
+    // Under the content: the named actions, the keys, then what the last key did.
+    let notice: Vec<Line> = if let Some((label, value)) = &m.copied {
+        // Each on its own row: the value can be selected by hand if the
+        // terminal ignored the clipboard request.
+        vec![
+            Line::styled(
+                format!("Copie demandée au terminal (OSC 52) : {label}"),
+                Style::default().fg(Color::Green),
+            ),
+            Line::styled(
+                "Si le collage reste vide, sélectionnez la valeur ci-dessous :",
+                Style::default().fg(GRAY),
+            ),
+            Line::from(value.clone()),
+        ]
+    } else if !m.hint.is_empty() {
+        vec![Line::styled(
+            m.hint.clone(),
+            Style::default().fg(Color::Yellow),
+        )]
+    } else {
+        vec![]
+    };
     let parts = Layout::vertical([
         Constraint::Min(1),
-        Constraint::Length(3),
+        Constraint::Length(if inner.height >= 6 { 2 } else { 0 }),
+        Constraint::Length((notice.len() as u16).min(inner.height.saturating_sub(4))),
         Constraint::Length(if m.error.is_empty() { 0 } else { 3 }),
     ])
     .split(inner);
@@ -1941,21 +1966,65 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     let lines = highlight_details(m, lines);
     m.page = usize::from(parts[0].height).max(1);
     details::render_rows(f, parts[0], lines, &mut m.scroll);
+    let mut buttons = vec![];
+    for (index, label) in details::SHEET_ACTIONS.into_iter().enumerate() {
+        buttons.push(nav::button(label, m.sheet_focus == Some(index)));
+        buttons.push(Span::raw(" "));
+    }
     f.render_widget(
-        Paragraph::new(
-            "Actions: ↑/↓/PgUp/PgDn scroll • F5: reload\n  e/Enter - Switch to edit mode\n  q/Esc   - Return to host list",
-        )
-        .style(Style::default().fg(GRAY)),
+        Paragraph::new(vec![
+            Line::from(buttons),
+            Line::styled(
+                "↑↓/PgUp/PgDn défiler • Tab/←→ : actions • F5 : recharger • F2 : autres actions • Échap : retour",
+                Style::default().fg(GRAY),
+            ),
+        ]),
         parts[1],
     );
+    f.render_widget(Paragraph::new(notice).wrap(Wrap { trim: false }), parts[2]);
     if !m.error.is_empty() {
         f.render_widget(
             Paragraph::new(format!("Error: {}", m.error))
                 .style(Style::default().fg(Color::Red))
                 .wrap(Wrap { trim: false }),
-            parts[2],
+            parts[3],
         );
     }
+}
+
+fn copy_value(f: &mut Frame, m: &Model, area: Rect) {
+    let View::CopyValue {
+        host,
+        values,
+        selected,
+    } = &m.view
+    else {
+        return;
+    };
+    let items = values
+        .iter()
+        .map(|(label, value)| select::Item {
+            label: label.clone(),
+            aside: value.clone(),
+            detail: vec![value.clone()],
+            current: false,
+            search: String::new(),
+        })
+        .collect();
+    select::draw(
+        f,
+        inset(area),
+        select::Spec {
+            title: format!("Copier une valeur — {host}"),
+            subject: "Une seule valeur est copiée ; rien n'est exporté".into(),
+            items,
+            selected: *selected,
+            error: "",
+            apply: "copier",
+            query: None,
+            empty: "Aucune valeur à copier.",
+        },
+    );
 }
 fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     let area = panel(area, 96, 44);
@@ -2320,6 +2389,13 @@ pub(super) fn group_content(key: &groups::Key, count: usize, aliases: bool) -> V
     if let Some(tag) = tag {
         lines.push(Line::from(format!("Primary tag: {tag}")));
     }
+    // Why these hosts are together, in the terms of the grouping mode.
+    lines.push(Line::from(match tag {
+        None => "Critère : hôtes déclarés dans ce fichier de configuration.",
+        Some(_) => {
+            "Critère : hôtes de ce fichier dont le tag principal est celui-ci (premier tag propre, sinon premier tag hérité, sinon « Sans tag »)."
+        }
+    }));
     lines.extend([
         Line::from(format!("{count} matching {}", if aliases { "blocks" } else { "hosts" })),
         Line::from("In list: Enter/Space toggles group; Left closes or selects parent; Right opens or selects child."),

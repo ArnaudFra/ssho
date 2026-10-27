@@ -1416,3 +1416,122 @@ fn grouped_block_shows_its_connection_alias_and_other_aliases() {
         "{narrow}"
     );
 }
+
+#[test]
+fn reading_a_sheet_never_edits_and_actions_are_named() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('i')));
+    let text = screen(&mut m, 110, 40);
+    for expected in [
+        "── Résumé",
+        "── Configuration effective",
+        "── Déclaration et source",
+        "── Disponibilité mesurée",
+        "── Historique des connexions",
+        "[  Connexion ] [  Modifier ] [  Note ] [  Copier ] [  Fermer ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // Enter while reading changes nothing and says how to act.
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(matches!(m.view, View::Info(_)));
+    assert!(screen(&mut m, 110, 40).contains("Entrée seule ne modifie rien"));
+    // Tab names the action before Enter runs it; the arrows wrap.
+    m.key(key(KeyCode::Tab));
+    assert!(screen(&mut m, 110, 40).contains("[▶ Connexion ]"));
+    m.key(key(KeyCode::Left));
+    assert!(screen(&mut m, 110, 40).contains("[▶ Fermer ]"));
+    m.key(key(KeyCode::Right));
+    m.key(key(KeyCode::Right));
+    assert!(screen(&mut m, 110, 40).contains("[▶ Modifier ]"));
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(&m.view, View::Host(form) if form.original.is_some()));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::Info(_)));
+    m.key(key(KeyCode::BackTab));
+    assert_eq!(
+        m.key(key(KeyCode::Enter)),
+        Action::Connect("alpha".into(), None)
+    );
+    // A sheet opened again starts in reading mode.
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Char('i')));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(matches!(m.view, View::Info(_)));
+}
+
+#[test]
+fn copy_is_explicit_with_feedback_and_a_selectable_fallback() {
+    let mut m = model(serde_json::json!({}));
+    m.all[0].user = "deploy".into();
+    m.all[0].source_file = "/etc/ssh/work".into();
+    m.filter(false);
+    m.key(key(KeyCode::Char('i')));
+    for _ in 0..4 {
+        m.key(key(KeyCode::Tab));
+    }
+    assert!(screen(&mut m, 110, 40).contains("[▶ Copier ]"));
+    m.key(key(KeyCode::Enter));
+    let text = screen(&mut m, 110, 30);
+    for expected in [
+        "Copier une valeur — alpha",
+        "Une seule valeur est copiée ; rien n'est exporté",
+        "Alias",
+        "Commande             ssh alpha",
+        "Utilisateur@adresse  deploy@alpha.example",
+        "Fichier source       /etc/ssh/work",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // Cancelling copies nothing.
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::Info(_)) && m.copied.is_none());
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Down));
+    m.key(key(KeyCode::Down));
+    m.key(key(KeyCode::Down));
+    assert_eq!(
+        m.key(key(KeyCode::Enter)),
+        Action::Copy("deploy@alpha.example".into())
+    );
+    let text = screen(&mut m, 110, 40);
+    assert!(
+        text.contains("Copie demandée au terminal (OSC 52) : Utilisateur@adresse"),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.contains("│deploy@alpha.example")),
+        "the value is on a line of its own, selectable by hand: {text}"
+    );
+    // The clipboard request is the standard OSC 52 sequence, base64-encoded.
+    assert_eq!(details::osc52("a"), "\x1b]52;c;YQ==\x07");
+    assert_eq!(details::osc52("ab"), "\x1b]52;c;YWI=\x07");
+    assert_eq!(details::osc52("ssh é"), "\x1b]52;c;c3NoIMOp\x07");
+}
+
+#[test]
+fn group_sheet_explains_its_criterion() {
+    let mut m = model(serde_json::json!({}));
+    m.all[0].source_file = "/etc/ssh/work".into();
+    m.all[1].source_file = "/etc/ssh/work".into();
+    m.all[0].tags = vec!["prod".into()];
+    m.preferences.group_mode = GroupMode::FileTags;
+    m.filter(false);
+    m.key(key(KeyCode::Home));
+    m.key(key(KeyCode::Char('i')));
+    let text = screen(&mut m, 120, 24);
+    assert!(
+        text.contains("Critère : hôtes déclarés dans ce fichier de configuration."),
+        "{text}"
+    );
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Down));
+    assert!(m.selected_group().is_some());
+    m.key(key(KeyCode::Char('i')));
+    let text = screen(&mut m, 120, 24);
+    assert!(
+        text.contains("dont le tag principal est celui-ci"),
+        "{text}"
+    );
+}

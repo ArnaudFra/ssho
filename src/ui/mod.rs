@@ -97,6 +97,12 @@ enum View {
     },
     Host(Box<HostForm>),
     Info(Host),
+    /// Choose which value of the host sheet to copy.
+    CopyValue {
+        host: String,
+        values: Vec<(String, String)>,
+        selected: usize,
+    },
     GroupInfo {
         key: groups::Key,
         count: usize,
@@ -186,6 +192,8 @@ enum Action {
     Add(String),
     /// Change the destination file of the open add or copy draft.
     Retarget,
+    /// Ask the terminal to put this text in the clipboard.
+    Copy(String),
     Move(Host),
     Duplicate(Host),
     SaveCopy(Box<Host>, PathBuf),
@@ -249,6 +257,10 @@ struct Model {
     hint: String,
     // Search text of the open selector; a selector never opens another one.
     selector_query: Input,
+    // Focused action of the host sheet; `None` while its content is being read.
+    sheet_focus: Option<usize>,
+    // Last value handed to the terminal clipboard, kept visible and selectable.
+    copied: Option<(String, String)>,
     view: View,
     parents: Vec<(View, usize)>,
     preferences: AppConfig,
@@ -307,6 +319,8 @@ impl Model {
                 limit: 64,
                 ..Input::default()
             },
+            sheet_focus: None,
+            copied: None,
             view: View::List,
             parents: vec![],
             preferences,
@@ -631,6 +645,10 @@ impl Model {
         ) {
             self.selector_query.set("");
         }
+        if matches!(view, View::Info(_)) {
+            self.sheet_focus = None;
+            self.copied = None;
+        }
         let parent = std::mem::replace(&mut self.view, view);
         self.parents.push((parent, self.scroll));
         self.scroll = 0;
@@ -933,19 +951,72 @@ impl Model {
                 if k.code == KeyCode::F(5) {
                     return Action::Reload;
                 }
-                if matches!(k.code, KeyCode::Char('e') | KeyCode::Enter) {
-                    let view = View::Host(Box::new(HostForm::edit(h.clone())));
-                    self.open_view(view);
-                    return Action::None;
-                }
-                if matches!(k.code, KeyCode::Esc | KeyCode::Char('q'))
-                    || (ctrl && k.code == KeyCode::Char('c'))
-                {
-                    self.back();
-                } else {
-                    self.scroll_key(k);
+                let host = h.clone();
+                let buttons = details::SHEET_ACTIONS.len();
+                match k.code {
+                    // Reading never edits: Enter only runs the action that Tab
+                    // or the arrows put the focus on.
+                    KeyCode::Tab | KeyCode::Right => {
+                        self.sheet_focus =
+                            Some(self.sheet_focus.map_or(0, |focus| (focus + 1) % buttons));
+                    }
+                    KeyCode::BackTab | KeyCode::Left => {
+                        self.sheet_focus = Some(
+                            self.sheet_focus
+                                .map_or(buttons - 1, |focus| (focus + buttons - 1) % buttons),
+                        );
+                    }
+                    KeyCode::Enter => match self.sheet_focus {
+                        None => {
+                            self.hint =
+                                "Tab ou ←/→ : choisir une action — Entrée seule ne modifie rien"
+                                    .into();
+                        }
+                        Some(0) => return Action::Connect(host.name, None),
+                        Some(1) => self.open_view(View::Host(Box::new(HostForm::edit(host)))),
+                        Some(2) => {
+                            let note = self.note(&host.name).to_owned();
+                            self.open_view(View::Note(notes::Editor::new(host.name, &note)));
+                        }
+                        Some(3) => {
+                            let values = details::copyable(&host, self.effective.get(&host.name));
+                            self.open_view(View::CopyValue {
+                                host: host.name,
+                                values,
+                                selected: 0,
+                            });
+                        }
+                        Some(_) => self.back(),
+                    },
+                    KeyCode::Char('e') => {
+                        self.open_view(View::Host(Box::new(HostForm::edit(host))));
+                    }
+                    KeyCode::Char('q') => self.back(),
+                    _ if nav::cancels(k) => self.back(),
+                    _ => self.scroll_key(k),
                 }
                 return Action::None;
+            }
+            View::CopyValue {
+                values, selected, ..
+            } => {
+                let texts: Vec<String> = values.iter().map(|(label, _)| label.clone()).collect();
+                return match select::key(selected, &texts, None, k) {
+                    select::Outcome::Cancel => {
+                        self.back();
+                        Action::None
+                    }
+                    select::Outcome::Apply => {
+                        let Some(pair) = values.get(*selected).cloned() else {
+                            return Action::None;
+                        };
+                        self.back();
+                        let value = pair.1.clone();
+                        self.copied = Some(pair);
+                        Action::Copy(value)
+                    }
+                    select::Outcome::Stay => Action::None,
+                };
             }
             View::Help => {
                 if matches!(
@@ -1747,6 +1818,15 @@ pub fn run(
             Action::SourceFilter => source_filter::open(&mut m, config).map(|_| false),
             Action::Add(seed) => select_files(&mut m, config, None, seed).map(|_| false),
             Action::Retarget => select_target(&mut m, config).map(|_| false),
+            Action::Copy(value) => {
+                // The terminal decides whether it honours the request; the sheet
+                // shows the value so it can always be selected by hand.
+                execute!(
+                    io::stdout(),
+                    crossterm::style::Print(details::osc52(&value))
+                )?;
+                Ok(false)
+            }
             Action::Duplicate(host) => select_duplicate_files(&mut m, config, host).map(|_| false),
             Action::Move(host) => {
                 select_files(&mut m, config, Some(host), String::new()).map(|_| false)

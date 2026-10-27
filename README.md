@@ -183,6 +183,14 @@ Le formulaire d'hôte tient sur **une page**, sans onglets, et son titre nomme l
 
 Sur un terminal de moins de 44 colonnes, le libellé passe au-dessus de sa saisie. Le curseur natif reste visible dans le champ actif ; un bouton ou un titre de section ayant le focus n'a pas de curseur et ne reçoit ni frappe ni collage.
 
+### Fiches d'hôte et de groupe
+
+La fiche d'un hôte (`i`) est organisée en cinq sections, les mêmes que le volet F4 : **Résumé** (alias, adresse, utilisateur, port, alias du bloc, tags, note), **Configuration effective** (résolution `ssh -G`, clés, proxys), **Déclaration et source** (fichier et ligne, cible déclarée, options), **Disponibilité mesurée** (méthode SSH ou ICMP, état, durée, cause) et **Historique des connexions**. Une tentative, une fin avec code 0, un état de disponibilité et une authentification restent des informations distinctes, chacune sur sa ligne.
+
+- **Lire ne modifie jamais** : Entrée seule ne fait rien et le rappelle. *Auparavant Entrée ouvrait l'édition.* Les actions sont nommées sous la fiche — **Connexion**, **Modifier**, **Note**, **Copier**, **Fermer** — et Tab ou ←/→ y placent le focus avant qu'Entrée ne les lance ; `e` reste un accès direct à l'édition, F2 donne les autres actions.
+- **Copier** ouvre un choix d'une seule valeur (alias, commande `ssh alias`, adresse, `utilisateur@adresse`, fichier source). La copie est demandée au terminal par la séquence OSC 52, puis la valeur reste affichée seule sur sa ligne : si le terminal ou le multiplexeur n'honore pas la demande (tmux exige `set -g set-clipboard on`), elle se sélectionne à la main. Rien d'autre n'est exporté.
+- La **fiche d'un groupe** indique son critère : hôtes d'un fichier, ou hôtes de ce fichier partageant un tag principal.
+
 ### Signes de la liste, groupes et sélection multiple
 
 Chaque signe de la colonne Name a sa zone, pour qu'un favori ne ressemble jamais à une cible de lot :

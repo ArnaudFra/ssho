@@ -583,8 +583,48 @@ def scenario_list_marks():
           'search and collapse, terminal restored')
 
 
+def scenario_host_sheet():
+    preferences()
+    s = Session('host_sheet', width=110, height=40)
+    s.expect('?: help')
+    s.send(b'i')
+    s.expect('SSH Host Information: alpha')
+    for section in ['── Résumé', '── Configuration effective', '── Déclaration et source',
+                    '── Disponibilité mesurée', '── Historique des connexions']:
+        s.expect(section)
+    s.expect('[  Connexion ] [  Modifier ] [  Note ] [  Copier ] [  Fermer ]')
+    # Reading never edits: Enter alone does nothing but say how to act.
+    s.send(b'\r')
+    s.expect('Entrée seule ne modifie rien')
+    s.absent('Hôtes > Modifier')
+    s.send(b'\t\t')
+    s.expect('[▶ Modifier ]')
+    s.send(b'\r')
+    s.expect('Hôtes > Modifier alpha')
+    s.send(ESC)
+    s.expect('SSH Host Information: alpha')
+    # Copy is explicit: one named value, a clipboard request, a selectable fallback.
+    s.send(b'\t\t')
+    s.expect('[▶ Copier ]')
+    mark = len(s.raw)
+    s.send(b'\r')
+    s.expect('Copier une valeur — alpha')
+    s.expect('ssh alpha')
+    s.send(DOWN + b'\r')
+    s.expect('Copie demandée au terminal (OSC 52) : Commande')
+    assert b'\x1b]52;c;c3NoIGFscGhh\x07' in s.raw[mark:], 'OSC 52 request for "ssh alpha"'
+    assert any(line.strip('│ ') == 'ssh alpha' for line in s.drain(.2).splitlines())
+    s.send(ESC)
+    s.expect('?: help')
+    assert not connections() and CONFIG.read_bytes() == ORIGINAL_CONFIG
+    s.send(CTRL_C)
+    s.close()
+    print('PTY PASS [host_sheet]: sectioned sheet, named actions, Enter never edits, explicit copy '
+          'with OSC 52 request and selectable value, terminal restored')
+
+
 SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,
-             'list_marks': scenario_list_marks}
+             'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

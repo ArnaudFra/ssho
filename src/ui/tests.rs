@@ -376,7 +376,10 @@ fn sorting_history_and_table_shortcuts() {
     );
     m.key(key(KeyCode::Char('i')));
     assert!(matches!(m.view, View::Info(_)));
+    // Reading a sheet never edits: Enter alone does nothing, `e` asks for it.
     m.key(key(KeyCode::Enter));
+    assert!(matches!(m.view, View::Info(_)));
+    m.key(key(KeyCode::Char('e')));
     assert!(matches!(m.view, View::Host(_)));
     m.key(key(KeyCode::Esc));
     assert!(matches!(m.view, View::Info(_)));
@@ -493,7 +496,7 @@ fn secondary_views_render_and_scroll_without_panics() {
     m.view = View::Info(h.clone());
     let info = screen(&mut m, 100, 30);
     assert!(info.contains("key2"));
-    assert!(info.contains("Actions:"));
+    assert!(info.contains("[  Connexion ]") && info.contains("[  Modifier ]"));
     m.view = View::Help;
     let help = screen(&mut m, 100, 30);
     for section in ["Connexion", "Organisation", "Outils", "Application"] {
@@ -1184,7 +1187,7 @@ fn details_long_values_scroll_to_all_tails_without_changing_search_or_selection(
     assert!(m.query.value.is_empty());
     assert!(m.search_focus);
     let bottom = screen(&mut m, 120, 20);
-    assert!(bottom.contains("Tags: #work"));
+    assert!(bottom.contains("Last attempt: aucune connexion enregistrée"));
     for _ in 0..120 {
         m.key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::CONTROL));
     }
@@ -1192,7 +1195,7 @@ fn details_long_values_scroll_to_all_tails_without_changing_search_or_selection(
     for _ in 0..120 {
         m.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL));
     }
-    assert!(screen(&mut m, 120, 20).contains("Tags: #work"));
+    assert!(screen(&mut m, 120, 20).contains("Last attempt: aucune connexion enregistrée"));
     m.key(key(KeyCode::Down));
     assert!(
         screen(&mut m, 120, 20).contains("Host: beta"),
@@ -1270,14 +1273,15 @@ fn details_alt_arrows_scroll_without_navigating_or_consuming_search_text() {
         let mut m = model();
         m.search_focus = search_focus;
         m.key(key(KeyCode::F(4)));
-        assert!(screen(&mut m, 120, 20).contains("Host: alpha"));
+        let output = screen(&mut m, 120, 20);
+        assert!(output.contains("── Résumé") && output.contains("Host: alpha"));
         m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
         let output = screen(&mut m, 120, 20);
-        assert!(!output.contains("Host: alpha"));
-        assert!(output.contains("Hostname/IP: a.example"));
+        assert!(!output.contains("── Résumé"));
+        assert!(output.contains("Host: alpha"));
         assert_eq!(m.selected, 0, "Alt+Down scrolls details, not the list");
         m.key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
-        assert!(screen(&mut m, 120, 20).contains("Host: alpha"));
+        assert!(screen(&mut m, 120, 20).contains("── Résumé"));
         assert_eq!(m.search_focus, search_focus);
         if search_focus {
             typing(&mut m, "[]jk");

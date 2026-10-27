@@ -105,16 +105,28 @@ pub(super) fn content(
                 .unwrap_or_else(|| format!("{status} ({latency})"))
         })
         .unwrap_or_else(|| "? Unknown (not checked)".into());
-    let mut sections = vec![
+    // Grouped by what the value tells: who the host is, what OpenSSH resolves,
+    // what the file declares, what was measured and what was attempted. An
+    // attempt, an exit code 0, an availability state and an authentication are
+    // different facts and keep their own lines.
+    let summary = vec![
         ("Host", host.name.clone()),
-        ("Personal note", optional(note)),
-        ("Configuration", resolution),
         ("Hostname/IP", optional(&host.hostname)),
         ("User", optional(&host.user)),
         ("Port", optional(&host.port)),
+        ("Aliases", optional(&host.aliases.join(", "))),
+        ("Tags", optional(&host.display_tags())),
+        ("Personal note", optional(note)),
+    ];
+    let resolved = vec![
+        ("Configuration", resolution),
         ("Identity File", optional(&identities.join("\n"))),
         ("ProxyJump", optional(&host.proxy_jump)),
         ("ProxyCommand", optional(&host.proxy_command)),
+        ("RemoteCommand", optional(&host.remote_command)),
+        ("RequestTTY", optional(&host.request_tty)),
+    ];
+    let declaration = vec![
         (
             "Declared source",
             format!("{}:{}", host.source_file.display(), host.line_number),
@@ -128,16 +140,15 @@ pub(super) fn content(
                 optional(&declared.port)
             ),
         ),
+        ("Declared SSH Options", optional(&declared.options)),
+    ];
+    let availability = vec![
         ("Diagnostic", diagnostic),
         ("Availability scope", scope.into()),
-        ("Declared SSH Options", optional(&declared.options)),
-        ("RemoteCommand", optional(&host.remote_command)),
-        ("RequestTTY", optional(&host.request_tty)),
-        ("Aliases", optional(&host.aliases.join(", "))),
-        ("Tags", optional(&host.display_tags())),
     ];
+    let mut attempts = vec![];
     if let Some(history) = history {
-        sections.push((
+        attempts.push((
             "Last attempt",
             format!(
                 "{} ({} attempts)",
@@ -145,7 +156,7 @@ pub(super) fn content(
             ),
         ));
         if let Some(result) = &history.last_result {
-            sections.push((
+            attempts.push((
                 "Process result",
                 format!(
                     "{}: {}",
@@ -161,12 +172,33 @@ pub(super) fn content(
             ));
         }
         if let Some(time) = history.last_successful_completion {
-            sections.push(("Last exit 0 completion", time.to_string()));
+            attempts.push(("Last exit 0 completion", time.to_string()));
         }
+    } else {
+        attempts.push(("Last attempt", "aucune connexion enregistrée".into()));
     }
-    sections
-        .into_iter()
-        .flat_map(|(label, value)| {
+    let title = |text: &str| {
+        // Two spans: a title is never a continuation of the field above it.
+        Line::from(vec![
+            Span::styled(
+                format!("── {text} "),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            Span::raw(""),
+        ])
+    };
+    [
+        ("Résumé", summary),
+        ("Configuration effective", resolved),
+        ("Déclaration et source", declaration),
+        ("Disponibilité mesurée", availability),
+        ("Historique des connexions", attempts),
+    ]
+    .into_iter()
+    .flat_map(|(section, fields)| {
+        std::iter::once(title(section)).chain(fields.into_iter().flat_map(|(label, value)| {
             value
                 .split('\n')
                 .enumerate()
@@ -181,8 +213,66 @@ pub(super) fn content(
                     })
                 })
                 .collect::<Vec<_>>()
-        })
-        .collect()
+        }))
+    })
+    .collect()
+}
+
+/// Named actions of the host sheet, in the order Tab walks them.
+pub(super) const SHEET_ACTIONS: [&str; 5] = ["Connexion", "Modifier", "Note", "Copier", "Fermer"];
+
+/// Values worth copying from a host sheet, each under the name shown to choose it.
+pub(super) fn copyable(
+    declared: &Host,
+    effective: Option<&std::result::Result<runtime::effective::EffectiveConfig, String>>,
+) -> Vec<(String, String)> {
+    let projected = effective
+        .and_then(|result| result.as_ref().ok())
+        .map(|value| value.host(declared));
+    let host = projected.as_ref().unwrap_or(declared);
+    let mut values = vec![
+        ("Alias".to_owned(), declared.name.clone()),
+        ("Commande".to_owned(), format!("ssh {}", declared.name)),
+    ];
+    if !host.hostname.is_empty() {
+        values.push(("Adresse".to_owned(), host.hostname.clone()));
+        if !host.user.is_empty() {
+            values.push((
+                "Utilisateur@adresse".to_owned(),
+                format!("{}@{}", host.user, host.hostname),
+            ));
+        }
+    }
+    if !declared.source_file.as_os_str().is_empty() {
+        values.push((
+            "Fichier source".to_owned(),
+            declared.source_file.display().to_string(),
+        ));
+    }
+    values
+}
+
+/// OSC 52 asks the terminal to place text in the system clipboard. Support is
+/// the terminal's choice, so the value is always shown as well.
+pub(super) fn osc52(value: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::new();
+    for chunk in value.as_bytes().chunks(3) {
+        let bytes = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let word = u32::from(bytes[0]) << 16 | u32::from(bytes[1]) << 8 | u32::from(bytes[2]);
+        for (index, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            encoded.push(if index <= chunk.len() {
+                ALPHABET[(word >> shift & 63) as usize] as char
+            } else {
+                '='
+            });
+        }
+    }
+    format!("\x1b]52;c;{encoded}\x07")
 }
 
 /// Wrap on grapheme boundaries, including unbroken paths and commands. Slicing
