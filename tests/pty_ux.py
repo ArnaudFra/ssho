@@ -623,8 +623,46 @@ def scenario_host_sheet():
           'with OSC 52 request and selectable value, terminal restored')
 
 
+def scenario_notes():
+    preferences()
+    metadata = APP / 'metadata.json'
+    try:
+        s = Session('notes', width=110, height=30)
+        s.expect('?: help')
+        s.send(b'N')
+        s.expect('Personal note')
+        s.expect('Enregistrée')
+        s.expect("Fichier SSH de l'hôte : " + str(CONFIG))
+        s.expect(str(metadata))
+        s.expect('à ne pas confondre avec un tag')
+        s.send(b'Bastion requis\rligne 2')
+        s.expect('● Modifiée')
+        s.send(b'\t')
+        s.expect('[▶ Enregistrer ]')
+        s.send(b'x')                      # a button receives no text
+        s.send(b'\t')
+        s.expect('[▶ Annuler ]')
+        s.send(b'\r')
+        s.expect("[▶ Continuer l'édition ]")
+        s.send(b'\r')
+        s.expect('ligne 2')
+        s.send(b'\x13')                  # Ctrl+S saves from the text
+        s.expect('?: help')
+        note = json.loads(metadata.read_text())['configs'][str(CONFIG.resolve())]['hosts']['alpha']['note']
+        assert note == 'Bastion requis\nligne 2', note
+        assert CONFIG.read_bytes() == ORIGINAL_CONFIG, 'a note never touches the SSH file'
+        row = next(line for line in s.drain(.2).splitlines() if 'alpha' in line and '│' in line)
+        assert '≡' in row and 'Bastion' not in row, row
+        s.send(CTRL_C)
+        s.close()
+    finally:
+        metadata.unlink(missing_ok=True)
+    print('PTY PASS [notes]: note context and data location, modified state, buttons, resume '
+          'after cancel, saved outside the SSH file, discreet list sign, terminal restored')
+
+
 SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,
-             'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet}
+             'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

@@ -7,6 +7,8 @@ pub(super) struct Editor {
     pub input: Input,
     baseline: String,
     pub error: String,
+    /// Focused button under the text: 0 Save, 1 Cancel. `None` while typing.
+    pub button: Option<usize>,
 }
 
 impl Editor {
@@ -16,6 +18,7 @@ impl Editor {
             input: Input::new(note),
             baseline: note.into(),
             error: String::new(),
+            button: None,
         }
     }
     pub fn dirty(&self) -> bool {
@@ -34,6 +37,33 @@ impl Editor {
             KeyCode::Esc => FormEvent::Cancel,
             KeyCode::Char('c') if ctrl => FormEvent::Cancel,
             KeyCode::Char('s') if ctrl => FormEvent::Submit,
+            // Tab walks text, Save, Cancel; a newline stays the meaning of Enter
+            // in the text, so only a focused button is activated by it.
+            KeyCode::Tab => {
+                self.button = match self.button {
+                    None => Some(0),
+                    Some(0) => Some(1),
+                    Some(_) => None,
+                };
+                FormEvent::None
+            }
+            KeyCode::BackTab => {
+                self.button = match self.button {
+                    None => Some(1),
+                    Some(1) => Some(0),
+                    Some(_) => None,
+                };
+                FormEvent::None
+            }
+            _ if self.button.is_some() => match (key.code, self.button) {
+                (KeyCode::Enter | KeyCode::Char(' '), Some(0)) => FormEvent::Submit,
+                (KeyCode::Enter | KeyCode::Char(' '), Some(_)) => FormEvent::Cancel,
+                (KeyCode::Left | KeyCode::Right, Some(button)) => {
+                    self.button = Some(1 - button);
+                    FormEvent::None
+                }
+                _ => FormEvent::None,
+            },
             KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End => {
                 let chars: Vec<char> = self.input.value.chars().collect();
                 let cursor = self.input.cursor.min(chars.len());

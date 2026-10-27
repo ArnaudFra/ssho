@@ -501,7 +501,13 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         }
         name_spans.push(Span::styled(
             format!(
-                "{status} {}",
+                "{status}{}{}",
+                // A discreet sign, not a column: the note itself is in the sheet.
+                if m.note(&h.name).is_empty() {
+                    " "
+                } else {
+                    "≡"
+                },
                 if m.metadata.get(&h.name).is_some_and(|entry| entry.favorite) {
                     "*"
                 } else {
@@ -890,6 +896,12 @@ fn legend(m: &Model, width: u16) -> Option<Line<'static>> {
         .any(|&index| m.is_favorite(&m.all[index].name))
     {
         signs.push("* favori");
+    }
+    if m.visible
+        .iter()
+        .any(|&index| !m.note(&m.all[index].name).is_empty())
+    {
+        signs.push("≡ note personnelle");
     }
     if m.preferences.group_mode != GroupMode::Flat {
         signs.push("▼ ▶ groupe ouvert / replié");
@@ -2083,7 +2095,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     right.extend(
         [
             "Signes de la liste",
-            "[x] cible de lot  * favori  ▼ ▶ groupe ouvert / replié",
+            "[x] cible de lot  * favori  ≡ note  ▼ ▶ groupe",
             "+ en ligne  ! hors ligne  ~ en cours  ? inconnu",
             "a→b alias actif d'un bloc  +N alias : autres alias du bloc",
             "",
@@ -2184,20 +2196,64 @@ fn note_editor(f: &mut Frame, m: &mut Model, area: Rect) {
     let View::Note(editor) = &m.view else {
         return;
     };
-    let area = inset(area);
+    let area = nav::bounded(inset(area), nav::TABLE_WIDTH);
     let border = block("Personal note", true);
     let inner = border.inner(area);
     f.render_widget(border, area);
+    // Whose note this is, and where it lives: application data, not the SSH file.
+    let source = m
+        .all
+        .iter()
+        .find(|host| host.name == editor.host)
+        .map(|host| host.source_file.display().to_string());
+    let data = m
+        .batch
+        .history_root
+        .as_ref()
+        .map(|root| root.join("metadata.json").display().to_string())
+        .unwrap_or_else(|| "metadata.json".into());
+    let mut header = vec![Line::from(vec![
+        Span::styled(format!("Host: {}", editor.host), accent()),
+        Span::raw("  "),
+        if editor.dirty() {
+            Span::styled("● Modifiée", Style::default().fg(Color::Yellow))
+        } else {
+            Span::styled("Enregistrée", Style::default().fg(GRAY))
+        },
+    ])];
+    if inner.height >= 10 {
+        if let Some(source) = source {
+            header.push(Line::styled(
+                ellipsize(
+                    &format!("Fichier SSH de l'hôte : {source}"),
+                    usize::from(inner.width),
+                ),
+                Style::default().fg(GRAY),
+            ));
+        }
+        header.push(Line::styled(
+            ellipsize(
+                &format!("Donnée de ssho : {data}"),
+                usize::from(inner.width),
+            ),
+            Style::default().fg(GRAY),
+        ));
+        header.push(Line::styled(
+            ellipsize(
+                "Jamais écrite dans le fichier SSH ; à ne pas confondre avec un tag.",
+                usize::from(inner.width),
+            ),
+            Style::default().fg(GRAY),
+        ));
+    }
+    let footer_height = if inner.height >= 6 { 3 } else { 1 };
     let parts = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(header.len() as u16),
         Constraint::Min(1),
-        Constraint::Length(if inner.height >= 5 { 3 } else { 1 }),
+        Constraint::Length(footer_height),
     ])
     .split(inner);
-    f.render_widget(
-        Paragraph::new(format!("Host: {}", editor.host)).style(accent()),
-        parts[0],
-    );
+    f.render_widget(Paragraph::new(header), parts[0]);
     let before: String = editor
         .input
         .value
@@ -2207,6 +2263,7 @@ fn note_editor(f: &mut Frame, m: &mut Model, area: Rect) {
     let cursor_row = before.chars().filter(|&c| c == '\n').count();
     let cursor_col = before.rsplit('\n').next().unwrap_or("").chars().count();
     let offset = cursor_row.saturating_sub(parts[1].height.saturating_sub(1) as usize);
+    let typing = editor.button.is_none();
     let mut lines = vec![];
     for (row, text) in editor
         .input
@@ -2217,7 +2274,7 @@ fn note_editor(f: &mut Frame, m: &mut Model, area: Rect) {
         .take(parts[1].height as usize)
     {
         let mut input = Input::new(text);
-        let focused = row == cursor_row;
+        let focused = typing && row == cursor_row;
         if focused {
             input.cursor = cursor_col;
         }
@@ -2238,8 +2295,16 @@ fn note_editor(f: &mut Frame, m: &mut Model, area: Rect) {
             Style::default().fg(Color::Red),
         ));
     }
-    footer.push(Line::from(
-        "Ctrl+S: save • Esc/Ctrl+C: cancel • Enter: newline",
+    if footer_height > 1 {
+        footer.push(Line::from(vec![
+            nav::button("Enregistrer", editor.button == Some(0)),
+            Span::raw("  "),
+            nav::button("Annuler", editor.button == Some(1)),
+        ]));
+    }
+    footer.push(Line::styled(
+        "Enter: newline • Tab: buttons • Ctrl+S: save • Esc/Ctrl+C: cancel",
+        Style::default().fg(GRAY),
     ));
     f.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), parts[2]);
 }

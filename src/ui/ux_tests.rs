@@ -1632,3 +1632,79 @@ fn wide_terminals_keep_controls_and_counts_next_to_their_content() {
         );
     }
 }
+
+#[test]
+fn note_says_whose_it_is_where_it_lives_and_whether_it_changed() {
+    let mut m = model(serde_json::json!({}));
+    m.all[0].source_file = "/etc/ssh/work".into();
+    m.all[0].tags = vec!["prod".into()];
+    m.batch.history_root = Some("/home/me/.config/ssho".into());
+    m.filter(false);
+    m.key(key(KeyCode::Char('N')));
+    let text = screen(&mut m, 120, 24);
+    for expected in [
+        "Personal note",
+        "Host: alpha",
+        "Enregistrée",
+        "Fichier SSH de l'hôte : /etc/ssh/work",
+        "Donnée de ssho : /home/me/.config/ssho/metadata.json",
+        "Jamais écrite dans le fichier SSH ; à ne pas confondre avec un tag.",
+        "[  Enregistrer ]  [  Annuler ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    typing(&mut m, "Bastion requis");
+    m.key(key(KeyCode::Enter));
+    typing(&mut m, "ligne 2");
+    let text = screen(&mut m, 120, 24);
+    assert!(
+        text.contains("● Modifiée") && text.contains("ligne 2"),
+        "{text}"
+    );
+    // Tab reaches the buttons; Enter there acts, and no text is typed into them.
+    m.key(key(KeyCode::Tab));
+    assert!(screen(&mut m, 120, 24).contains("[▶ Enregistrer ]"));
+    typing(&mut m, "x");
+    m.paste("pasted");
+    let View::Note(editor) = &m.view else {
+        panic!()
+    };
+    assert_eq!(editor.input.value, "Bastion requis\nligne 2");
+    m.key(key(KeyCode::Right));
+    assert!(screen(&mut m, 120, 24).contains("[▶ Annuler ]"));
+    // Cancelling a modified note still offers to resume it.
+    m.key(key(KeyCode::Enter));
+    assert!(m.discard);
+    m.key(key(KeyCode::Enter));
+    assert!(matches!(m.view, View::Note(_)));
+    m.key(key(KeyCode::BackTab));
+    assert_eq!(
+        m.key(key(KeyCode::Enter)),
+        Action::SaveNote("alpha".into(), "Bastion requis\nligne 2".into())
+    );
+}
+
+#[test]
+fn list_marks_a_note_discreetly_without_a_column() {
+    let mut m = model(serde_json::json!({}));
+    m.metadata.insert(
+        "alpha".into(),
+        HostMetadata {
+            note: "Bastion requis".into(),
+            favorite: true,
+        },
+    );
+    m.filter(false);
+    let text = screen(&mut m, 120, 24);
+    assert!(
+        text.contains("│?≡*alpha") && text.contains("│?  beta"),
+        "{text}"
+    );
+    assert!(text.contains("≡ note personnelle"), "{text}");
+    assert!(
+        !text.contains("Bastion requis"),
+        "the note itself stays in the sheet: {text}"
+    );
+    m.key(key(KeyCode::Char('i')));
+    assert!(screen(&mut m, 120, 40).contains("Personal note: Bastion requis"));
+}

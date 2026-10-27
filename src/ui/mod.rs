@@ -701,6 +701,8 @@ impl Model {
                 // Pasted text only narrows the list; applying still needs Enter.
                 &mut self.selector_query
             }
+            // A focused button receives no text.
+            View::Note(editor) if editor.button.is_some() => return,
             View::Note(editor) => &mut editor.input,
             View::Keys(editor) => {
                 let Some(input) = keys::input(editor) else {

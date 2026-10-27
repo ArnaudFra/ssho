@@ -185,6 +185,14 @@ Le formulaire d'hôte tient sur **une page**, sans onglets, et son titre nomme l
 
 Sur un terminal de moins de 44 colonnes, le libellé passe au-dessus de sa saisie. Le curseur natif reste visible dans le champ actif ; un bouton ou un titre de section ayant le focus n'a pas de curseur et ne reçoit ni frappe ni collage.
 
+### Notes personnelles
+
+L'éditeur de note (`N`, ou le bouton Note d'une fiche ou du formulaire) indique à quoi la note se rattache et où elle vit : l'alias, le fichier SSH de l'hôte, puis le fichier `metadata.json` des données de `ssho`, avec le rappel qu'une note n'est jamais écrite dans le fichier SSH et ne se confond pas avec un tag. L'état **Enregistrée** ou **● Modifiée** est affiché en tête.
+
+- Entrée insère une nouvelle ligne ; Tab atteint les boutons **Enregistrer** et **Annuler** (←/→ passe de l'un à l'autre, Entrée ou Espace l'active) ; Ctrl+S enregistre depuis le texte. Un bouton ayant le focus ne reçoit ni frappe ni collage.
+- Annuler une note modifiée propose toujours de continuer l'édition.
+- Dans la liste, un hôte qui porte une note affiche le signe discret `≡` entre sa disponibilité et son favori ; le texte de la note reste dans la fiche et le volet F4, sans colonne dédiée.
+
 ### Fiches d'hôte et de groupe
 
 La fiche d'un hôte (`i`) est organisée en cinq sections, les mêmes que le volet F4 : **Résumé** (alias, adresse, utilisateur, port, alias du bloc, tags, note), **Configuration effective** (résolution `ssh -G`, clés, proxys), **Déclaration et source** (fichier et ligne, cible déclarée, options), **Disponibilité mesurée** (méthode SSH ou ICMP, état, durée, cause) et **Historique des connexions**. Une tentative, une fin avec code 0, un état de disponibilité et une authentification restent des informations distinctes, chacune sur sa ligne.
@@ -201,6 +209,7 @@ Chaque signe de la colonne Name a sa zone, pour qu'un favori ne ressemble jamais
 | --- | --- | --- |
 | Cible de lot | `[x]` / `[ ]` | L'alias est marqué pour un lot. Cette zone n'existe que lorsqu'au moins une cible est marquée. |
 | Disponibilité | `+` `!` `~` `?` | En ligne, hors ligne, mesure en cours, inconnu. |
+| Note | `≡` | L'hôte porte une note personnelle. |
 | Favori | `*` | Hôte épinglé. |
 | Groupe | `▼` / `▶` | En-tête ouvert ou replié ; « (4 • 2 cibles) » donne ses hôtes et ses cibles marquées, même replié. |
 | Alias | `principal→actif`, `+2 alias` | Bloc regroupé : alias utilisé pour la connexion, et nombre d'autres alias du bloc (F3 pour choisir). |
