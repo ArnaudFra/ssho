@@ -720,7 +720,13 @@ sys.exit(int(mode))
     session.expect("Tunnel only")
     session.send(b"\x1b[18~")
     session.expect("Owned tunnels")
+    session.send(b"s")  # stopping names the tunnel and keeps it by default
+    session.expect("Arrêter ce tunnel ?")
+    session.send(b"\r")
+    os.kill(pid, 0)
     session.send(b"s")
+    session.expect("[▶ Revenir ]")
+    session.send(b"\t\r")
     session.expect("Stopped")
     try:
         os.kill(pid, 0)

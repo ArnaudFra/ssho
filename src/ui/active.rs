@@ -89,6 +89,18 @@ impl Drop for Session {
 }
 impl Model {
     pub(super) fn active_key(&mut self, k: KeyEvent) -> Action {
+        // Stopping names the tunnel and waits for an explicit choice.
+        if let Some(id) = self.stop_pending {
+            match self.confirm.key(k) {
+                Some(nav::Answer::Proceed) => {
+                    self.stop_pending = None;
+                    return Action::StopTunnel(id);
+                }
+                Some(nav::Answer::Stay) => self.stop_pending = None,
+                None => {}
+            }
+            return Action::None;
+        }
         let View::Active { selected } = &mut self.view else {
             return Action::None;
         };
@@ -106,7 +118,8 @@ impl Model {
                     .get(*selected)
                     .filter(|r| r.state == State::Active)
                 {
-                    return Action::StopTunnel(record.id);
+                    self.stop_pending = Some(record.id);
+                    self.confirm = nav::Confirm::default();
                 }
             }
             _ => {}
@@ -115,6 +128,38 @@ impl Model {
     }
 }
 pub(super) fn draw(f: &mut ratatui::Frame, m: &Model, area: ratatui::layout::Rect) {
+    draw_list(f, m, area);
+    let Some(record) = m
+        .stop_pending
+        .and_then(|id| m.tunnels.iter().find(|record| record.id == id))
+    else {
+        return;
+    };
+    m.confirm.draw(
+        f,
+        area,
+        "Arrêter ce tunnel ?",
+        vec![
+            ratatui::text::Line::from(format!(
+                "#{} {} — {}",
+                record.id,
+                record.snapshot.host,
+                record
+                    .snapshot
+                    .forward
+                    .ssh_args()
+                    .unwrap_or_default()
+                    .join(" ")
+            )),
+            ratatui::text::Line::from(
+                "Son processus SSH sera arrêté ; les autres tunnels continuent.",
+            ),
+        ],
+        "Revenir",
+        "Arrêter le tunnel",
+    );
+}
+fn draw_list(f: &mut ratatui::Frame, m: &Model, area: ratatui::layout::Rect) {
     use ratatui::{
         layout::{Constraint, Layout},
         style::{Color, Style},
@@ -130,7 +175,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &Model, area: ratatui::layout::Rec
         Constraint::Length(3),
     ])
     .split(area);
-    f.render_widget(Paragraph::new("Owned tunnels • Active = process running; forwarding readiness unverified\nEsc/q: return, tunnels keep running • s: stop selected"), areas[0]);
+    f.render_widget(Paragraph::new("Owned tunnels • Active = process running; forwarding readiness unverified\nEsc/q: return, tunnels keep running • s: stop selected (asks first)"), areas[0]);
     let rows = m.tunnels.iter().map(|r| {
         Row::new(vec![
             r.id.to_string(),

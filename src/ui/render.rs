@@ -1629,10 +1629,11 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
     f.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), parts[2]);
 }
 fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
+    use forms::ForwardForm as F;
     let View::Forward(form) = &mut m.view else {
         return;
     };
-    let area = panel(area, 88, 30);
+    let area = panel(area, 96, 36);
     let compact = area.height < 30;
     let border = if area.height < 5 || area.width < 4 {
         Block::default()
@@ -1672,32 +1673,34 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     let mut lines = vec![];
     let mut focus_y = field_lines(
         &mut lines,
-        "Profile name (required to save):".into(),
+        "Profile name (required to save only):".into(),
         &form.inputs[5],
         form.focus == 5,
         inner.width as usize,
         compact,
         field_error(&form.errors, forms::FormField::Input(5)),
     );
-    let kind = ["Local (-L)", "Remote (-R)", "Dynamic (-D)"][form.kind];
-    let input = Input::new(kind);
-    let kind_y = field_lines(
-        &mut lines,
-        "Forward Type:".into(),
-        &input,
-        form.focus == 0,
-        inner.width as usize,
-        compact,
-        None,
-    );
+    // Three named choices; the selected one is marked, not only coloured.
+    let choice =
+        |label: &str, selected: bool| format!("({}) {label}", if selected { "•" } else { " " });
     if form.focus == 0 {
-        focus_y = kind_y;
+        focus_y = lines.len();
     }
     lines.push(Line::styled(
-        "Use ←/→ to change type",
-        Style::default().fg(GRAY),
+        "Forward Type:",
+        if form.focus == 0 {
+            accent()
+        } else {
+            Style::default()
+        },
     ));
-    lines.push(Line::from(""));
+    lines.push(Line::from(format!(
+        "{}{}   {}   {}",
+        if form.focus == 0 { "> " } else { "  " },
+        choice("Local (-L)", form.kind == 0),
+        choice("Remote (-R)", form.kind == 1),
+        choice("Dynamic (-D)", form.kind == 2),
+    )));
     lines.push(Line::styled(
         match form.kind {
             0 => "Local forwarding: ssh -L [bind_address:]local_port:remote_host:remote_port",
@@ -1706,25 +1709,36 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
         },
         Style::default().fg(GRAY),
     ));
+    // The direction in words: where it listens, what it reaches, from where.
+    lines.push(Line::styled(
+        ellipsize(&form.route(), usize::from(inner.width)),
+        Style::default().fg(Color::Green),
+    ));
     lines.push(Line::from(""));
     let labels = match form.kind {
         0 => [
             "",
-            "Local Port:",
-            "Remote Host:",
-            "Remote Port:",
-            "Bind Address (optional):",
+            "Local Port (listens on this machine):",
+            "Remote Host (destination, seen from the server):",
+            "Remote Port (destination):",
+            "Bind Address (listening address, optional):",
         ],
         1 => [
             "",
-            "Remote Port:",
-            "Local Host:",
-            "Local Port:",
-            "Bind Address (optional):",
+            "Remote Port (listens on the SSH server):",
+            "Local Host (destination, seen from this machine):",
+            "Local Port (destination):",
+            "Bind Address (listening address, optional):",
         ],
-        _ => ["", "SOCKS Port:", "", "", "Bind Address (optional):"],
+        _ => [
+            "",
+            "SOCKS Port (listens on this machine):",
+            "",
+            "",
+            "Bind Address (listening address, optional):",
+        ],
     };
-    for i in form.fields().into_iter().filter(|&i| i != 0 && i != 5) {
+    for i in form.fields().into_iter().filter(|&i| (1..=4).contains(&i)) {
         let selected = form.focus == i;
         let y = field_lines(
             &mut lines,
@@ -1739,18 +1753,60 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
             focus_y = y;
         }
     }
+    use crate::storage::tunnels::LaunchMode;
+    if form.focus == F::MODE {
+        focus_y = lines.len();
+    }
+    lines.push(Line::styled(
+        "Launch mode:",
+        if form.focus == F::MODE {
+            accent()
+        } else {
+            Style::default()
+        },
+    ));
+    lines.push(Line::from(format!(
+        "{}{}   {}",
+        if form.focus == F::MODE { "> " } else { "  " },
+        choice("Shell session", form.mode == LaunchMode::Shell),
+        choice("Tunnel only", form.mode == LaunchMode::TunnelOnly),
+    )));
+    lines.push(Line::styled(
+        ellipsize(
+            if form.mode == LaunchMode::Shell {
+                "Opens a shell with the forwarding; the tunnel ends when you leave that shell."
+            } else {
+                "Runs in the background, owned by ssho: follow or stop it in F7; it stops when ssho quits."
+            },
+            usize::from(inner.width),
+        ),
+        Style::default().fg(GRAY),
+    ));
+    lines.push(Line::from(""));
+    if form.focus >= F::LAUNCH {
+        focus_y = lines.len();
+    }
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        nav::button("Launch", form.focus == F::LAUNCH),
+        Span::raw("  "),
+        nav::button("Save profile", form.focus == F::SAVE),
+        Span::raw("  "),
+        nav::button("Cancel", form.focus == F::CANCEL),
+    ]));
+    let typing = (1..=5).contains(&form.focus);
     scroll_focus(
         &mut form.scroll,
         focus_y,
         parts[1].height,
         lines.len(),
-        field_error(&form.errors, forms::FormField::Input(form.focus)).is_some(),
+        typing && field_error(&form.errors, forms::FormField::Input(form.focus)).is_some(),
     );
     f.render_widget(
         Paragraph::new(lines).scroll((form.scroll as u16, 0)),
         parts[1],
     );
-    if form.focus != 0 {
+    if typing {
         if let Some(row) = (focus_y + 1).checked_sub(form.scroll) {
             input_cursor(
                 f,
@@ -1769,11 +1825,11 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
         ));
     }
     footer.push(Line::styled(
-        "Tab/↓: next field • Shift+Tab/↑: previous field",
+        "Tab/↓: next field • Shift+Tab/↑: previous field • ←/→: type, mode or button",
         Style::default().fg(GRAY),
     ));
     footer.push(Line::styled(
-        "Ctrl+S: save profile • Ctrl+L: launch • Esc: cancel",
+        "Ctrl+S: save profile • Ctrl+L: launch • Ctrl+T: mode • Esc: cancel",
         Style::default().fg(GRAY),
     ));
     f.render_widget(Paragraph::new(footer), parts[2]);
@@ -2381,11 +2437,44 @@ fn profile_list(f: &mut Frame, m: &Model, area: Rect) {
             );
         }
     }
+    // The route of the selected profile in words, then the named actions.
+    let empty = m
+        .tunnel_profiles
+        .get(&list.host)
+        .is_none_or(BTreeMap::is_empty);
+    let route = m
+        .tunnel_profiles
+        .get(&list.host)
+        .and_then(|profiles| profiles.iter().nth(list.selected))
+        .map(|(name, forward)| {
+            forms::ForwardForm::named(list.host.clone(), name.clone(), forward.clone()).route()
+        })
+        .unwrap_or_default();
+    let focused = if empty {
+        profiles::ACTIONS.len() - 1
+    } else {
+        list.button
+    };
+    let mut buttons = vec![];
+    for (index, label) in profiles::ACTIONS.into_iter().enumerate() {
+        buttons.push(nav::button(label, index == focused));
+        buttons.push(Span::raw(" "));
+    }
     f.render_widget(
         Paragraph::new(vec![
-            Line::styled(&list.error, Style::default().fg(Color::Red)),
-            Line::from("a: create • Enter/e/r: edit or rename • d: delete • Ctrl+L: launch"),
-            Line::from("f: last forwarding draft • Esc: back"),
+            if list.error.is_empty() {
+                Line::styled(
+                    ellipsize(&route, usize::from(parts[2].width)),
+                    Style::default().fg(Color::Green),
+                )
+            } else {
+                Line::styled(list.error.clone(), Style::default().fg(Color::Red))
+            },
+            Line::from(buttons),
+            Line::styled(
+                "↑↓: profile • ←/→: action • Enter: run it • f: last forwarding draft • Esc: back",
+                Style::default().fg(GRAY),
+            ),
         ]),
         parts[2],
     );

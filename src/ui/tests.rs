@@ -4424,7 +4424,17 @@ fn active_ids_survive_profile_reload_and_visible_high_contrast() {
     });
     m.tunnel_profiles.clear();
     m.view = View::Active { selected: 0 };
-    assert_eq!(m.key(key(KeyCode::Char('s'))), Action::StopTunnel(91));
+    // Stopping asks first, naming the tunnel; the focused choice keeps it running.
+    assert_eq!(m.key(key(KeyCode::Char('s'))), Action::None);
+    let text = screen(&mut m, 100, 30);
+    assert!(
+        text.contains("Arrêter ce tunnel ?") && text.contains("#91"),
+        "{text}"
+    );
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    m.key(key(KeyCode::Char('s')));
+    m.key(key(KeyCode::Tab));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::StopTunnel(91));
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
     terminal.draw(|f| render::draw(f, &mut m)).unwrap();
     assert!(terminal

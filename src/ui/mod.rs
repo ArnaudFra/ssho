@@ -261,6 +261,8 @@ struct Model {
     sheet_focus: Option<usize>,
     // Last value handed to the terminal clipboard, kept visible and selectable.
     copied: Option<(String, String)>,
+    // Owned tunnel whose stop is being confirmed.
+    stop_pending: Option<u64>,
     view: View,
     parents: Vec<(View, usize)>,
     preferences: AppConfig,
@@ -321,6 +323,7 @@ impl Model {
             },
             sheet_focus: None,
             copied: None,
+            stop_pending: None,
             view: View::List,
             parents: vec![],
             preferences,
@@ -721,7 +724,12 @@ impl Model {
                 };
                 input
             }
-            View::Forward(form) if form.focus != 0 => &mut form.inputs[form.focus],
+            View::Forward(form) => {
+                let Some(input) = form.focused_input() else {
+                    return;
+                };
+                input
+            }
             _ => return,
         };
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -759,6 +767,9 @@ impl Model {
         }
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         self.hint.clear();
+        if !matches!(self.view, View::Active { .. }) {
+            self.stop_pending = None;
+        }
         if self.quit_tunnels {
             match self.confirm.key(k) {
                 Some(nav::Answer::Proceed) => return Action::Quit,
@@ -866,7 +877,7 @@ impl Model {
                         }
                         Action::None
                     }
-                    FormEvent::None => Action::None,
+                    FormEvent::None | FormEvent::Launch => Action::None,
                 };
             }
             View::Aliases { .. } => return aliases::key(self, k),
@@ -889,30 +900,6 @@ impl Model {
             View::Profiles(_) => return self.profile_key(k),
             View::Active { .. } => return self.active_key(k),
             View::Forward(f) => {
-                if ctrl && k.code == KeyCode::Char('l') {
-                    return if f.validate() {
-                        match f.forward() {
-                            Ok(forward) => {
-                                if f.mode == LaunchMode::TunnelOnly {
-                                    Action::StartTunnel(
-                                        f.host.clone(),
-                                        (!f.inputs[5].value.is_empty())
-                                            .then(|| f.inputs[5].value.clone()),
-                                        forward,
-                                    )
-                                } else {
-                                    Action::Connect(f.host.clone(), Some(forward))
-                                }
-                            }
-                            Err(error) => {
-                                f.error = error.to_string();
-                                Action::None
-                            }
-                        }
-                    } else {
-                        Action::None
-                    };
-                }
                 return match f.key(k) {
                     FormEvent::Cancel => {
                         if f.dirty() {
@@ -922,6 +909,26 @@ impl Model {
                         }
                         Action::None
                     }
+                    // Launching uses the current values and never saves them.
+                    FormEvent::Launch if !f.validate() => Action::None,
+                    FormEvent::Launch => match f.forward() {
+                        Ok(forward) => {
+                            if f.mode == LaunchMode::TunnelOnly {
+                                Action::StartTunnel(
+                                    f.host.clone(),
+                                    (!f.inputs[5].value.is_empty())
+                                        .then(|| f.inputs[5].value.clone()),
+                                    forward,
+                                )
+                            } else {
+                                Action::Connect(f.host.clone(), Some(forward))
+                            }
+                        }
+                        Err(error) => {
+                            f.error = error.to_string();
+                            Action::None
+                        }
+                    },
                     FormEvent::Submit if !f.validate_save() => Action::None,
                     FormEvent::Submit => match f.forward() {
                         Ok(forward) => Action::SaveProfile {

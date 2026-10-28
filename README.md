@@ -185,6 +185,14 @@ Le formulaire d'hôte tient sur **une page**, sans onglets, et son titre nomme l
 
 Sur un terminal de moins de 44 colonnes, le libellé passe au-dessus de sa saisie. Le curseur natif reste visible dans le champ actif ; un bouton ou un titre de section ayant le focus n'a pas de curseur et ne reçoit ni frappe ni collage.
 
+### Tunnels : formulaire, profils et suivi
+
+- **Sens du transfert en clair** : le type se choisit parmi trois options nommées — Local (-L), Remote (-R), Dynamic (-D) — et une phrase calculée dit le trajet avec vos valeurs, par exemple « Listen on this machine, port 5433 → reach db.internal:5432 from the SSH server ». Pour un transfert distant la phrase s'inverse. Les libellés distinguent le port d'écoute de la destination.
+- **Mode de lancement visible** : « Shell session » ou « Tunnel only », avec l'explication de leur cycle de vie (le tunnel s'arrête en quittant le shell, ou tourne en arrière-plan et se suit dans F7). Ctrl+T reste un raccourci.
+- **Boutons distincts** **Launch**, **Save profile** et **Cancel**, atteints par Tab. Le nom du profil n'est requis que pour enregistrer. Entrée avance de champ en champ et s'arrête au dernier : la répéter n'enregistre ni ne lance rien. Ctrl+S et Ctrl+L restent disponibles.
+- **Profils (F6)** : sous la liste, le trajet du profil sélectionné en toutes lettres et les actions **Open**, **Launch**, **Duplicate**, **Delete**, **New** (←/→ pour choisir, Entrée pour lancer l'action). Dupliquer ouvre un brouillon non enregistré nommé `nom-copy`. Sans profil, seul New agit.
+- **Tunnels actifs (F7)** : `s` n'arrête plus directement ; une confirmation nomme le tunnel (identifiant, hôte, ports) et garde le focus sur **Revenir**. *Auparavant `s` arrêtait immédiatement.* Revenir de l'écran n'arrête rien.
+
 ### Notes personnelles
 
 L'éditeur de note (`N`, ou le bouton Note d'une fiche ou du formulaire) indique à quoi la note se rattache et où elle vit : l'alias, le fichier SSH de l'hôte, puis le fichier `metadata.json` des données de `ssho`, avec le rappel qu'une note n'est jamais écrite dans le fichier SSH et ne se confond pas avec un tag. L'état **Enregistrée** ou **● Modifiée** est affiché en tête.
@@ -291,7 +299,7 @@ L'écran principal utilise un titre compact et toute la hauteur disponible pour 
 | Commandes multi-hôtes (Unix) | x marque l’alias actif ; B prépare le lot ; F2 sélectionne explicitement les résultats du filtre, efface les marques ou ouvre les derniers résultats |
 | Préparation du lot | Tab : commande, concurrence, délai, cibles ; ↑/↓ : cible ; Ctrl+L : aperçu, Entrée : confirmation ; Échap : retour |
 | Résultats du lot | ↑/↓ : hôte ; Tab : stdout/stderr ; Page précédente/suivante : sortie ; s : annuler le lot ; q, Échap ou Ctrl+C : retour, le lot continue |
-| Tunnels actifs | F7 ou F2 → Tunnels actifs ; s arrête le processus sélectionné ; q, Échap ou Ctrl+C reviennent sans rien arrêter |
+| Tunnels actifs | F7 ou F2 → Tunnels actifs ; s demande confirmation puis arrête le processus sélectionné ; q, Échap ou Ctrl+C reviennent sans rien arrêter |
 | Formulaire tunnel | Ctrl+T choisit session shell ou tunnel seul ; Ctrl+S enregistre le profil nommé sans SSH ; Ctrl+L lance le forwarding courant ; Entrée avance sans lancer ; Échap/Ctrl+C annule |
 | Édition de texte | Ctrl+A/E ou Début/Fin pour début/fin de ligne ; ←/→ ou Ctrl+B/F pour un caractère ; Ctrl+←/→ ou Alt+B/F pour un mot ; Retour arrière/Ctrl+H efface avant, Suppr/Ctrl+D après ; Ctrl+U efface avant le curseur, Ctrl+K après, Ctrl+W ou Alt+Retour arrière efface le mot précédent |
 | Abandon des modifications | Tab ou ←/→ choisit entre Continuer l'édition (focus initial) et Abandonner ; Entrée valide le choix marqué ; Échap ou Ctrl+C reprend exactement le formulaire |

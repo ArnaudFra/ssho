@@ -178,6 +178,8 @@ pub(super) enum FormEvent {
     None,
     Cancel,
     Submit,
+    /// Start what the form describes, without saving it.
+    Launch,
     /// Choose another destination file, then come back to the same draft.
     ChooseFile,
     PickKey,
@@ -877,7 +879,7 @@ impl ForwardForm {
     }
     fn validation_errors(&self) -> Vec<FieldError> {
         let mut errors = vec![];
-        for i in self.fields().into_iter().filter(|&i| i != 0 && i != 5) {
+        for i in self.fields().into_iter().filter(|i| (1..=4).contains(i)) {
             let mut f = Forward {
                 kind: ["local", "remote", "dynamic"][self.kind].into(),
                 local_port: "1".into(),
@@ -906,11 +908,77 @@ impl ForwardForm {
         }
         errors
     }
+    /// Stops in visual order: inputs 1 to 5, the type selector (0), then the
+    /// launch mode and the three buttons.
     pub fn fields(&self) -> Vec<usize> {
+        use ForwardForm as F;
         if self.kind == 2 {
-            vec![5, 0, 1, 4]
+            vec![5, 0, 1, 4, F::MODE, F::LAUNCH, F::SAVE, F::CANCEL]
         } else {
-            vec![5, 0, 1, 2, 3, 4]
+            vec![5, 0, 1, 2, 3, 4, F::MODE, F::LAUNCH, F::SAVE, F::CANCEL]
+        }
+    }
+    pub const MODE: usize = 6;
+    pub const LAUNCH: usize = 7;
+    pub const SAVE: usize = 8;
+    pub const CANCEL: usize = 9;
+    /// The text input owning the caret, if one has the focus.
+    pub fn focused_input(&mut self) -> Option<&mut Input> {
+        (1..=5)
+            .contains(&self.focus)
+            .then(|| &mut self.inputs[self.focus])
+    }
+    fn toggle_mode(&mut self) {
+        use crate::storage::tunnels::LaunchMode;
+        self.mode = if self.mode == LaunchMode::Shell {
+            LaunchMode::TunnelOnly
+        } else {
+            LaunchMode::Shell
+        };
+    }
+    /// The route in words, so the direction never depends on knowing -L from -R.
+    pub fn route(&self) -> String {
+        let value = |i: usize, empty: &str| {
+            let text = self.inputs[i].value.trim();
+            if text.is_empty() {
+                empty.to_owned()
+            } else {
+                text.to_owned()
+            }
+        };
+        let bind = self.inputs[4].value.trim();
+        match self.kind {
+            0 => format!(
+                "Listen on this machine, {}port {} → reach {}:{} from the SSH server",
+                if bind.is_empty() {
+                    String::new()
+                } else {
+                    format!("address {bind}, ")
+                },
+                value(1, "?"),
+                value(2, "localhost"),
+                value(3, "?")
+            ),
+            1 => format!(
+                "Listen on the SSH server, {}port {} → reach {}:{} from this machine",
+                if bind.is_empty() {
+                    String::new()
+                } else {
+                    format!("address {bind}, ")
+                },
+                value(1, "?"),
+                value(2, "localhost"),
+                value(3, "?")
+            ),
+            _ => format!(
+                "SOCKS proxy on this machine, {}port {} → connections leave from the SSH server",
+                if bind.is_empty() {
+                    String::new()
+                } else {
+                    format!("address {bind}, ")
+                },
+                value(1, "?")
+            ),
         }
     }
     pub fn key(&mut self, k: KeyEvent) -> FormEvent {
@@ -921,22 +989,45 @@ impl ForwardForm {
         if ctrl && k.code == KeyCode::Char('s') {
             return FormEvent::Submit;
         }
+        if ctrl && k.code == KeyCode::Char('l') {
+            return FormEvent::Launch;
+        }
         if ctrl && k.code == KeyCode::Char('t') {
-            use crate::storage::tunnels::LaunchMode;
-            self.mode = if self.mode == LaunchMode::Shell {
-                LaunchMode::TunnelOnly
-            } else {
-                LaunchMode::Shell
-            };
+            self.toggle_mode();
             return FormEvent::None;
         }
         let fields = self.fields();
         let pos = fields.iter().position(|&i| i == self.focus).unwrap_or(0);
+        let button = self.focus >= Self::LAUNCH;
         match k.code {
             KeyCode::Left | KeyCode::Right if self.focus == 0 => {
                 self.kind = (self.kind + if k.code == KeyCode::Left { 2 } else { 1 }) % 3;
             }
-            KeyCode::Tab | KeyCode::Down | KeyCode::Enter => {
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Self::MODE => {
+                self.toggle_mode();
+            }
+            KeyCode::Left if button => {
+                self.focus = Self::LAUNCH + (self.focus - Self::LAUNCH + 2) % 3;
+            }
+            KeyCode::Right if button => {
+                self.focus = Self::LAUNCH + (self.focus - Self::LAUNCH + 1) % 3;
+            }
+            // Saving and launching are two named buttons; only they act.
+            KeyCode::Enter | KeyCode::Char(' ') if button => {
+                return match self.focus {
+                    Self::LAUNCH => FormEvent::Launch,
+                    Self::SAVE => FormEvent::Submit,
+                    _ => FormEvent::Cancel,
+                };
+            }
+            // Enter walks the fields and stops on the last one: repeating it
+            // never reaches a button, so it can neither save nor launch.
+            KeyCode::Enter => {
+                if pos + 1 < fields.len() && fields[pos + 1] < Self::MODE {
+                    self.focus = fields[pos + 1];
+                }
+            }
+            KeyCode::Tab | KeyCode::Down => {
                 if pos + 1 < fields.len() {
                     self.focus = fields[pos + 1];
                 }
@@ -947,8 +1038,8 @@ impl ForwardForm {
                 }
             }
             _ => {
-                if self.focus != 0 {
-                    self.inputs[self.focus].key(k);
+                if let Some(input) = self.focused_input() {
+                    input.key(k);
                 }
             }
         }

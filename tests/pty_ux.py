@@ -661,8 +661,60 @@ def scenario_notes():
           'after cancel, saved outside the SSH file, discreet list sign, terminal restored')
 
 
+def scenario_tunnels():
+    preferences()
+    profiles = APP / 'tunnel_profiles.json'
+    try:
+        s = Session('tunnels', width=110, height=40)
+        s.expect('?: help')
+        s.send(b'f')
+        s.expect('Port Forwarding Setup')
+        s.expect('(•) Local (-L)   ( ) Remote (-R)   ( ) Dynamic (-D)')
+        s.expect('Listen on this machine, port ? → reach localhost:? from the SSH server')
+        s.send(b'\t5433\t\x15db.internal\t5432')
+        s.expect('Listen on this machine, port 5433 → reach db.internal:5432 from the SSH server')
+        # Enter repeated stays on the last field: it neither saves nor launches.
+        s.send(b'\r' * 8)
+        s.expect('Port Forwarding Setup')
+        assert not connections()
+        s.send(b'\t')                   # bind address -> mode
+        s.expect('> (•) Shell session   ( ) Tunnel only')
+        s.send(b'\t')
+        s.expect('[▶ Launch ]  [  Save profile ]  [  Cancel ]')
+        # Saving needs a name; the error says so and nothing is launched.
+        s.send(b'\x1b[C\r')
+        s.expect('Profile name (required to save only):')
+        assert not connections() and not profiles.exists()
+        s.send(b'db\x13')                # name it, Ctrl+S
+        s.expect('Profile saved')
+        assert not connections(), 'saving never launches'
+        s.send(ESC)
+        s.expect('?: help')
+        # The profile list shows the route in words and names its actions.
+        s.send(b'\x1b[17~')              # F6
+        s.expect('Tunnel profiles')
+        s.expect('Listen on this machine, port 5433 → reach db.internal:5432 from the SSH server')
+        s.expect('[▶ Open ] [  Launch ] [  Duplicate ] [  Delete ] [  New ]')
+        s.send(b'\x1b[C\x1b[C\r')       # Duplicate
+        s.expect('db-copy')
+        s.expect('Unsaved changes')
+        s.send(ESC)
+        s.send(b'\t\r')
+        s.expect('Tunnel profiles')
+        s.send(ESC)
+        assert CONFIG.read_bytes() == ORIGINAL_CONFIG
+        s.send(CTRL_C)
+        s.close()
+    finally:
+        profiles.unlink(missing_ok=True)
+        (APP / 'sshm_history.json').unlink(missing_ok=True)
+    print('PTY PASS [tunnels]: named types and route in words, Enter never saves or launches, '
+          'visible mode and separate buttons, name needed only to save, profile actions and '
+          'route, duplicate as unsaved draft, terminal restored')
+
+
 SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,
-             'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes}
+             'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes, 'tunnels': scenario_tunnels}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

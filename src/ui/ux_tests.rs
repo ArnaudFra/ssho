@@ -1708,3 +1708,187 @@ fn list_marks_a_note_discreetly_without_a_column() {
     m.key(key(KeyCode::Char('i')));
     assert!(screen(&mut m, 120, 40).contains("Personal note: Bastion requis"));
 }
+
+fn forward_form(m: &Model) -> &forms::ForwardForm {
+    let View::Forward(form) = &m.view else {
+        panic!("the tunnel form is open")
+    };
+    form
+}
+
+#[test]
+fn tunnel_direction_is_said_in_words_for_each_type() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('f')));
+    let text = screen(&mut m, 110, 40);
+    assert!(
+        text.contains("(•) Local (-L)   ( ) Remote (-R)   ( ) Dynamic (-D)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Listen on this machine, port ? → reach localhost:? from the SSH server"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Local Port (listens on this machine):"),
+        "{text}"
+    );
+    m.key(key(KeyCode::Tab));
+    typing(&mut m, "5433");
+    m.key(key(KeyCode::Tab));
+    m.key(ctrl('u'));
+    typing(&mut m, "db.internal");
+    m.key(key(KeyCode::Tab));
+    typing(&mut m, "5432");
+    let text = screen(&mut m, 110, 40);
+    assert!(
+        text.contains(
+            "Listen on this machine, port 5433 → reach db.internal:5432 from the SSH server"
+        ),
+        "{text}"
+    );
+    // The same values read the other way round for a remote forwarding.
+    m.key(key(KeyCode::BackTab));
+    m.key(key(KeyCode::BackTab));
+    m.key(key(KeyCode::BackTab));
+    m.key(key(KeyCode::Right));
+    let text = screen(&mut m, 110, 40);
+    assert!(text.contains("( ) Local (-L)   (•) Remote (-R)"), "{text}");
+    assert!(
+        text.contains(
+            "Listen on the SSH server, port 5433 → reach db.internal:5432 from this machine"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("Remote Port (listens on the SSH server):"),
+        "{text}"
+    );
+    m.key(key(KeyCode::Right));
+    let text = screen(&mut m, 110, 40);
+    assert!(
+        text.contains(
+            "SOCKS proxy on this machine, port 5433 → connections leave from the SSH server"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn save_and_launch_are_separate_buttons_and_enter_reaches_neither() {
+    use forms::ForwardForm as F;
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('f')));
+    m.key(key(KeyCode::Tab));
+    typing(&mut m, "8080");
+    // Repeating Enter walks the fields and stops on the last one.
+    for _ in 0..12 {
+        assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    }
+    assert_eq!(forward_form(&m).focus, 4);
+    assert!(matches!(m.view, View::Forward(_)));
+    // The launch mode is a visible control, explained before launching.
+    m.key(key(KeyCode::Tab));
+    assert_eq!(forward_form(&m).focus, F::MODE);
+    let text = screen(&mut m, 110, 40);
+    assert!(
+        text.contains("> (•) Shell session   ( ) Tunnel only"),
+        "{text}"
+    );
+    assert!(
+        text.contains("the tunnel ends when you leave that shell"),
+        "{text}"
+    );
+    m.key(key(KeyCode::Char(' ')));
+    let text = screen(&mut m, 110, 40);
+    assert!(
+        text.contains("( ) Shell session   (•) Tunnel only"),
+        "{text}"
+    );
+    assert!(text.contains("follow or stop it in F7"), "{text}");
+    m.key(key(KeyCode::Tab));
+    let text = screen(&mut m, 110, 40);
+    assert!(
+        text.contains("[▶ Launch ]  [  Save profile ]  [  Cancel ]"),
+        "{text}"
+    );
+    // Saving needs a name; launching does not.
+    m.key(key(KeyCode::Right));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert_eq!(forward_form(&m).focus, 5, "the missing name gets the focus");
+    assert!(!forward_form(&m).errors.is_empty());
+    let View::Forward(form) = &mut m.view else {
+        panic!()
+    };
+    form.inputs[3].set("80");
+    form.focus = F::LAUNCH;
+    assert!(matches!(
+        m.key(key(KeyCode::Enter)),
+        Action::StartTunnel(host, None, _) if host == "alpha"
+    ));
+    // A button receives no text.
+    typing(&mut m, "zz");
+    m.paste("zz");
+    assert_eq!(forward_form(&m).inputs[1].value, "8080");
+    let View::Forward(form) = &mut m.view else {
+        panic!()
+    };
+    form.focus = F::CANCEL;
+    m.key(key(KeyCode::Enter));
+    assert!(m.discard, "a modified draft is not dropped silently");
+}
+
+#[test]
+fn profiles_show_their_route_and_named_actions() {
+    let mut m = model(serde_json::json!({}));
+    let forward = Forward {
+        kind: "local".into(),
+        local_port: "5433".into(),
+        remote_host: "db.internal".into(),
+        remote_port: "5432".into(),
+        ..Forward::default()
+    };
+    m.tunnel_profiles.insert(
+        "alpha".into(),
+        BTreeMap::from([("db".to_owned(), forward.clone())]),
+    );
+    m.key(key(KeyCode::F(6)));
+    let text = screen(&mut m, 120, 30);
+    assert!(
+        text.contains(
+            "Listen on this machine, port 5433 → reach db.internal:5432 from the SSH server"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("[▶ Open ] [  Launch ] [  Duplicate ] [  Delete ] [  New ]"),
+        "{text}"
+    );
+    // Launch is a named action, no longer a line of the help.
+    m.key(key(KeyCode::Right));
+    assert_eq!(
+        m.key(key(KeyCode::Enter)),
+        Action::Connect("alpha".into(), Some(forward))
+    );
+    m.key(key(KeyCode::Right));
+    m.key(key(KeyCode::Enter));
+    let form = forward_form(&m);
+    assert_eq!(form.inputs[5].value, "db-copy");
+    assert!(
+        form.original_name.is_none() && form.dirty(),
+        "a copy is an unsaved draft"
+    );
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Enter));
+    // Deleting names the profile; Enter on the default action opens it.
+    m.key(key(KeyCode::Right));
+    m.key(key(KeyCode::Enter));
+    assert!(screen(&mut m, 120, 30).contains("Delete profile 'db'?"));
+    m.key(key(KeyCode::Esc));
+    // Without any profile only New can act.
+    m.tunnel_profiles.clear();
+    assert!(screen(&mut m, 120, 30).contains("[▶ New ]"));
+    m.key(key(KeyCode::Enter));
+    assert!(forward_form(&m).original_name.is_none());
+}

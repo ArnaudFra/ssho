@@ -7,7 +7,11 @@ pub(super) struct List {
     pub selected: usize,
     pub delete: Option<String>,
     pub error: String,
+    /// Focused action under the list; see `ACTIONS`.
+    pub button: usize,
 }
+/// Named actions on the selected profile, then the one that needs none.
+pub(super) const ACTIONS: [&str; 5] = ["Open", "Launch", "Duplicate", "Delete", "New"];
 impl List {
     pub fn new(host: String) -> Self {
         Self {
@@ -15,6 +19,7 @@ impl List {
             selected: 0,
             delete: None,
             error: String::new(),
+            button: 0,
         }
     }
 }
@@ -23,7 +28,6 @@ impl Model {
         let View::Profiles(list) = &mut self.view else {
             return Action::None;
         };
-        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         if let Some(name) = &list.delete {
             if k.code == KeyCode::Enter {
                 return Action::DeleteProfile(list.host.clone(), name.clone());
@@ -36,8 +40,42 @@ impl Model {
         let profiles = self.tunnel_profiles.get(&list.host);
         let len = profiles.map_or(0, BTreeMap::len);
         let selected = profiles.and_then(|p| p.iter().nth(list.selected));
+        // Without any profile only "New" can act.
+        if len == 0 {
+            list.button = ACTIONS.len() - 1;
+        }
+        // Enter runs the focused action: each one is also a direct key.
+        let k = match (k.code, list.button) {
+            (KeyCode::Enter, 1) => KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL),
+            (KeyCode::Enter, 2) => KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE),
+            (KeyCode::Enter, 3) => KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+            (KeyCode::Enter, 4) => KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            _ => k,
+        };
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         match k.code {
             _ if nav::cancels(k) => self.back(),
+            KeyCode::Right | KeyCode::Tab => {
+                list.button = nav::wrap(list.button, ACTIONS.len(), 1);
+            }
+            KeyCode::Left | KeyCode::BackTab => {
+                list.button = nav::wrap(list.button, ACTIONS.len(), -1);
+            }
+            KeyCode::Char('D') => {
+                if let Some((name, forward)) = selected {
+                    // A copy is a new unsaved draft: the original is untouched.
+                    let mut form = ForwardForm::new(list.host.clone(), Some(forward.clone()));
+                    form.mode = self
+                        .tunnel_modes
+                        .get(&list.host)
+                        .and_then(|m| m.get(name))
+                        .copied()
+                        .unwrap_or_default();
+                    form.inputs[5].set(&format!("{name}-copy"));
+                    form.focus = 5;
+                    self.open_view(View::Forward(form));
+                }
+            }
             KeyCode::Char('q') => self.back(),
             KeyCode::Up | KeyCode::Char('k') => list.selected = nav::wrap(list.selected, len, -1),
             KeyCode::Down | KeyCode::Char('j') => list.selected = nav::wrap(list.selected, len, 1),
