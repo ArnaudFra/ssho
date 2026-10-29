@@ -10,6 +10,86 @@ pub(super) struct Review {
     text: String,
     title: String,
     rows: usize,
+    /// What is about to be written, in words, above the exact bytes.
+    summary: Vec<String>,
+    /// Name of the confirming button: Save, Delete, Move, Copy or Restore.
+    verb: &'static str,
+    /// 0 the diff being read, 1 the confirming button, 2 Back.
+    focus: usize,
+    notice: bool,
+}
+impl Review {
+    const CONFIRM: usize = 1;
+    const BACK: usize = 2;
+}
+/// Operation, block, files and what happens to personal data.
+fn summarize(action: &Action) -> (&'static str, Vec<String>) {
+    let data = "Favorite, note and tunnel profiles are ssho data: this write does not change them.";
+    match action {
+        Action::Save(Some(original), host, _) => {
+            let mut lines = vec![
+                format!("Operation: EDIT host '{}'", original.name),
+                format!("File: {}", original.source_file.display()),
+            ];
+            let before = if original.aliases.is_empty() {
+                vec![original.name.clone()]
+            } else {
+                original.aliases.clone()
+            };
+            let after = if host.aliases.is_empty() {
+                vec![host.name.clone()]
+            } else {
+                host.aliases.clone()
+            };
+            lines.push(if before == after {
+                data.to_owned()
+            } else {
+                format!(
+                    "Aliases: {} → {}. Favorite, note and tunnel profiles follow a renamed alias.",
+                    before.join(" "),
+                    after.join(" ")
+                )
+            });
+            ("Save", lines)
+        }
+        Action::Save(None, host, target) => (
+            "Save",
+            vec![
+                format!("Operation: ADD host '{}'", host.name),
+                format!("File: {}", target.display()),
+                "A new host starts without favorite or note.".to_owned(),
+            ],
+        ),
+        Action::SaveCopy(host, target) => (
+            "Copy",
+            vec![
+                format!("Operation: COPY to new host '{}'", host.name),
+                format!("File: {}", target.display()),
+                "The original is unchanged; its favorite and note are not copied.".to_owned(),
+            ],
+        ),
+        Action::Delete(host) => (
+            "Delete",
+            vec![
+                format!("Operation: DELETE host '{}'", host.name),
+                format!("File: {}", host.source_file.display()),
+                "Its favorite, note and tunnel profiles stay in the ssho data.".to_owned(),
+            ],
+        ),
+        Action::MoveTo(host, target) => (
+            "Move",
+            vec![
+                format!("Operation: MOVE host '{}'", host.name),
+                format!(
+                    "From: {} → To: {}",
+                    host.source_file.display(),
+                    target.display()
+                ),
+                data.to_owned(),
+            ],
+        ),
+        _ => ("Restore", vec![]),
+    }
 }
 pub(super) fn open(m: &mut Model, action: Action, root: &Path) -> Result<()> {
     // Native copy preflight may wait on ssh -G; keep batch deadlines and cancellation live.
@@ -37,6 +117,14 @@ pub(super) fn open(m: &mut Model, action: Action, root: &Path) -> Result<()> {
 }
 fn show(m: &mut Model, action: Action, plan: PreparedChange, title: String) {
     let text = plan.diff();
+    let (verb, mut summary) = summarize(&action);
+    if summary.is_empty() {
+        summary = vec![
+            format!("Operation: RESTORE a backup — {title}"),
+            "The current file is backed up first; notes, favorites and profiles are not restored."
+                .to_owned(),
+        ];
+    }
     m.error.clear();
     m.open_view(View::Changes(Review {
         plan: Arc::new(plan),
@@ -44,6 +132,10 @@ fn show(m: &mut Model, action: Action, plan: PreparedChange, title: String) {
         text,
         title,
         rows: 1,
+        summary,
+        verb,
+        focus: 0,
+        notice: false,
     }));
 }
 pub(super) fn apply(m: &mut Model, app: &Path) -> Result<Action> {
@@ -93,6 +185,7 @@ pub(super) fn open_restore(m: &mut Model, index: usize) -> Result<()> {
     Ok(())
 }
 pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
+    let texts = m.view.selector_texts().unwrap_or_default();
     if k.code == KeyCode::Esc
         || (k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c'))
     {
@@ -102,7 +195,22 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
     }
     match &mut m.view {
         View::Changes(review) => match k.code {
-            KeyCode::Enter => return Action::ConfirmChanges,
+            // Reading the diff writes nothing: Enter only acts on a button, and
+            // Ctrl+S is the explicit confirmation shown in the footer.
+            KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Action::ConfirmChanges
+            }
+            KeyCode::Tab => review.focus = (review.focus + 1) % 3,
+            KeyCode::BackTab => review.focus = (review.focus + 2) % 3,
+            KeyCode::Left | KeyCode::Right if review.focus != 0 => {
+                review.focus = Review::CONFIRM + Review::BACK - review.focus;
+            }
+            KeyCode::Enter if review.focus == Review::CONFIRM => return Action::ConfirmChanges,
+            KeyCode::Enter if review.focus == Review::BACK => {
+                m.back();
+                m.error.clear();
+            }
+            KeyCode::Enter => review.notice = true,
             KeyCode::Up => m.scroll = m.scroll.saturating_sub(1),
             KeyCode::Down => m.scroll = (m.scroll + 1).min(review.rows.saturating_sub(m.page)),
             KeyCode::PageUp => m.scroll = m.scroll.saturating_sub(m.page),
@@ -113,12 +221,16 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
             KeyCode::End => m.scroll = review.rows.saturating_sub(m.page),
             _ => {}
         },
-        View::Backups { entries, selected } => match k.code {
-            KeyCode::Up => *selected = selected.saturating_sub(1),
-            KeyCode::Down => *selected = (*selected + 1).min(entries.len().saturating_sub(1)),
-            KeyCode::Enter if !entries.is_empty() => return Action::RestoreBackup(*selected),
-            _ => {}
-        },
+        // Typing narrows the list by date, file or kind of change; Enter only
+        // opens the restoration preview, which writes nothing by itself.
+        View::Backups { entries, selected } => {
+            if select::key(selected, &texts, Some(&mut m.selector_query), k)
+                == select::Outcome::Apply
+                && !entries.is_empty()
+            {
+                return Action::RestoreBackup(*selected);
+            }
+        }
         _ => {}
     }
     Action::None
@@ -130,8 +242,38 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
         text::Line,
         widgets::{Block, Borders, Paragraph, Wrap},
     };
-    let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(4)]).split(area);
+    let summary = match &m.view {
+        View::Changes(review) if area.height >= 12 => review.summary.clone(),
+        _ => vec![],
+    };
+    let layout = Layout::vertical([
+        Constraint::Length(summary.len() as u16),
+        Constraint::Min(1),
+        Constraint::Length(4),
+    ])
+    .split(area);
+    f.render_widget(
+        Paragraph::new(
+            summary
+                .iter()
+                .enumerate()
+                .map(|(index, line)| {
+                    Line::styled(
+                        line.clone(),
+                        if index == 0 {
+                            Style::default().add_modifier(ratatui::style::Modifier::BOLD)
+                        } else {
+                            Style::default()
+                        },
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ),
+        layout[0],
+    );
+    let parts = [layout[1], layout[2]];
     m.page = parts[0].height.saturating_sub(2).max(1) as usize;
+    let mut buttons = None;
     let footer = match &mut m.view {
         View::Changes(review) => {
             let width = parts[0].width.saturating_sub(2).max(1) as usize;
@@ -173,19 +315,26 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                     .scroll((m.scroll.min(u16::MAX as usize) as u16, 0)),
                 parts[0],
             );
-            "Enter: confirm exact changes • Esc: return unchanged • ↑↓/PgUp/PgDn: scroll"
+            buttons = Some((review.verb, review.focus, review.notice));
+            "Tab: choose • Enter: confirm the choice • Ctrl+S: confirm exact changes • Esc: return unchanged • ↑↓/PgUp/PgDn: scroll"
         }
         View::Backups { entries, selected } => {
             // Entries wrap to variable heights; anchor the selected destination
             // at the top so it remains visible even in a very short terminal.
-            let start = *selected;
+            let texts: Vec<String> = entries
+                .iter()
+                .map(|entry| entry.description.clone())
+                .collect();
+            let shown = select::visible(&texts, &m.selector_query.value);
             let lines: Vec<_> = if entries.is_empty() {
                 vec![Line::from("No backups yet")]
+            } else if shown.is_empty() {
+                vec![Line::from("No backup matches the search")]
             } else {
                 entries
                     .iter()
                     .enumerate()
-                    .skip(start)
+                    .filter(|(i, _)| shown.contains(i) && *i >= *selected)
                     .map(|(i, entry)| {
                         Line::styled(
                             format!(
@@ -204,20 +353,43 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
             };
             f.render_widget(
                 Paragraph::new(lines)
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title("Backups — explicit recorded destinations"),
-                    )
+                    .block(Block::default().borders(Borders::ALL).title(
+                        if m.selector_query.value.is_empty() {
+                            "Backups — explicit recorded destinations — type to search".to_owned()
+                        } else {
+                            format!(
+                                "Backups — search: {} ({} of {})",
+                                m.selector_query.value,
+                                shown.len(),
+                                entries.len()
+                            )
+                        },
+                    ))
                     .wrap(Wrap { trim: false }),
                 parts[0],
             );
-            "Enter: preview restoration • Esc/F8: return • unknown provenance: restore disabled"
+            "Enter: preview restoration • type: search by date or file • Esc/F8: return • unknown provenance: restore disabled"
         }
         _ => return,
     };
-    f.render_widget(
-        Paragraph::new(format!("{footer}\n{}", m.error)).wrap(Wrap { trim: false }),
-        parts[1],
-    );
+    let mut lines = vec![];
+    if let Some((verb, focus, notice)) = buttons {
+        lines.push(Line::from(vec![
+            nav::button(verb, focus == Review::CONFIRM),
+            ratatui::text::Span::raw("  "),
+            nav::button("Back", focus == Review::BACK),
+            ratatui::text::Span::raw(if focus == 0 {
+                if notice {
+                    "  Nothing written: Tab reaches the buttons, Ctrl+S confirms."
+                } else {
+                    "  (reading the diff)"
+                }
+            } else {
+                ""
+            }),
+        ]));
+    }
+    lines.push(Line::from(footer));
+    lines.extend(m.error.lines().map(|line| Line::from(line.to_owned())));
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), parts[1]);
 }

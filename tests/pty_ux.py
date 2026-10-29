@@ -417,8 +417,14 @@ def scenario_host_form():
         # Ctrl+S previews from anywhere; writing needs the explicit confirmation.
         s.send(b'\x13')
         s.expect('confirm exact changes')
-        s.expect(str(work))
+        s.expect("Operation: ADD host 'web-01'")
+        s.expect('File: ' + str(work))
         assert 'web-01' not in work.read_text()
+        s.send(b'\r')                    # Enter while reading the diff writes nothing
+        s.expect('Nothing written: Tab reaches the buttons')
+        assert 'web-01' not in work.read_text()
+        s.send(b'\t')
+        s.expect('[▶ Save ]')
         s.send(b'\r')
         s.expect('web-01')
         s.expect('?: help')

@@ -4568,6 +4568,10 @@ fn preview_preserves_dirty_form_caret_parents_and_f7_overlay_then_completes_info
     assert!(matches!(&m.view, View::Host(form) if format!("{form:?}") == raw));
     assert_eq!(format!("{:?}", m.parents), parents);
     changes::open(&mut m, action.clone(), &root).unwrap();
+    // Enter while reading the diff confirms nothing; the button does.
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(matches!(m.view, View::Changes(_)));
+    m.key(key(KeyCode::Tab));
     assert_eq!(m.key(key(KeyCode::Enter)), Action::ConfirmChanges);
     let completed = changes::apply(&mut m, &app).unwrap();
     assert_eq!(completed, action);

@@ -185,6 +185,15 @@ Le formulaire d'hôte tient sur **une page**, sans onglets, et son titre nomme l
 
 Sur un terminal de moins de 44 colonnes, le libellé passe au-dessus de sa saisie. Le curseur natif reste visible dans le champ actif ; un bouton ou un titre de section ayant le focus n'a pas de curseur et ne reçoit ni frappe ni collage.
 
+### Aperçu des modifications, suppression et restauration
+
+Avant toute écriture dans un fichier SSH, l'aperçu affiche d'abord un **résumé en clair** : l'opération (`ADD`, `EDIT`, `COPY`, `DELETE`, `MOVE`, `RESTORE`) et l'hôte concerné, le ou les fichiers (source → destination pour un déplacement), et ce qu'il advient des données personnelles — par exemple « Favorite, note and tunnel profiles follow a renamed alias », ou qu'elles restent en place après une suppression. Une suppression nomme donc son objet sans dépendre de la couleur du diff.
+
+- Le **diff a le focus pour la lecture**. *Entrée n'y confirme plus rien* : un message le rappelle et aucun octet n'est écrit. Tab atteint le bouton nommé selon l'opération — **Save**, **Copy**, **Delete**, **Move** ou **Restore** — puis **Back**. Entrée répétée depuis le formulaire ne peut donc plus valider deux étapes d'un coup.
+- **Ctrl+S** est la confirmation explicite, affichée en pied de page : Ctrl+S ouvre l'aperçu depuis le formulaire, Ctrl+S le confirme.
+- Échap ou **Back** reviennent au brouillon, intact.
+- **Sauvegardes (F8)** : taper filtre la liste par date, fichier ou type de modification ; Entrée ouvre l'aperçu de restauration, qui suit les mêmes règles. Une provenance inconnue reste signalée et non restaurable.
+
 ### Clés : actions locales et distantes séparées
 
 L'écran des clés annonce son contexte. Ouvert par `K`, il **gère les clés** de l'alias sélectionné ; ouvert par F9 ou le bouton Choisir d'un formulaire, il sert seulement à **choisir une clé pour le brouillon** (« only its IdentityFile is filled, nothing is deployed ») et ne propose ni association ni déploiement.
@@ -312,7 +321,7 @@ L'écran principal utilise un titre compact et toute la hauteur disponible pour 
 | Formulaire hôte | Tab/↓ et Maj+Tab/↑ parcourent champs, sections et boutons ; Entrée : champ suivant ou activer ; Entrée/Espace sur un titre : déplier ; Ctrl+S : prévisualiser ; Échap ou Ctrl+C : annuler |
 | Assistant de clés | K depuis le tableau ou F2 → Clés OpenSSH ; F9 depuis un formulaire remplit seulement IdentityFile ; ↑/↓, Page précédente/suivante, Début/Fin naviguent ; F4 affiche les détails/erreurs complets |
 | Profils de tunnels | F6 ou F2 → Profils de tunnels ; a crée, Entrée/e/r édite ou renomme, d supprime avec confirmation, Ctrl+L lance |
-| Sauvegardes | F8 ou F2 → Sauvegardes ; Entrée ouvre le diff, Entrée confirme, Échap revient |
+| Sauvegardes | F8 ou F2 → Sauvegardes ; taper pour chercher ; Entrée ouvre le diff ; Tab puis Entrée sur Restore, ou Ctrl+S, confirme ; Échap revient |
 | Aperçu SSH | Ajout/édition/copie/suppression/déplacement : diff par fichier ; Entrée applique les octets montrés, Échap retrouve la saisie |
 | Commandes multi-hôtes (Unix) | x marque l’alias actif ; B prépare le lot ; F2 sélectionne explicitement les résultats du filtre, efface les marques ou ouvre les derniers résultats |
 | Préparation du lot | Tab : commande, concurrence, délai, cibles, boutons ; ↑/↓ : cible si la liste a le focus, sinon contrôle voisin ; Entrée : champ suivant puis Review ; Ctrl+L : vérification, puis Ctrl+L ou le bouton Launch pour lancer ; Échap : retour |

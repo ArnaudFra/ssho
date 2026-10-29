@@ -93,8 +93,10 @@ class Session:
         raise AssertionError(f"no fresh {width}x{height} frame after resize:\n{self.screen.text()}")
 
     def confirm_changes(self):
-        self.expect("Enter: confirm exact changes")
-        self.send(b"\r")
+        # Enter while reading the diff writes nothing; the named button confirms.
+        self.expect("Ctrl+S: confirm exact changes")
+        self.expect("(reading the diff)")
+        self.send(b"\t\r")
 
     def close(self, expected=0):
         self.capture()

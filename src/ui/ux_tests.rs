@@ -2060,3 +2060,102 @@ fn generation_waits_for_its_button() {
     m.key(key(KeyCode::Tab));
     assert_eq!(m.key(key(KeyCode::Enter)), Action::GenerateKey);
 }
+
+/// A real configuration file, so a change can be prepared and reviewed.
+fn review_model() -> (tempfile::TempDir, PathBuf, Model) {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("config");
+    std::fs::write(
+        &root,
+        "Host alpha\n HostName alpha.invalid\nHost beta\n HostName beta.invalid\n",
+    )
+    .unwrap();
+    let hosts = config::load_report(&root).unwrap().hosts;
+    let mut m = Model::new(hosts, AppConfig::default(), BTreeMap::new(), false);
+    m.search_focus = false;
+    (temp, root, m)
+}
+
+#[test]
+fn reading_a_diff_writes_nothing_and_the_button_names_the_operation() {
+    let (temp, root, mut m) = review_model();
+    let before = std::fs::read(&root).unwrap();
+    let Action::Delete(host) = m.key(key(KeyCode::Char('d'))) else {
+        panic!()
+    };
+    changes::open(&mut m, Action::Delete(host), &root).unwrap();
+    let text = screen(&mut m, 120, 30);
+    for expected in [
+        // The object of a deletion is written, not only coloured.
+        "Operation: DELETE host 'alpha'",
+        &format!("File: {}", root.display()),
+        "Its favorite, note and tunnel profiles stay in the ssho data.",
+        "[  Delete ]  [  Back ]  (reading the diff)",
+        "Ctrl+S: confirm exact changes",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // Enter repeated from the list, or while reading, confirms nothing.
+    for _ in 0..3 {
+        assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    }
+    assert!(screen(&mut m, 120, 30).contains("Nothing written: Tab reaches the buttons"));
+    assert_eq!(std::fs::read(&root).unwrap(), before);
+    assert!(matches!(m.view, View::Changes(_)));
+    // Tab reaches Delete, then Back; each does what its name says.
+    m.key(key(KeyCode::Tab));
+    assert!(screen(&mut m, 120, 30).contains("[▶ Delete ]"));
+    m.key(key(KeyCode::Tab));
+    assert!(screen(&mut m, 120, 30).contains("[▶ Back ]"));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(matches!(m.view, View::List));
+    assert_eq!(std::fs::read(&root).unwrap(), before);
+    // Ctrl+S is the explicit confirmation, from any focus.
+    let Action::Delete(host) = m.key(key(KeyCode::Char('d'))) else {
+        panic!()
+    };
+    changes::open(&mut m, Action::Delete(host), &root).unwrap();
+    assert_eq!(m.key(ctrl('s')), Action::ConfirmChanges);
+    drop(temp);
+}
+
+#[test]
+fn summary_tells_files_and_what_happens_to_personal_data() {
+    let (_temp, root, mut m) = review_model();
+    let other = root.with_file_name("other");
+    // A rename says that personal data follows.
+    let original = m.all[0].clone();
+    let mut renamed = original.clone();
+    renamed.name = "gamma".into();
+    renamed.aliases = vec!["gamma".into()];
+    changes::open(
+        &mut m,
+        Action::Save(Some(original.clone()), Box::new(renamed), root.clone()),
+        &root,
+    )
+    .unwrap();
+    let text = screen(&mut m, 130, 30);
+    assert!(text.contains("Operation: EDIT host 'alpha'"), "{text}");
+    assert!(
+        text.contains(
+            "Aliases: alpha → gamma. Favorite, note and tunnel profiles follow a renamed alias."
+        ),
+        "{text}"
+    );
+    assert!(text.contains("[  Save ]  [  Back ]"), "{text}");
+    m.key(key(KeyCode::Esc));
+    // A move shows where from and where to.
+    std::fs::write(&other, "").unwrap();
+    changes::open(&mut m, Action::MoveTo(original, other.clone()), &root).unwrap();
+    let text = screen(&mut m, 130, 30);
+    assert!(text.contains("Operation: MOVE host 'alpha'"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "From: {} → To: {}",
+            root.display(),
+            other.display()
+        )),
+        "{text}"
+    );
+    assert!(text.contains("[  Move ]  [  Back ]"), "{text}");
+}

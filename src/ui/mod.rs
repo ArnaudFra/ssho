@@ -157,6 +157,13 @@ impl View {
                     .map(|host| format!("{} {} {}", host.name, host.user, host.hostname))
                     .collect(),
             ),
+            // A backup is found by its date, its file or its kind of change.
+            View::Backups { entries, .. } => Some(
+                entries
+                    .iter()
+                    .map(|entry| entry.description.clone())
+                    .collect(),
+            ),
             _ => None,
         }
     }
@@ -164,7 +171,8 @@ impl View {
         match self {
             View::Files { selected, .. }
             | View::SourceFiles { selected, .. }
-            | View::Aliases { selected, .. } => Some(selected),
+            | View::Aliases { selected, .. }
+            | View::Backups { selected, .. } => Some(selected),
             _ => None,
         }
     }
@@ -644,7 +652,10 @@ impl Model {
     fn open_view(&mut self, view: View) {
         if matches!(
             view,
-            View::Files { .. } | View::SourceFiles { .. } | View::Aliases { .. }
+            View::Files { .. }
+                | View::SourceFiles { .. }
+                | View::Aliases { .. }
+                | View::Backups { .. }
         ) {
             self.selector_query.set("");
         }
@@ -700,7 +711,10 @@ impl Model {
         let multiline = matches!(self.view, View::Note(_));
         let input = match &mut self.view {
             View::List if self.search_focus => &mut self.query,
-            View::Files { .. } | View::SourceFiles { .. } | View::Aliases { .. } => {
+            View::Files { .. }
+            | View::SourceFiles { .. }
+            | View::Aliases { .. }
+            | View::Backups { .. } => {
                 // Pasted text only narrows the list; applying still needs Enter.
                 &mut self.selector_query
             }
