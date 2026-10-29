@@ -66,6 +66,10 @@ fn generation_error_keeps_path_comment_and_form_parent() {
     m.paste("/missing parent/key");
     m.key(key(KeyCode::Tab));
     m.paste("my comment");
+    // Enter in the last field only reaches the button; the button hands over.
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(screen(&mut m, 100, 30).contains("[▶ Continue in terminal ]"));
+    m.paste("ignored by a button");
     assert_eq!(m.key(key(KeyCode::Enter)), Action::GenerateKey);
     m.error = "native failure".into();
     let text = screen(&mut m, 100, 30);
@@ -369,5 +373,16 @@ fn refresh_and_details_preserve_generation_draft_and_deployment_snapshot() {
         panic!()
     };
     assert_eq!(format!("{:?}", editor.mode), snapshot);
+    // The review names the alias; only its Deploy button deploys.
+    let text = screen(&mut m, 110, 30);
+    assert!(text.contains("acts on the remote server"), "{text}");
+    assert!(
+        text.contains("[▶ Back ]  [  Deploy to exact-secondary ]"),
+        "{text}"
+    );
+    m.key(key(KeyCode::Tab));
     assert_eq!(m.key(key(KeyCode::Enter)), Action::DeployKey);
+    m.key(key(KeyCode::Tab));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(matches!(&m.view, View::Keys(editor) if matches!(editor.mode, keys::Mode::List)));
 }

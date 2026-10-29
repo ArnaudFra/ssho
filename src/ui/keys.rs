@@ -32,6 +32,46 @@ pub(super) struct Editor {
     details_scroll: usize,
     notice: String,
     preferred: Option<PathBuf>,
+    /// Focused named action: of the list (see `actions`), or of the deployment
+    /// review, where 0 goes back and 1 deploys.
+    button: usize,
+}
+/// What a named action of the key list does, and where it acts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Command {
+    Use,
+    Create,
+    Agent,
+    Attach,
+    Deploy,
+}
+impl Command {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Use => "Use this key",
+            Self::Create => "Create key",
+            Self::Agent => "Add to agent",
+            Self::Attach => "Associate with this host",
+            Self::Deploy => "Deploy public key",
+        }
+    }
+    /// Deploying is the only action that reaches the server.
+    fn remote(self) -> bool {
+        self == Self::Deploy
+    }
+}
+/// Choosing a key for a draft never offers what would act on a host or a server.
+pub(super) fn actions(picker: bool) -> &'static [Command] {
+    if picker {
+        &[Command::Use, Command::Create, Command::Agent]
+    } else {
+        &[
+            Command::Create,
+            Command::Agent,
+            Command::Attach,
+            Command::Deploy,
+        ]
+    }
 }
 pub(super) fn open_view(m: &mut Model, picker: bool) {
     let target = if picker { None } else { m.selected_host() };
@@ -44,6 +84,7 @@ pub(super) fn open_view(m: &mut Model, picker: bool) {
         details_scroll: 0,
         notice: String::new(),
         preferred: None,
+        button: 0,
     }));
     m.error.clear();
 }
@@ -81,7 +122,12 @@ pub(super) fn input(editor: &mut Editor) -> Option<&mut Input> {
         focus,
     } = &mut editor.mode
     {
-        Some(if *focus == 0 { path } else { comment })
+        match *focus {
+            0 => Some(path),
+            1 => Some(comment),
+            // A focused button receives no text.
+            _ => None,
+        }
     } else {
         None
     }
@@ -121,17 +167,35 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
     }
     let previous_selection = editor.selected;
     match &mut editor.mode {
+        // Fields, then two buttons: Enter in a field moves on, and only the
+        // "Continue in terminal" button hands over to ssh-keygen.
         Mode::Generate { focus, .. } => match k.code {
-            KeyCode::Tab | KeyCode::BackTab => *focus = 1 - *focus,
-            KeyCode::Enter => return Action::GenerateKey,
+            KeyCode::Tab | KeyCode::Down => *focus = (*focus + 1) % 4,
+            KeyCode::BackTab | KeyCode::Up => *focus = (*focus + 3) % 4,
+            KeyCode::Left | KeyCode::Right if *focus >= 2 => *focus = 5 - *focus,
+            KeyCode::Enter | KeyCode::Char(' ') if *focus == 2 => return Action::GenerateKey,
+            KeyCode::Enter | KeyCode::Char(' ') if *focus == 3 => {
+                editor.mode = Mode::List;
+                m.error.clear();
+            }
+            KeyCode::Enter => *focus += 1,
             _ => {
                 if let Some(input) = input(editor) {
                     input.key(k);
                 }
             }
         },
+        // Reading the review deploys nothing: the Deploy button has to be chosen.
         Mode::Deploy { .. } => match k.code {
-            KeyCode::Enter => return Action::DeployKey,
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {
+                editor.button = 1 - editor.button.min(1);
+            }
+            KeyCode::Enter if editor.button == 1 => return Action::DeployKey,
+            KeyCode::Enter => {
+                editor.mode = Mode::List;
+                editor.button = 0;
+                m.error.clear();
+            }
             KeyCode::Down => m.scroll = m.scroll.saturating_add(1),
             KeyCode::Up => m.scroll = m.scroll.saturating_sub(1),
             KeyCode::PageDown => m.scroll = m.scroll.saturating_add(m.page),
@@ -139,84 +203,107 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
             KeyCode::Home => m.scroll = 0,
             _ => {}
         },
-        Mode::List => match k.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                editor.selected = if editor.selected == usize::MAX {
-                    m.keys.entries.len().saturating_sub(1)
-                } else {
-                    editor.selected.saturating_sub(1)
+        Mode::List => {
+            // Enter runs the focused named action; each is also a direct key.
+            let commands = actions(editor.picker);
+            editor.button = editor.button.min(commands.len() - 1);
+            let k = match k.code {
+                KeyCode::Enter => match commands[editor.button] {
+                    Command::Use => k,
+                    Command::Create => KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+                    Command::Agent => KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+                    Command::Attach => KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+                    Command::Deploy => KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+                },
+                _ => k,
+            };
+            match k.code {
+                KeyCode::Tab | KeyCode::Right => {
+                    editor.button = nav::wrap(editor.button, commands.len(), 1)
                 }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                editor.selected = if editor.selected == usize::MAX {
-                    0
-                } else {
-                    editor
+                KeyCode::BackTab | KeyCode::Left => {
+                    editor.button = nav::wrap(editor.button, commands.len(), -1)
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    editor.selected = if editor.selected == usize::MAX {
+                        m.keys.entries.len().saturating_sub(1)
+                    } else {
+                        editor.selected.saturating_sub(1)
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    editor.selected = if editor.selected == usize::MAX {
+                        0
+                    } else {
+                        editor
+                            .selected
+                            .saturating_add(1)
+                            .min(m.keys.entries.len().saturating_sub(1))
+                    }
+                }
+                KeyCode::PageUp => {
+                    editor.selected = if editor.selected == usize::MAX {
+                        0
+                    } else {
+                        editor.selected.saturating_sub(m.page)
+                    }
+                }
+                KeyCode::PageDown => {
+                    editor.selected = editor
                         .selected
-                        .saturating_add(1)
+                        .saturating_add(m.page)
                         .min(m.keys.entries.len().saturating_sub(1))
                 }
-            }
-            KeyCode::PageUp => {
-                editor.selected = if editor.selected == usize::MAX {
-                    0
-                } else {
-                    editor.selected.saturating_sub(m.page)
-                }
-            }
-            KeyCode::PageDown => {
-                editor.selected = editor
-                    .selected
-                    .saturating_add(m.page)
-                    .min(m.keys.entries.len().saturating_sub(1))
-            }
-            KeyCode::Home => editor.selected = 0,
-            KeyCode::End => editor.selected = m.keys.entries.len().saturating_sub(1),
-            KeyCode::F(5) => return Action::RefreshKeys,
-            KeyCode::Char('n') => {
-                editor.mode = Mode::Generate {
-                    path: Input::default(),
-                    comment: Input::default(),
-                    focus: 0,
-                }
-            }
-            KeyCode::Char('a') => return Action::AddKey,
-            KeyCode::Char('t') if !editor.picker => return Action::AttachKey,
-            KeyCode::Char('d') if !editor.picker => {
-                if let (Some(entry), Some(target)) =
-                    (m.keys.entries.get(editor.selected), &editor.target)
-                {
-                    if let Some(public) = &entry.public {
-                        m.scroll = 0;
-                        editor.mode = Mode::Deploy {
-                            public: public.clone(),
-                            private: entry.private.clone(),
-                            alias: target.name.clone(),
-                        };
-                    } else {
-                        m.error =
-                            "No reviewed public fingerprint; refresh or fix the public file".into();
+                KeyCode::Home => editor.selected = 0,
+                KeyCode::End => editor.selected = m.keys.entries.len().saturating_sub(1),
+                KeyCode::F(5) => return Action::RefreshKeys,
+                KeyCode::Char('n') => {
+                    editor.mode = Mode::Generate {
+                        path: Input::default(),
+                        comment: Input::default(),
+                        focus: 0,
                     }
-                } else {
-                    m.error = "Open Keys with an exact host alias selected to deploy".into();
                 }
-            }
-            KeyCode::Enter if editor.picker => {
-                if let Some(entry) = m.keys.entries.get(editor.selected) {
-                    if !entry.private.is_absolute() {
-                        m.error = "Unresolved identity cannot fill the draft".into();
+                KeyCode::Char('a') => return Action::AddKey,
+                KeyCode::Char('t') if !editor.picker => return Action::AttachKey,
+                KeyCode::Char('d') if !editor.picker => {
+                    if let (Some(entry), Some(target)) =
+                        (m.keys.entries.get(editor.selected), &editor.target)
+                    {
+                        if let Some(public) = &entry.public {
+                            m.scroll = 0;
+                            editor.button = 0;
+                            editor.mode = Mode::Deploy {
+                                public: public.clone(),
+                                private: entry.private.clone(),
+                                alias: target.name.clone(),
+                            };
+                        } else {
+                            m.error =
+                                "No reviewed public fingerprint; refresh or fix the public file"
+                                    .into();
+                        }
+                    } else {
+                        m.error = "Open Keys with an exact host alias selected to deploy".into();
+                    }
+                }
+                KeyCode::Enter if editor.picker => {
+                    if let Some(entry) = m.keys.entries.get(editor.selected) {
+                        if !entry.private.is_absolute() {
+                            m.error = "Unresolved identity cannot fill the draft".into();
+                            return Action::None;
+                        }
+                        let value = entry.private.to_string_lossy().into_owned();
+                        m.back();
+                        if let View::Host(form) = &mut m.view {
+                            form.inputs[4].set(&value);
+                        }
                         return Action::None;
                     }
-                    let value = entry.private.to_string_lossy().into_owned();
-                    m.back();
-                    if let View::Host(form) = &mut m.view {
-                        form.inputs[4].set(&value);
-                    }
-                    return Action::None;
                 }
+                _ => {}
             }
-            _ => {}
-        },
+        }
     }
     if editor.selected != previous_selection {
         editor.notice.clear();
@@ -315,7 +402,7 @@ fn selected_details(entry: Option<&Entry>) -> String {
         })
         .unwrap_or_else(|| "No selected key; use ↑/↓ to choose.".into())
 }
-const LIST_HELP: &str = "↑/↓ PgUp/PgDn Home/End: select key\nEnter: choose in picker • n: generate • a: agent\nt: attach (review; keep other identities)\nd: deploy (review public key + exact alias)\nF5: refresh • F4: full details/error • Esc: back";
+const LIST_HELP: &str = "↑/↓ PgUp/PgDn Home/End: select key • ←/→: named action • Enter: run it\nLocal — n: create key • a: add to agent • t: associate with this host (review; keep other identities)\nRemote server — d: deploy public key (review public key + exact alias)\nF5: refresh • F4: full details/error • Esc: back";
 
 pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout::Rect) {
     use ratatui::{
@@ -363,7 +450,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
     let parts = Layout::vertical([
         Constraint::Length(if compact { 1 } else { 3 }),
         Constraint::Min(1),
-        Constraint::Length(if compact { 2 } else { 4 }),
+        Constraint::Length(if compact { 2 } else { 5 }),
     ])
     .split(area);
     let target = editor
@@ -373,11 +460,17 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
         .unwrap_or("none");
     f.render_widget(
         Paragraph::new(format!(
-            "Keys — {} • target: {target}\nPublic files only • declared usages • {}",
+            "Keys — {} • target: {target}\n{} • {}",
             if editor.picker {
                 "IdentityFile picker"
             } else {
                 "OpenSSH assistant"
+            },
+            // What this screen is for, so a draft is never taken for a deployment.
+            if editor.picker {
+                "Choose a key for this draft: only its IdentityFile is filled, nothing is deployed"
+            } else {
+                "Manage keys: public files only, declared usages"
             },
             if m.keys.scanner.busy() {
                 "Scanning (bounded)…"
@@ -387,6 +480,9 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
         )),
         parts[0],
     );
+    // Named actions of the current step, drawn under its help line.
+    let mut actions_line = None;
+    let mut deploy_line: Option<(usize, String)> = None;
     let help = match &mut editor.mode {
         Mode::List => {
             let item_height = if compact { 1 } else { 3 };
@@ -433,10 +529,11 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                 parts[1],
                 &mut ListState::default().with_selected(selected),
             );
+            actions_line = Some(editor.button);
             if compact {
                 "↑↓ select • F4 details/error"
             } else {
-                "↑↓ select • n generate • a agent • t attach • d deploy\nEnter choose (picker) • F4 details/error • F5 refresh • Esc back"
+                "↑↓ select key • ←/→: action • Enter: run it • F4 details/error • F5 refresh • Esc back"
             }
         }
         Mode::Generate {
@@ -457,7 +554,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
             {
                 // At heights below the supported eight rows, render the active field first.
                 let row = if parts[1].height < 4 {
-                    if index == *focus {
+                    if index == (*focus).min(1) {
                         parts[1]
                     } else {
                         ratatui::layout::Rect::default()
@@ -476,11 +573,24 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                     }
                 }
             }
-            f.render_widget(Paragraph::new("Ed25519 • native passphrase prompt in terminal\nExisting private/.pub paths are never overwritten.").wrap(Wrap {trim:false}), rows[2]);
+            f.render_widget(
+                Paragraph::new(vec![
+                    Line::from("Ed25519. ssh-keygen then asks for the passphrase in the terminal, and ssho comes back here."),
+                    Line::from("Existing private/.pub paths are never overwritten."),
+                    Line::from(""),
+                    Line::from(vec![
+                        nav::button("Continue in terminal", *focus == 2),
+                        ratatui::text::Span::raw("  "),
+                        nav::button("Back", *focus == 3),
+                    ]),
+                ])
+                .wrap(Wrap { trim: false }),
+                rows[2],
+            );
             if compact {
                 "Tab field • F4 details/error"
             } else {
-                "Tab next field • Enter generate in native terminal • Esc back\nF4 full details/error"
+                "Tab next field • Enter: next field, or the focused button • Esc back\nF4 full details/error"
             }
         }
         Mode::Deploy {
@@ -489,7 +599,8 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
             alias,
         } => {
             m.page = parts[1].height.max(1) as usize;
-            let text = format!("Confirm deployment\nPublic: {}\nPrivate sibling for duplicate check: {}\nFingerprint: {}\nExact alias: {alias}\nRoot config: {}\nNative ssh-copy-id; password and host-key prompts stay native.\nPublic snapshot revalidated before launch; duplicate checking retained.", public.path.display(), private.display(), public.fingerprint, m.batch.root.display());
+            let text = format!("Confirm deployment — acts on the remote server\nExact alias: {alias}\nFingerprint: {}\nPublic: {}\nPrivate sibling for duplicate check: {}\nRoot config: {}\nNative ssh-copy-id; password and host-key prompts stay native.\nPublic snapshot revalidated before launch; duplicate checking retained.", public.fingerprint, public.path.display(), private.display(), m.batch.root.display());
+            deploy_line = Some((editor.button, alias.clone()));
             details::render_rows(
                 f,
                 parts[1],
@@ -501,7 +612,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
             if compact {
                 "↑↓ scroll • F4 details/error"
             } else {
-                "↑/↓ PgUp/PgDn scroll • Enter deploy • Esc cancel\nF4 full details/error"
+                "↑/↓ PgUp/PgDn scroll • Tab/←→: choose • Enter: confirm the choice • Esc cancel"
             }
         }
     };
@@ -512,12 +623,39 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
     } else {
         match editor.mode {
             Mode::List => "F5 refresh • Esc back",
-            Mode::Generate { .. } => "Enter generate • Esc back",
-            Mode::Deploy { .. } => "Enter deploy • Esc cancel",
+            Mode::Generate { .. } => "Continue in terminal generates • Esc back",
+            Mode::Deploy { .. } => "Only the Deploy button deploys • Esc cancel",
         }
     };
+    // Local actions and the one that reaches the server are told apart by name.
+    let mut lines = vec![];
+    if let (Some(focused), false) = (actions_line, compact) {
+        let commands = actions(editor.picker);
+        let focused = focused.min(commands.len() - 1);
+        let mut spans = vec![ratatui::text::Span::raw("Local: ")];
+        for (index, command) in commands.iter().enumerate() {
+            if command.remote() {
+                spans.push(ratatui::text::Span::raw("• Remote server: "));
+            }
+            spans.push(nav::button(command.label(), index == focused));
+            spans.push(ratatui::text::Span::raw(" "));
+        }
+        lines.push(Line::from(spans));
+    }
+    if let (Some((focused, alias)), false) = (&deploy_line, compact) {
+        lines.push(Line::from(vec![
+            nav::button("Back", *focused == 0),
+            ratatui::text::Span::raw("  "),
+            nav::button(&format!("Deploy to {alias}"), *focused == 1),
+        ]));
+    }
     // A clipped status always has a visible F4 route to its complete wrapped text.
-    f.render_widget(Paragraph::new(format!("{help}\n{status}")), parts[2]);
+    lines.extend(
+        format!("{help}\n{status}")
+            .lines()
+            .map(|line| Line::from(line.to_owned())),
+    );
+    f.render_widget(Paragraph::new(lines), parts[2]);
 }
 
 /// Reconcile both visible and suspended editors by path before replacing the scan.

@@ -1984,3 +1984,79 @@ fn arrows_belong_to_the_focused_control_and_enter_stops_on_review() {
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
     assert!(!m.batch.manager.has_active());
 }
+
+#[test]
+fn key_screen_names_its_context_and_separates_local_from_remote() {
+    let mut m = model(serde_json::json!({}));
+    keys::open_view(&mut m, false);
+    let text = screen(&mut m, 130, 30);
+    assert!(
+        text.contains("Keys — OpenSSH assistant • target: alpha"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Local: [▶ Create key ] [  Add to agent ] [  Associate with this host ] • Remote server: [  Deploy public key ]"),
+        "{text}"
+    );
+    // Without a reviewed public key, deploying explains itself and does nothing.
+    m.key(key(KeyCode::Left));
+    assert!(screen(&mut m, 130, 30).contains("[▶ Deploy public key ]"));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(!m.error.is_empty());
+    m.key(key(KeyCode::Esc));
+    // Choosing a key for a draft never offers to associate or deploy.
+    m.key(key(KeyCode::Char('e')));
+    typing(&mut m, "-draft");
+    let draft = format!("{:?}", m.view);
+    keys::open_view(&mut m, true);
+    let text = screen(&mut m, 130, 30);
+    assert!(
+        text.contains(
+            "Choose a key for this draft: only its IdentityFile is filled, nothing is deployed"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("Local: [▶ Use this key ] [  Create key ] [  Add to agent ]"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Deploy public key") && !text.contains("Associate"),
+        "{text}"
+    );
+    for forbidden in ['d', 't'] {
+        assert_eq!(m.key(key(KeyCode::Char(forbidden))), Action::None);
+        assert!(matches!(&m.view, View::Keys(editor) if matches!(editor.mode, keys::Mode::List)));
+    }
+    m.key(key(KeyCode::Esc));
+    assert_eq!(format!("{:?}", m.view), draft, "the draft is found again");
+}
+
+#[test]
+fn generation_waits_for_its_button() {
+    let mut m = model(serde_json::json!({}));
+    keys::open_view(&mut m, false);
+    m.key(key(KeyCode::Enter));
+    let text = screen(&mut m, 120, 30);
+    assert!(
+        text.contains("ssh-keygen then asks for the passphrase in the terminal"),
+        "{text}"
+    );
+    assert!(
+        text.contains("[  Continue in terminal ]  [  Back ]"),
+        "{text}"
+    );
+    // Enter in the first field no longer generates.
+    typing(&mut m, "/tmp/new-key");
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    typing(&mut m, "comment");
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(screen(&mut m, 120, 30).contains("[▶ Continue in terminal ]"));
+    m.key(key(KeyCode::Right));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(matches!(&m.view, View::Keys(editor) if matches!(editor.mode, keys::Mode::List)));
+    m.key(key(KeyCode::Char('n')));
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Tab));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::GenerateKey);
+}

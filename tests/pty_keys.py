@@ -96,20 +96,20 @@ try:
  send(b'a');expect('Native key operation completed')
  # Review is explicit; modifying the public source prevents launch.
  send(b'd');expect('Confirm deployment');assert len((ROOT/'native.jsonl').read_text().splitlines())==1
- Path(str(private)+'.pub').write_text(PUBLIC.replace(' fixture',' changed'));send(b'\r');expect('public key changed after review')
+ Path(str(private)+'.pub').write_text(PUBLIC.replace(' fixture',' changed'));expect('[▶ Back ]');send(b'\t');expect('[▶ Deploy to');send(b'\r');expect('public key changed after review')
  assert len((ROOT/'native.jsonl').read_text().splitlines())==1
- send(b'\x1b');Path(str(private)+'.pub').write_text(PUBLIC);send(b'\x1b[15~');expect('SHA256:fixture');send(b'd');send(b'\r');expect('Native key operation completed')
+ send(b'\x1b');Path(str(private)+'.pub').write_text(PUBLIC);send(b'\x1b[15~');expect('SHA256:fixture');send(b'd');send(b'\t\r');expect('Native key operation completed')
  # Failure returns to intact generation form; retry publishes a pair.
  (ROOT/'keys').mkdir(exist_ok=True)
  send(b'n');dest=ROOT/'keys/new key';send(str(dest).encode());send(b'\t');send(b'fixture comment')
- (ROOT/'fail-generation').touch();send(b'\r');expect('Native generation fixture');send(b'\r');expect('exited with');expect('fixture comment');assert not dest.exists()
+ (ROOT/'fail-generation').touch();send(b'\r');expect('[▶ Continue in terminal ]');send(b'\r');expect('Native generation fixture');send(b'\r');expect('exited with');expect('fixture comment');assert not dest.exists()
  (ROOT/'fail-generation').unlink();send(b'\r');expect('Native generation fixture');send(b'\r');expect('Native key operation completed');assert dest.exists() and Path(str(dest)+'.pub').exists()
  earlier=ROOT/'.ssh/aaa';earlier.write_text('fake private fixture');Path(str(earlier)+'.pub').write_text(PUBLIC)
  send(b'\x1b[15~');expect(str(earlier));expect(str(dest));send(b'a');expect('Native key operation completed')
  assert json.loads((ROOT/'native.jsonl').read_text().splitlines()[-1])==['ssh-add',[str(dest)]]
  # A public collision after native generation retains the private destination
  # and the generation draft, with explicit manual recovery instead of rollback.
- send(b'n');raced=ROOT/'.ssh/raced';send(str(raced).encode());send(b'\t');send(b'race');send(b'\r');expect('Native generation fixture');send(b'\r');expect('publication failed')
+ send(b'n');raced=ROOT/'.ssh/raced';send(str(raced).encode());send(b'\t');send(b'race');send(b'\r\r');expect('Native generation fixture');send(b'\r');expect('publication failed')
  resize(28,8);expect('race');send(b'\x1bOS')  # F4 exposes complete native failure without dropping form.
  seen=''
  for _ in range(65):

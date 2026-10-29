@@ -185,6 +185,15 @@ Le formulaire d'hôte tient sur **une page**, sans onglets, et son titre nomme l
 
 Sur un terminal de moins de 44 colonnes, le libellé passe au-dessus de sa saisie. Le curseur natif reste visible dans le champ actif ; un bouton ou un titre de section ayant le focus n'a pas de curseur et ne reçoit ni frappe ni collage.
 
+### Clés : actions locales et distantes séparées
+
+L'écran des clés annonce son contexte. Ouvert par `K`, il **gère les clés** de l'alias sélectionné ; ouvert par F9 ou le bouton Choisir d'un formulaire, il sert seulement à **choisir une clé pour le brouillon** (« only its IdentityFile is filled, nothing is deployed ») et ne propose ni association ni déploiement.
+
+- **Actions nommées**, regroupées par portée : `Local:` **Create key**, **Add to agent**, **Associate with this host** • `Remote server:` **Deploy public key**. ←/→ ou Tab choisit, Entrée lance ; `n`, `a`, `t`, `d` restent des accès directs. Dans le sélecteur d'un brouillon : **Use this key**, Create key, Add to agent.
+- **Génération** : chemin et commentaire, puis les boutons **Continue in terminal** et **Back**. *Entrée dans un champ ne génère plus : elle passe au champ suivant puis au bouton.* L'écran annonce que `ssh-keygen` demandera la phrase secrète dans le terminal avant le retour à l'application.
+- **Déploiement** : la revue indique en tête qu'elle agit sur le serveur distant, l'alias exact et l'empreinte publique, puis propose **Back** (focus initial) et **Deploy to alias**. *Entrée seule ne déploie plus.* Le gel de la cible et la revalidation de la clé publique sont inchangés.
+- Les phrases secrètes restent entièrement confiées aux outils natifs ; aucun coffre n'est ajouté.
+
 ### Lots : un parcours en étapes
 
 Une ligne en tête situe le parcours : **Targets → Command → Review → Results**, l'étape en cours entre crochets.
