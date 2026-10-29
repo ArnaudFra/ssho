@@ -108,6 +108,9 @@ pub(super) struct Editor {
     selected: usize,
     pub confirm: bool,
     scroll: usize,
+    /// Focused button of the review step or of the "no target" page: 0 is the
+    /// safe one (go back), 1 continues.
+    button: usize,
 }
 impl Editor {
     fn new(targets: Vec<Target>) -> Self {
@@ -123,10 +126,15 @@ impl Editor {
             selected: 0,
             confirm: false,
             scroll: 0,
+            button: 0,
         }
     }
+    /// Stops of the preparation step: three inputs, the target list, two buttons.
+    const TARGETS: usize = 3;
+    const REVIEW: usize = 4;
+    const BACK: usize = 5;
     pub fn input(&mut self) -> Option<&mut Input> {
-        if self.confirm {
+        if self.confirm || self.targets.is_empty() {
             return None;
         }
         match self.focus {
@@ -234,6 +242,31 @@ pub(super) fn start(m: &mut Model) -> Result<()> {
 pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     match &mut m.view {
+        View::Batch(editor) if editor.targets.is_empty() => {
+            // Step 1 without any target: go back, or explicitly take the hosts
+            // the filter shows. The filter is never turned into targets on its own.
+            if nav::cancels(k) {
+                m.back();
+                return Action::None;
+            }
+            match k.code {
+                KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {
+                    editor.button = 1 - editor.button;
+                }
+                KeyCode::Enter if editor.button == 0 => m.back(),
+                KeyCode::Enter => {
+                    select_visible(m);
+                    if m.batch.marks.is_empty() {
+                        if m.error.is_empty() {
+                            m.error = "No host is shown by the current filter".into();
+                        }
+                    } else {
+                        m.view = View::Batch(Editor::new(m.batch.marks.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
         View::Batch(editor) => {
             if nav::cancels(k) {
                 if editor.confirm {
@@ -244,43 +277,72 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
                 }
                 return Action::None;
             }
+            let last = editor.targets.len().saturating_sub(1);
             if editor.confirm {
+                // Step 3: reading the review launches nothing. Only the Launch
+                // button, or the explicit Ctrl+L, starts the batch.
                 match k.code {
-                    KeyCode::Enter => return Action::StartBatch,
-                    KeyCode::Down => {
-                        editor.selected =
-                            (editor.selected + 1).min(editor.targets.len().saturating_sub(1))
+                    KeyCode::Char('l') if ctrl => return Action::StartBatch,
+                    KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {
+                        editor.button = 1 - editor.button;
                     }
+                    KeyCode::Enter if editor.button == 1 => return Action::StartBatch,
+                    KeyCode::Enter => {
+                        editor.confirm = false;
+                        editor.scroll = 0;
+                    }
+                    KeyCode::Down => editor.selected = (editor.selected + 1).min(last),
                     KeyCode::Up => editor.selected = editor.selected.saturating_sub(1),
                     KeyCode::PageDown => editor.scroll = editor.scroll.saturating_add(m.page),
                     KeyCode::PageUp => editor.scroll = editor.scroll.saturating_sub(m.page),
                     _ => {}
                 }
-            } else if ctrl && k.code == KeyCode::Char('l') {
-                match editor.options() {
-                    Ok(_) => {
-                        editor.confirm = true;
-                        editor.scroll = 0;
-                        m.error.clear();
-                    }
-                    Err(e) => m.error = e.to_string(),
+                return Action::None;
+            }
+            let review = |editor: &mut Editor, error: &mut String| match editor.options() {
+                Ok(_) => {
+                    editor.confirm = true;
+                    editor.button = 0;
+                    editor.scroll = 0;
+                    error.clear();
                 }
-            } else {
-                match k.code {
-                    KeyCode::Tab => editor.focus = (editor.focus + 1) % 4,
-                    KeyCode::BackTab => editor.focus = (editor.focus + 3) % 4,
-                    KeyCode::Up => editor.selected = editor.selected.saturating_sub(1),
-                    KeyCode::Down => {
-                        editor.selected =
-                            (editor.selected + 1).min(editor.targets.len().saturating_sub(1))
-                    }
-                    KeyCode::PageDown => editor.scroll = editor.scroll.saturating_add(m.page),
-                    KeyCode::PageUp => editor.scroll = editor.scroll.saturating_sub(m.page),
-                    KeyCode::Enter => {}
-                    _ => {
-                        if let Some(input) = editor.input() {
-                            input.key(k);
-                        }
+                Err(e) => *error = e.to_string(),
+            };
+            match k.code {
+                KeyCode::Char('l') if ctrl => review(editor, &mut m.error),
+                KeyCode::Tab => editor.focus = (editor.focus + 1) % 6,
+                KeyCode::BackTab => editor.focus = (editor.focus + 5) % 6,
+                // Arrows act in the focused control: they only move in the
+                // target list when that list has the focus.
+                KeyCode::Up if editor.focus == Editor::TARGETS => {
+                    editor.selected = editor.selected.saturating_sub(1)
+                }
+                KeyCode::Down if editor.focus == Editor::TARGETS => {
+                    editor.selected = (editor.selected + 1).min(last)
+                }
+                KeyCode::Up => editor.focus = editor.focus.saturating_sub(1),
+                KeyCode::Down => editor.focus = (editor.focus + 1).min(Editor::BACK),
+                KeyCode::Left | KeyCode::Right if editor.focus >= Editor::REVIEW => {
+                    editor.focus = Editor::REVIEW + Editor::BACK - editor.focus;
+                }
+                KeyCode::PageDown => editor.scroll = editor.scroll.saturating_add(m.page),
+                KeyCode::PageUp => editor.scroll = editor.scroll.saturating_sub(m.page),
+                KeyCode::Enter | KeyCode::Char(' ') if editor.focus == Editor::REVIEW => {
+                    review(editor, &mut m.error)
+                }
+                KeyCode::Enter | KeyCode::Char(' ') if editor.focus == Editor::BACK => m.back(),
+                // Enter walks the inputs and stops on Review, which launches nothing.
+                KeyCode::Enter if editor.focus < Editor::TARGETS => {
+                    editor.focus = if editor.focus == 2 {
+                        Editor::REVIEW
+                    } else {
+                        editor.focus + 1
+                    };
+                }
+                KeyCode::Enter => {}
+                _ => {
+                    if let Some(input) = editor.input() {
+                        input.key(k);
                     }
                 }
             }
@@ -320,7 +382,7 @@ pub(super) fn show_results(m: &mut Model) {
 }
 pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout::Rect) {
     use ratatui::{
-        layout::{Constraint, Layout},
+        layout::{Constraint, Layout, Rect},
         style::{Color, Style},
         text::Line,
         widgets::{Block, Borders, Paragraph, Row, Table, TableState, Wrap},
@@ -348,64 +410,137 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
             } else {
                 "Batch"
             };
-            let focus = editor.focus;
-            let (label, input) = match focus {
-                1 if !editor.confirm => ("Parallel: ", &editor.parallel),
-                2 if !editor.confirm => ("Timeout: ", &editor.timeout),
-                _ => ("Cmd: ", &editor.command),
-            };
-            let input_width = usize::from(areas[0].width)
-                .saturating_sub(label.len())
-                .max(1);
-            let (value, cursor) = input.viewport(!editor.confirm && focus < 3, input_width);
-            f.render_widget(
-                Paragraph::new(vec![
-                    Line::from(format!(
-                        "{title}: {} targets • ↑↓ select",
-                        editor.targets.len()
-                    )),
-                    Line::from(format!("{label}{value}")),
-                    Line::from(format!(
-                        "Parallel: {} (1–16) • Timeout: {}s (1–3600)",
-                        editor.parallel.value, editor.timeout.value
-                    )),
-                    Line::from("Tab: command / parallel / timeout / targets"),
-                ]),
-                areas[0],
-            );
-            if !editor.confirm
-                && focus < 3
-                && areas[0].height > 1
-                && usize::from(areas[0].width) > label.len()
-            {
-                f.set_cursor_position((
-                    areas[0].x + label.len() as u16 + cursor.unwrap_or(0),
-                    areas[0].y + 1,
-                ));
-            }
-            let rows = editor.targets.iter().map(|t| Row::new([t.alias.clone()]));
-            f.render_stateful_widget(
-                Table::new(rows, [Constraint::Min(1)])
-                    .block(border("Frozen targets".into()))
-                    .row_highlight_style(selected_style),
-                areas[1],
-                &mut TableState::default().with_selected(Some(editor.selected)),
-            );
-            let text=editor.targets.get(editor.selected).map(|t|format!("Alias: {}\nSource: {}\nSSH root: {}\nCommand: {}\nParallel: {} • Timeout: {}s\nNative SSH, no prompts. Stopping local SSH cannot promise to stop detached remote commands.",t.alias,t.source.display(),t.root.display(),editor.command.value,editor.parallel.value,editor.timeout.value)).unwrap_or_else(||"No targets selected. Esc returns; x marks an alias; F2 selects filter results explicitly.".into());
-            details::render_rows(
-                f,
-                areas[2],
-                text.lines()
-                    .map(|line| Line::from(line.to_owned()))
-                    .collect(),
-                &mut editor.scroll,
-            );
-            let footer = if editor.confirm {
-                "Enter: launch confirmed batch • Esc: edit\n↑↓: review targets • PgUp/PgDn: details"
+            // Where the journey stands: Targets → Command → Review → Results.
+            let step = if editor.targets.is_empty() {
+                0
+            } else if editor.confirm {
+                2
             } else {
-                "Ctrl+L: review • Esc: return\n↑↓: targets • PgUp/PgDn: full command/details"
+                1
             };
-            f.render_widget(Paragraph::new(footer), areas[3]);
+            let steps = ["Targets", "Command", "Review", "Results"]
+                .iter()
+                .enumerate()
+                .map(|(index, name)| match index.cmp(&step) {
+                    std::cmp::Ordering::Less => format!("{name} ✓"),
+                    std::cmp::Ordering::Equal => format!("[{name}]"),
+                    std::cmp::Ordering::Greater => (*name).to_owned(),
+                })
+                .collect::<Vec<_>>()
+                .join(" → ");
+            let heading = format!("{title}: {} targets • {steps}", editor.targets.len());
+            if editor.targets.is_empty() {
+                // Step 1 with nothing marked: say why, and name the two ways out.
+                f.render_widget(Paragraph::new(heading), areas[0]);
+                let body = Rect {
+                    y: areas[1].y,
+                    height: areas[1].height + areas[2].height,
+                    ..areas[1]
+                };
+                let hosts = m.visible.len();
+                f.render_widget(
+                    Paragraph::new(vec![
+                        Line::from("No targets selected."),
+                        Line::from(
+                            "A batch only runs on the aliases you marked: the filter is never turned into targets on its own.",
+                        ),
+                        Line::from("Back in the list, x marks the selected alias."),
+                        Line::from(""),
+                        Line::from(vec![
+                            nav::button("Back to the list", editor.button == 0),
+                            ratatui::text::Span::raw("  "),
+                            nav::button(
+                                &format!("Add the {hosts} host(s) shown by the filter"),
+                                editor.button == 1,
+                            ),
+                        ]),
+                    ])
+                    .wrap(Wrap { trim: false }),
+                    body,
+                );
+                f.render_widget(
+                    Paragraph::new("Tab/←→: choose • Enter: confirm • Esc: return"),
+                    areas[3],
+                );
+            } else {
+                let focus = editor.focus;
+                let (label, input) = match focus {
+                    1 if !editor.confirm => ("Parallel: ", &editor.parallel),
+                    2 if !editor.confirm => ("Timeout: ", &editor.timeout),
+                    _ => ("Cmd: ", &editor.command),
+                };
+                let input_width = usize::from(areas[0].width)
+                    .saturating_sub(label.len())
+                    .max(1);
+                let (value, cursor) = input.viewport(!editor.confirm && focus < 3, input_width);
+                let buttons = if editor.confirm {
+                    Line::from(vec![
+                        nav::button("Back to edit", editor.button == 0),
+                        ratatui::text::Span::raw("  "),
+                        nav::button(
+                            &format!("Launch on {} target(s)", editor.targets.len()),
+                            editor.button == 1,
+                        ),
+                    ])
+                } else {
+                    Line::from(vec![
+                        nav::button("Review", focus == Editor::REVIEW),
+                        ratatui::text::Span::raw("  "),
+                        nav::button("Back", focus == Editor::BACK),
+                    ])
+                };
+                f.render_widget(
+                    Paragraph::new(vec![
+                        Line::from(heading),
+                        Line::from(format!("{label}{value}")),
+                        Line::from(format!(
+                            "Parallel: {} (1–16) • Timeout: {}s (1–3600)",
+                            editor.parallel.value, editor.timeout.value
+                        )),
+                        buttons,
+                    ]),
+                    areas[0],
+                );
+                if !editor.confirm
+                    && focus < 3
+                    && areas[0].height > 1
+                    && usize::from(areas[0].width) > label.len()
+                {
+                    f.set_cursor_position((
+                        areas[0].x + label.len() as u16 + cursor.unwrap_or(0),
+                        areas[0].y + 1,
+                    ));
+                }
+                let rows = editor.targets.iter().map(|t| Row::new([t.alias.clone()]));
+                // The list says when the arrows belong to it.
+                let listing = editor.confirm || focus == Editor::TARGETS;
+                f.render_stateful_widget(
+                    Table::new(rows, [Constraint::Min(1)])
+                        .block(border(if listing {
+                            "● Frozen targets — ↑↓ select".into()
+                        } else {
+                            "Frozen targets".into()
+                        }))
+                        .row_highlight_style(selected_style),
+                    areas[1],
+                    &mut TableState::default().with_selected(Some(editor.selected)),
+                );
+                let text=editor.targets.get(editor.selected).map(|t|format!("Alias: {}\nSource: {}\nSSH root: {}\nCommand: {}\nParallel: {} • Timeout: {}s\nNative SSH, no prompts. Stopping local SSH cannot promise to stop detached remote commands.",t.alias,t.source.display(),t.root.display(),editor.command.value,editor.parallel.value,editor.timeout.value)).unwrap_or_default();
+                details::render_rows(
+                    f,
+                    areas[2],
+                    text.lines()
+                        .map(|line| Line::from(line.to_owned()))
+                        .collect(),
+                    &mut editor.scroll,
+                );
+                let footer = if editor.confirm {
+                    "Tab/←→: choose • Enter: confirm the choice • Ctrl+L: launch • Esc: edit\n↑↓: review targets • PgUp/PgDn: details"
+                } else {
+                    "Tab/↑↓: next control • Enter: next field, then Review • Ctrl+L: review • Esc: return\nPgUp/PgDn: full command/details"
+                };
+                f.render_widget(Paragraph::new(footer), areas[3]);
+            }
         }
         View::BatchResults {
             selected,
@@ -435,12 +570,16 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                 areas[1],
                 &mut TableState::default().with_selected(Some(*selected)),
             );
-            let text = records
-                .get(*selected)
-                .map(|r| {
-                    let output = if *stderr { &r.stderr } else { &r.stdout };
-                    format!(
-                        "{} — {} • {} bytes{}\nSource: {}\nRoot: {}\nCommand: {}\n{}\n{}",
+            let text =
+                records
+                    .get(*selected)
+                    .map(|r| {
+                        let output = if *stderr { &r.stderr } else { &r.stdout };
+                        format!(
+                        "{}  {}\n{} — {} • {} bytes{}\nSource: {}\nRoot: {}\nCommand: {}\n{}\n{}",
+                        // Two named tabs; the open one carries the marker.
+                        if *stderr { "[  Output ]" } else { "[▶ Output ]" },
+                        if *stderr { "[▶ Errors ]" } else { "[  Errors ]" },
                         r.target.alias,
                         if *stderr { "stderr" } else { "stdout" },
                         output.bytes.len(),
@@ -455,8 +594,8 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                         r.diagnostic,
                         output.text()
                     )
-                })
-                .unwrap_or_else(|| "No batch results yet".into());
+                    })
+                    .unwrap_or_else(|| "No batch results yet".into());
             details::render_rows(
                 f,
                 areas[2],
@@ -465,7 +604,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                     .collect(),
                 offset,
             );
-            f.render_widget(Paragraph::new("s: cancel batch • Tab: stdout/stderr • Esc/q: return, batch keeps running\n↑↓: host • PgUp/PgDn: output"),areas[3]);
+            f.render_widget(Paragraph::new("s: cancel batch • Tab: Output / Errors • Esc/q: return, batch keeps running\n↑↓: host • PgUp/PgDn: output"),areas[3]);
         }
         _ => {}
     }

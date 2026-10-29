@@ -79,14 +79,17 @@ try:
  send(command);send(b'\r');assert not (ROOT/'attempts.jsonl').exists()
  send(b'\x0c');expect('Confirm batch');expect("echo 'literal ; $HOME'")
  resize(32,12);expect('Confirm batch');resize(110,32)
- send(b'\r');expect('Failed (7)');expect('stdout fixture')
- send(b'\t');expect('stderr fixture')
+ # Enter keeps the safe choice (back to edit); the Launch button starts the batch.
+ send(b'\r');expect('[Command]');assert not (ROOT/'attempts.jsonl').exists()
+ send(b'\x0c');expect('[▶ Back to edit ]');send(b'\t');expect('[▶ Launch on 1 target(s) ]')
+ send(b'\r');expect('Failed (7)');expect('stdout fixture');expect('[▶ Output ]')
+ send(b'\t');expect('stderr fixture');expect('[▶ Errors ]')
  attempts=[json.loads(line) for line in (ROOT/'attempts.jsonl').read_text().splitlines()]
  assert len(attempts)==1 and attempts[0][-2:]==['secondary',command.decode()],attempts
  history=json.loads((app/'sshm_history.json').read_text())['connections']
  assert history['secondary']['connect_count']==1 and history['secondary']['last_result']['exit_code']==7
  # Start second batch and test responsive foreground guard and exit cancellation.
- send(b'\x1b');send(b'B');send(b'slow');send(b'\x0c');send(b'\r');expect('Running')
+ send(b'\x1b');send(b'B');send(b'slow');send(b'\x0c');send(b'\x0c');expect('Running')
  send(b'\x1b');send(b'\r');expect('Batch active')
  # Leaving the results keeps the batch running; quitting from the list is confirmed.
  send(b'B');expect('Running');send(b'q');expect('?: help')

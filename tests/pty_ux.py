@@ -713,8 +713,47 @@ def scenario_tunnels():
           'route, duplicate as unsaved draft, terminal restored')
 
 
+def scenario_batch():
+    preferences()
+    s = Session('batch', width=110, height=30)
+    s.expect('?: help')
+    # No target yet: a page explains it and names the two ways out.
+    s.send(b'B')
+    s.expect('Batch: 0 targets • [Targets] → Command → Review → Results')
+    s.expect('the filter is never turned into targets on its own')
+    s.expect('[▶ Back to the list ]')
+    s.send(b'uptime')                 # no command can be typed without a target
+    s.send(b'\t')
+    s.expect('[▶ Add the 2 host(s) shown by the filter ]')
+    s.send(b'\r')
+    s.expect('Batch: 2 targets • Targets ✓ → [Command] → Review → Results')
+    s.absent('uptime')
+    s.send(b'hostname')
+    # Enter walks the inputs and stops on Review: nothing is launched.
+    s.send(b'\r\r\r')
+    s.expect('[▶ Review ]')
+    assert not connections()
+    s.send(b'\r')
+    s.expect('Confirm batch: 2 targets • Targets ✓ → Command ✓ → [Review] → Results')
+    s.expect('Command: hostname')
+    s.expect('[▶ Back to edit ]  [  Launch on 2 target(s) ]')
+    s.send(b'\r')                    # the focused choice goes back to the edit step
+    s.expect('[Command]')
+    assert not connections()
+    s.send(ESC)
+    s.expect('Lot : 2 cibles marquées')
+    s.send(F2)
+    s.send(b'effacer les marques\r')
+    s.absent('Lot :')
+    assert not connections() and CONFIG.read_bytes() == ORIGINAL_CONFIG
+    s.send(CTRL_C)
+    s.close()
+    print('PTY PASS [batch]: explained no-target page, explicit use of filter results, step '
+          'indicator, Enter stops on Review, review launches nothing by itself, terminal restored')
+
+
 SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,
-             'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes, 'tunnels': scenario_tunnels}
+             'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes, 'tunnels': scenario_tunnels, 'batch': scenario_batch}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

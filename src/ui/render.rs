@@ -743,6 +743,28 @@ fn filter_band(
             lines.push(Line::styled(ellipsize(&left, width), style));
         }
     }
+    if m.batch.manager.has_active() && !compact {
+        // Leaving the results keeps the batch running: this is how to find it again.
+        use runtime::batch::State as Run;
+        let records = m.batch.manager.records();
+        let finished = records
+            .iter()
+            .filter(|record| !matches!(record.state, Run::Pending | Run::Running))
+            .count();
+        lines.push(Line::styled(
+            ellipsize(
+                &format!(
+                    "Lot en cours : {finished}/{} terminé(s) • {} : suivre ou annuler",
+                    records.len(),
+                    keymap.hint(A::BatchOpen)
+                ),
+                width,
+            ),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     if !m.batch.marks.is_empty() && !compact {
         // Marks are frozen targets: a search or a collapsed group never drops them.
         let marks = m.batch.marks.len();

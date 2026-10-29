@@ -185,6 +185,15 @@ Le formulaire d'hôte tient sur **une page**, sans onglets, et son titre nomme l
 
 Sur un terminal de moins de 44 colonnes, le libellé passe au-dessus de sa saisie. Le curseur natif reste visible dans le champ actif ; un bouton ou un titre de section ayant le focus n'a pas de curseur et ne reçoit ni frappe ni collage.
 
+### Lots : un parcours en étapes
+
+Une ligne en tête situe le parcours : **Targets → Command → Review → Results**, l'étape en cours entre crochets.
+
+- **Aucune cible marquée** : `B` ouvre une page qui l'explique et nomme deux issues, **Back to the list** (focus initial) et **Add the n host(s) shown by the filter**. Le filtre n'est jamais transformé en cibles sans ce choix, et aucune commande ne peut être saisie avant d'avoir une cible.
+- **Préparation** : Tab parcourt la commande, le parallélisme, le délai, la liste des cibles puis les boutons **Review** et **Back**. Les flèches agissent dans le contrôle actif : elles ne déplacent la sélection des cibles que lorsque la liste a le focus (son cadre l'annonce), sinon elles passent au contrôle voisin. Entrée avance d'un champ au suivant et s'arrête sur Review.
+- **Vérification** : commande complète, parallélisme, délai et cibles figées ; boutons **Back to edit** (focus initial) et **Launch on n target(s)**. *Entrée ne lance plus le lot : elle valide le choix marqué, donc revient à l'édition tant que Launch n'a pas été choisi avec Tab. Ctrl+L, affiché en pied de page, reste la confirmation explicite.*
+- **Résultats** : deux onglets nommés **Output** et **Errors** (Tab), l'onglet ouvert marqué `▶`, troncature signalée. Revenir ne stoppe pas le lot ; `s` l'annule. Tant qu'un lot tourne, la liste affiche « Lot en cours : 3/10 terminé(s) • B : suivre ou annuler ».
+
 ### Tunnels : formulaire, profils et suivi
 
 - **Sens du transfert en clair** : le type se choisit parmi trois options nommées — Local (-L), Remote (-R), Dynamic (-D) — et une phrase calculée dit le trajet avec vos valeurs, par exemple « Listen on this machine, port 5433 → reach db.internal:5432 from the SSH server ». Pour un transfert distant la phrase s'inverse. Les libellés distinguent le port d'écoute de la destination.
@@ -297,8 +306,8 @@ L'écran principal utilise un titre compact et toute la hauteur disponible pour 
 | Sauvegardes | F8 ou F2 → Sauvegardes ; Entrée ouvre le diff, Entrée confirme, Échap revient |
 | Aperçu SSH | Ajout/édition/copie/suppression/déplacement : diff par fichier ; Entrée applique les octets montrés, Échap retrouve la saisie |
 | Commandes multi-hôtes (Unix) | x marque l’alias actif ; B prépare le lot ; F2 sélectionne explicitement les résultats du filtre, efface les marques ou ouvre les derniers résultats |
-| Préparation du lot | Tab : commande, concurrence, délai, cibles ; ↑/↓ : cible ; Ctrl+L : aperçu, Entrée : confirmation ; Échap : retour |
-| Résultats du lot | ↑/↓ : hôte ; Tab : stdout/stderr ; Page précédente/suivante : sortie ; s : annuler le lot ; q, Échap ou Ctrl+C : retour, le lot continue |
+| Préparation du lot | Tab : commande, concurrence, délai, cibles, boutons ; ↑/↓ : cible si la liste a le focus, sinon contrôle voisin ; Entrée : champ suivant puis Review ; Ctrl+L : vérification, puis Ctrl+L ou le bouton Launch pour lancer ; Échap : retour |
+| Résultats du lot | ↑/↓ : hôte ; Tab : Output / Errors ; Page précédente/suivante : sortie ; s : annuler le lot ; q, Échap ou Ctrl+C : retour, le lot continue |
 | Tunnels actifs | F7 ou F2 → Tunnels actifs ; s demande confirmation puis arrête le processus sélectionné ; q, Échap ou Ctrl+C reviennent sans rien arrêter |
 | Formulaire tunnel | Ctrl+T choisit session shell ou tunnel seul ; Ctrl+S enregistre le profil nommé sans SSH ; Ctrl+L lance le forwarding courant ; Entrée avance sans lancer ; Échap/Ctrl+C annule |
 | Édition de texte | Ctrl+A/E ou Début/Fin pour début/fin de ligne ; ←/→ ou Ctrl+B/F pour un caractère ; Ctrl+←/→ ou Alt+B/F pour un mot ; Retour arrière/Ctrl+H efface avant, Suppr/Ctrl+D après ; Ctrl+U efface avant le curseur, Ctrl+K après, Ctrl+W ou Alt+Retour arrière efface le mot précédent |

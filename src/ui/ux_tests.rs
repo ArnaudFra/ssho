@@ -1892,3 +1892,95 @@ fn profiles_show_their_route_and_named_actions() {
     m.key(key(KeyCode::Enter));
     assert!(forward_form(&m).original_name.is_none());
 }
+
+#[test]
+fn no_target_page_never_turns_the_filter_into_targets_on_its_own() {
+    let (_temp, mut m) = marking_model(GroupMode::Flat, false);
+    m.key(key(KeyCode::Char('B')));
+    let text = screen(&mut m, 120, 24);
+    for expected in [
+        "Batch: 0 targets • [Targets] → Command → Review → Results",
+        "No targets selected.",
+        "the filter is never turned into targets on its own",
+        "[▶ Back to the list ]  [  Add the 4 host(s) shown by the filter ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // Typing or pasting a command is impossible before there is a target.
+    typing(&mut m, "rm -rf /");
+    m.paste("uptime");
+    assert!(m.batch.marks.is_empty());
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(matches!(m.view, View::List), "the focused choice goes back");
+    // Taking the filter results is an explicit, named decision.
+    m.query.set("beta");
+    m.filter(true);
+    m.key(key(KeyCode::Char('B')));
+    assert!(screen(&mut m, 120, 24).contains("Add the 1 host(s) shown by the filter"));
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Enter));
+    let View::Batch(editor) = &m.view else {
+        panic!("the preparation step opens with the chosen targets")
+    };
+    assert_eq!(
+        editor
+            .targets
+            .iter()
+            .map(|t| t.alias.as_str())
+            .collect::<Vec<_>>(),
+        ["beta"]
+    );
+    assert!(screen(&mut m, 120, 24)
+        .contains("Batch: 1 targets • Targets ✓ → [Command] → Review → Results"));
+}
+
+#[test]
+fn arrows_belong_to_the_focused_control_and_enter_stops_on_review() {
+    let (_temp, mut m) = marking_model(GroupMode::Flat, false);
+    m.activate_action(PaletteAction::BatchSelectVisible);
+    m.key(key(KeyCode::Char('B')));
+    let selected = |m: &mut Model| {
+        screen(m, 120, 30)
+            .lines()
+            .position(|line| line.contains("alpha"))
+            .is_some()
+    };
+    assert!(selected(&mut m));
+    typing(&mut m, "uptime");
+    // From an input, the arrows move between controls and leave the list alone.
+    let before = screen(&mut m, 120, 30);
+    m.key(key(KeyCode::Down));
+    assert!(
+        screen(&mut m, 120, 30).contains("Parallel: 4"),
+        "focus moved to the next input"
+    );
+    m.key(key(KeyCode::Up));
+    assert_eq!(
+        screen(&mut m, 120, 30),
+        before,
+        "the target list did not move"
+    );
+    // Enter walks command, parallel, timeout, then stops on Review.
+    for _ in 0..3 {
+        assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    }
+    let text = screen(&mut m, 120, 30);
+    assert!(text.contains("[▶ Review ]  [  Back ]"), "{text}");
+    assert!(!m.batch.manager.has_active());
+    // The list announces when the arrows are its own.
+    m.key(key(KeyCode::BackTab));
+    assert!(screen(&mut m, 120, 30).contains("● Frozen targets — ↑↓ select"));
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Enter));
+    let text = screen(&mut m, 120, 30);
+    assert!(text.contains("Confirm batch: 4 targets"), "{text}");
+    assert!(
+        text.contains("Command: uptime") && text.contains("Parallel: 4 • Timeout: 30s"),
+        "{text}"
+    );
+    assert!(text.contains("[  Launch on 4 target(s) ]"), "{text}");
+    // Repeating Enter never launches: it goes back to the edit step.
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(!m.batch.manager.has_active());
+}

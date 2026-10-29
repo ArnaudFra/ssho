@@ -72,16 +72,37 @@ fn confirmation_is_explicit_and_command_settings_targets_survive_resize() {
         screen(&mut m, w, h);
     }
     assert!(!m.batch.manager.has_active());
-    // Ctrl+L opens a review with full command and navigable targets; only Enter launches.
-    m.key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
-    assert!(screen(&mut m, 100, 25).contains("Confirm batch"));
+    // Ctrl+L opens a review with full command and navigable targets; reading it
+    // launches nothing: only the Launch button or an explicit Ctrl+L does.
+    let ctrl_l = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    m.key(ctrl_l);
+    let text = screen(&mut m, 100, 25);
+    assert!(text.contains("Confirm batch"), "{text}");
+    assert!(
+        text.contains("Targets ✓ → Command ✓ → [Review] → Results"),
+        "{text}"
+    );
+    assert!(
+        text.contains("[▶ Back to edit ]  [  Launch on 3 target(s) ]"),
+        "{text}"
+    );
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
     let View::Batch(editor) = &m.view else {
         panic!()
     };
     assert_eq!(editor.command.value, "echo literal ; $HOME");
-    m.key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+    m.key(ctrl_l);
+    // Enter on the focused, safe choice returns to the edit step.
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(matches!(&m.view, View::Batch(editor) if !editor.confirm));
+    m.key(ctrl_l);
+    m.key(key(KeyCode::Tab));
     assert_eq!(m.key(key(KeyCode::Enter)), Action::StartBatch);
+    assert_eq!(
+        m.key(ctrl_l),
+        Action::StartBatch,
+        "the explicit shortcut also confirms"
+    );
 }
 
 #[test]
@@ -179,6 +200,7 @@ fn batch_unicode_command_uses_display_cells_for_cursor() {
         Terminal,
     };
     let (_tmp, mut m) = fixture();
+    m.activate_action(PaletteAction::BatchSelectVisible);
     m.key(key(KeyCode::Char('B')));
     typing(&mut m, "界e\u{301}👩‍💻Z");
     m.key(key(KeyCode::Left));
