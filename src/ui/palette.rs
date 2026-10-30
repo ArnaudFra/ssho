@@ -196,6 +196,7 @@ impl Model {
                 || self.show_hidden,
             marks: self.batch.marks.len(),
             batch_results: !self.batch.manager.records().is_empty(),
+            messages: !self.messages().is_empty(),
         }
     }
 

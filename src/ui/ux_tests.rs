@@ -2231,3 +2231,136 @@ fn columns_show_their_outcome_and_moving_is_a_named_action() {
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
     assert!(matches!(m.view, View::List));
 }
+
+#[test]
+fn long_error_is_readable_in_full_even_on_a_small_terminal() {
+    let mut m = model(serde_json::json!({}));
+    let cause = "refusing application file /very/long/path/to/the/application/data/config.json: expected a regular file, not a symbolic link";
+    m.error = cause.into();
+    // The list says the level in words and how to read the rest.
+    let text = screen(&mut m, 60, 20);
+    assert!(text.contains("Error: refusing application file"), "{text}");
+    assert!(text.contains("(!: full text)"), "{text}");
+    assert!(!text.contains("symbolic link"), "{text}");
+    m.key(key(KeyCode::Char('!')));
+    assert!(matches!(m.view, View::Messages));
+    let text = screen(&mut m, 60, 20);
+    // The message is wrapped, not cut: joined back, every character is there.
+    let joined: String = text
+        .lines()
+        .filter_map(|line| line.split('│').nth(1))
+        .map(str::trim_end)
+        .collect();
+    assert!(text.contains("[Error]") && joined.contains(cause), "{text}");
+    m.key(key(KeyCode::Esc));
+    assert_eq!(m.error, cause, "reading a message does not clear it");
+    // A warning is named as such, never shown as an error.
+    m.error = "Warning: could not record tunnel attempt".into();
+    let text = screen(&mut m, 100, 20);
+    assert!(
+        text.contains("Warning: could not record") && !text.contains("Error:"),
+        "{text}"
+    );
+    // Without any message the action explains itself.
+    m.error.clear();
+    assert_eq!(m.key(key(KeyCode::Char('!'))), Action::None);
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "messages");
+    assert!(screen(&mut m, 100, 30).contains("Indisponible : Aucun message à afficher."));
+}
+
+#[test]
+fn running_work_stays_visible_on_every_screen() {
+    use runtime::tunnels::{Record, Snapshot, State};
+    let mut m = model(serde_json::json!({}));
+    assert!(
+        !screen(&mut m, 110, 24).contains("Jobs —"),
+        "nothing runs: no bar"
+    );
+    m.tunnels = vec![Record {
+        id: 7,
+        snapshot: Snapshot {
+            config: "/config".into(),
+            host: "alpha".into(),
+            profile: None,
+            forward: Forward::default(),
+        },
+        state: State::Active,
+        exit_code: None,
+        diagnostic: String::new(),
+    }];
+    m.statuses.insert(
+        "beta".into(),
+        PingResult {
+            method: AvailabilityMethod::Ssh,
+            name: "beta".into(),
+            status: PingStatus::Connecting,
+            duration: Duration::ZERO,
+            error: None,
+        },
+    );
+    let expected =
+        "Jobs — tunnels: 1 active (F7: follow or stop) • availability: 1 probe(s) running";
+    // The list, a sheet, a form, the help and the palette all keep the reminder.
+    assert!(screen(&mut m, 110, 24).contains(expected));
+    for opener in [
+        KeyCode::Char('i'),
+        KeyCode::Char('e'),
+        KeyCode::F(1),
+        KeyCode::F(2),
+    ] {
+        m.key(key(opener));
+        let text = screen(&mut m, 110, 30);
+        assert!(text.contains(expected), "{opener:?}: {text}");
+    }
+    // A finished tunnel and a settled probe leave the bar.
+    m.tunnels[0].state = State::Stopped;
+    m.statuses.clear();
+    assert!(!screen(&mut m, 110, 30).contains("Jobs —"));
+}
+
+#[test]
+fn help_explains_the_screen_and_can_be_searched() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('?')));
+    let text = screen(&mut m, 120, 50);
+    assert!(text.contains("This screen: the host list."), "{text}");
+    assert!(text.contains("/: search"), "{text}");
+    // Searching lists the matching lines, with the keys of the active keymap.
+    m.key(key(KeyCode::Char('/')));
+    typing(&mut m, "dupliquer");
+    let text = screen(&mut m, 120, 50);
+    assert!(text.contains("D         Dupliquer"), "{text}");
+    assert!(!text.contains("Se connecter"), "{text}");
+    assert!(text.contains("Search: dupliquer_"), "{text}");
+    // While searching, the closing letters are text; Esc clears the search first.
+    typing(&mut m, "q");
+    assert!(matches!(m.view, View::Help));
+    assert!(screen(&mut m, 120, 50).contains("No line of the help matches."));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::Help));
+    assert!(screen(&mut m, 120, 50).contains("Se connecter"));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::List));
+    // From a form, the help says what that form is for, and returns to it.
+    m.key(key(KeyCode::Char('e')));
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "aide");
+    m.key(key(KeyCode::Enter));
+    assert!(screen(&mut m, 120, 50).contains("This screen: the host form."));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::Host(_)));
+}
+
+#[test]
+fn a_write_is_confirmed_in_words_until_the_next_key() {
+    let (_temp, root, mut m) = review_model();
+    let host = m.all[0].clone();
+    let remaining = vec![m.all[1].clone()];
+    m.complete_mutation(remaining, &Action::Delete(host));
+    let text = screen(&mut m, 110, 24);
+    assert!(text.contains("✓ Deleted alpha"), "{text}");
+    m.key(key(KeyCode::Down));
+    assert!(!screen(&mut m, 110, 24).contains("✓ Deleted"));
+    drop(root);
+}

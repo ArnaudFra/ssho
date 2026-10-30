@@ -43,6 +43,7 @@ pub(super) enum PaletteAction {
     Search,
     ClearSearch,
     ClearFilters,
+    Messages,
     Palette,
     Quit,
 }
@@ -79,7 +80,7 @@ impl Category {
 impl PaletteAction {
     /// Every catalogue entry, grouped by category. The palette lists them in this
     /// order; only the action that opens the palette itself is left out of it.
-    pub(super) const CATALOGUE: [Self; 40] = [
+    pub(super) const CATALOGUE: [Self; 41] = [
         Self::Connect,
         Self::Tunnel,
         Self::Profiles,
@@ -117,6 +118,7 @@ impl PaletteAction {
         Self::Keys,
         Self::Backups,
         Self::Reload,
+        Self::Messages,
         Self::Palette,
         Self::Help,
         Self::Quit,
@@ -163,6 +165,7 @@ impl PaletteAction {
             Self::Search => "search.focus",
             Self::ClearSearch => "search.clear",
             Self::ClearFilters => "filter.clear",
+            Self::Messages => "app.messages",
             Self::Palette => "app.palette",
             Self::Quit => "app.quit",
         }
@@ -208,6 +211,7 @@ impl PaletteAction {
             Self::Search => "Rechercher",
             Self::ClearSearch => "Effacer la recherche",
             Self::ClearFilters => "Effacer tous les filtres",
+            Self::Messages => "Messages et dernière erreur",
             Self::Palette => "Palette d'actions",
             Self::Quit => "Quitter",
         }
@@ -251,7 +255,9 @@ impl PaletteAction {
             | Self::BatchResults
             | Self::Keys
             | Self::Backups => Category::Tools,
-            Self::Reload | Self::Palette | Self::Help | Self::Quit => Category::Application,
+            Self::Reload | Self::Messages | Self::Palette | Self::Help | Self::Quit => {
+                Category::Application
+            }
         }
     }
 
@@ -293,6 +299,7 @@ impl PaletteAction {
             Self::Keys => "clef ssh-keygen agent identité déployer générer",
             Self::Backups => "restaurer restauration historique diff annuler",
             Self::Reload => "rafraîchir relire actualiser",
+            Self::Messages => "erreur avertissement warning error détail journal",
             Self::Palette => "f2 commandes",
             Self::Help => "raccourcis touches documentation",
             Self::Quit => "sortir fermer exit",
@@ -351,6 +358,9 @@ impl PaletteAction {
             Self::Keys => "Inventorie les clés, en génère, les ajoute à l'agent ou les déploie.",
             Self::Backups => "Liste les sauvegardes des fichiers SSH et prépare une restauration.",
             Self::Reload => "Relit le fichier SSH et ses Includes après une modification externe.",
+            Self::Messages => {
+                "Affiche en entier la dernière erreur et les avertissements en cours."
+            }
             Self::Palette => "Ouvre cette palette.",
             Self::Help => "Affiche les raccourcis et les conventions de l'écran.",
             Self::Quit => "Ferme l'application ; les travaux en cours sont récapitulés avant.",
@@ -397,6 +407,7 @@ impl PaletteAction {
             }
             Self::ClearSearch if !context.query => Err("Aucune recherche active"),
             Self::ClearFilters if !context.filters => Err("Aucun filtre actif"),
+            Self::Messages if !context.messages => Err("Aucun message à afficher"),
             Self::BatchClear if context.marks == 0 => Err("Aucune cible marquée"),
             Self::BatchResults if !context.batch_results => Err("Aucun lot lancé"),
             _ => Ok(()),
@@ -417,6 +428,8 @@ pub(super) struct Context {
     pub filters: bool,
     pub marks: usize,
     pub batch_results: bool,
+    /// An error, a warning or a last SSH result can be read in full.
+    pub messages: bool,
 }
 
 /// Case- and accent-insensitive form used to search action names.
@@ -440,7 +453,7 @@ pub(super) fn fold(text: &str) -> String {
 
 /// Historical direct shortcuts of the host list. Printable keys only apply while
 /// the table has the focus; function keys also apply from the search input.
-const HISTORICAL: [(&str, PaletteAction); 37] = [
+const HISTORICAL: [(&str, PaletteAction); 38] = [
     ("enter", PaletteAction::Connect),
     ("f2", PaletteAction::Palette),
     ("f3", PaletteAction::ChooseAlias),
@@ -475,6 +488,7 @@ const HISTORICAL: [(&str, PaletteAction); 37] = [
     ("s", PaletteAction::SortToggle),
     ("n", PaletteAction::SortName),
     ("r", PaletteAction::SortRecent),
+    ("!", PaletteAction::Messages),
     ("?", PaletteAction::Help),
     ("f1", PaletteAction::Help),
     ("h", PaletteAction::Help),

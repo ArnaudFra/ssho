@@ -78,6 +78,27 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     } else {
         area
     };
+    // One line for owned work still running, on every screen: a tunnel, a batch
+    // or a probe stays findable after leaving the screen that started it.
+    let jobs = m.jobs();
+    let area = if !jobs.is_empty() && area.height >= 8 {
+        let parts = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+        f.render_widget(
+            Paragraph::new(ellipsize(
+                &format!("Jobs — {}", jobs.join(" • ")),
+                usize::from(parts[1].width),
+            ))
+            .style(
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            parts[1],
+        );
+        parts[0]
+    } else {
+        area
+    };
     if m.quit_tunnels {
         // Name what leaving stops or loses, then the two possible decisions.
         let tunnels = m
@@ -161,6 +182,7 @@ fn draw_view(f: &mut Frame, m: &mut Model, area: Rect) {
         View::CopyValue { .. } => copy_value(f, m, area),
         View::GroupInfo { .. } => group_info(f, m, area),
         View::Help => help(f, m, area),
+        View::Messages => messages(f, m, area),
         View::Files { .. } => files(f, m, area),
         View::SourceFiles { .. } => source_files(f, m, area),
         View::Aliases { .. } => alias_chooser(f, m, area),
@@ -302,10 +324,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         }
     }
     if !m.error.is_empty() {
-        notices.push(Line::styled(
-            format!("Error: {}", m.error),
-            Style::default().fg(Color::Red),
-        ));
+        notices.push(message_line(m, &keymap, area.width));
     }
     if !keymap.conflicts.is_empty() {
         // The reasons are long: the help lists each refused preference in full.
@@ -334,12 +353,17 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
                 Style::default().fg(Color::LightRed),
             ));
         } else if !m.error.is_empty() {
+            let warning = m.error.starts_with("Warning");
             spans.push(Span::styled(
                 ellipsize(
-                    &format!("Error: {}", m.error),
+                    &if warning {
+                        m.error.clone()
+                    } else {
+                        format!("Error: {}", m.error)
+                    },
                     (area.width as usize).saturating_sub(suffix.width()),
                 ),
-                Style::default().fg(Color::Red),
+                Style::default().fg(if warning { Color::Yellow } else { Color::Red }),
             ));
             spans.push(Span::styled(suffix, Style::default().fg(Color::Yellow)));
         } else {
@@ -743,28 +767,6 @@ fn filter_band(
             lines.push(Line::styled(ellipsize(&left, width), style));
         }
     }
-    if m.batch.manager.has_active() && !compact {
-        // Leaving the results keeps the batch running: this is how to find it again.
-        use runtime::batch::State as Run;
-        let records = m.batch.manager.records();
-        let finished = records
-            .iter()
-            .filter(|record| !matches!(record.state, Run::Pending | Run::Running))
-            .count();
-        lines.push(Line::styled(
-            ellipsize(
-                &format!(
-                    "Lot en cours : {finished}/{} terminé(s) • {} : suivre ou annuler",
-                    records.len(),
-                    keymap.hint(A::BatchOpen)
-                ),
-                width,
-            ),
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
     if !m.batch.marks.is_empty() && !compact {
         // Marks are frozen targets: a search or a collapsed group never drops them.
         let marks = m.batch.marks.len();
@@ -819,6 +821,92 @@ fn filter_band(
         lines.push(Line::styled(text, Style::default().fg(Color::Yellow)));
     }
     lines
+}
+
+/// The current error or warning on one row: its level in words, and when it
+/// does not fit, the key that shows it in full.
+fn message_line(m: &Model, keymap: &Keymap, width: u16) -> Line<'static> {
+    let warning = m.error.starts_with("Warning");
+    let text = if warning {
+        m.error.clone()
+    } else {
+        format!("Error: {}", m.error)
+    };
+    let style = Style::default().fg(if warning { Color::Yellow } else { Color::Red });
+    let width = usize::from(width);
+    if text.width() <= width {
+        return Line::styled(text, style);
+    }
+    let more = format!(" ({}: full text)", keymap.hint(PaletteAction::Messages));
+    Line::styled(
+        format!(
+            "{}{more}",
+            ellipsize(&text, width.saturating_sub(more.width()))
+        ),
+        style,
+    )
+}
+
+/// Every current message, wrapped and scrollable, each with its level in words.
+fn messages(f: &mut Frame, m: &mut Model, area: Rect) {
+    let area = nav::bounded(inset(area), nav::TABLE_WIDTH);
+    let border = block("Messages", true);
+    let inner = border.inner(area);
+    f.render_widget(border, area);
+    let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
+    let mut lines = vec![];
+    for (level, text) in m.messages() {
+        let color = match level {
+            "Error" => Color::Red,
+            "Warning" => Color::Yellow,
+            _ => CYAN,
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("[{level}] "),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(""),
+        ]));
+        lines.extend(text.lines().map(|line| Line::from(line.to_owned())));
+        lines.push(Line::from(""));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from("No message."));
+    }
+    m.page = usize::from(parts[0].height).max(1);
+    details::render_rows(f, parts[0], lines, &mut m.scroll);
+    f.render_widget(
+        Paragraph::new("↑↓/PgUp/PgDn: scroll • Esc, q or Enter: back")
+            .style(Style::default().fg(GRAY)),
+        parts[1],
+    );
+}
+
+/// What the screen under the help is for: shown first, before the shortcuts.
+fn screen_guide(view: Option<&View>) -> Vec<&'static str> {
+    match view {
+        Some(View::Info(_)) => vec![
+            "This screen: a host sheet. Read its sections; Tab or ←/→ picks a named action",
+            "(Connexion, Modifier, Note, Copier, Fermer) and Enter runs it. Enter alone does nothing.",
+        ],
+        Some(View::Host(_)) => vec![
+            "This screen: the host form. Tab/↑↓ walk fields, section headers and buttons;",
+            "Enter moves to the next field or activates; Ctrl+S previews, nothing is written before.",
+        ],
+        Some(View::Forward(_)) => vec![
+            "This screen: a tunnel. Choose its type with ←/→, read the route in words,",
+            "then Tab to Launch or Save profile. Enter never saves or launches from a field.",
+        ],
+        Some(View::Note(_)) => vec![
+            "This screen: a personal note, kept in the ssho data and never in the SSH file.",
+            "Enter adds a line; Tab reaches Save and Cancel; Ctrl+S saves.",
+        ],
+        _ => vec![
+            "This screen: the host list. Type / to search, ↑↓ to choose, Enter to connect.",
+            "F2 lists every action with its shortcut; Esc goes back one level and never quits.",
+        ],
+    }
 }
 
 fn highlight(m: &Model, text: &str, field: search::Field, selected: bool) -> Line<'static> {
@@ -2201,7 +2289,24 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         .map(String::from),
     );
     let blank = String::new();
-    let mut text = if inner.width >= 77 {
+    let query = actions::fold(&m.selector_query.value);
+    let words: Vec<&str> = query.split_whitespace().collect();
+    let mut text = if !words.is_empty() {
+        // Searching lists every matching line, whatever its column.
+        let found: Vec<String> = left
+            .into_iter()
+            .chain(right)
+            .filter(|line| {
+                let line = actions::fold(line);
+                !line.trim().is_empty() && words.iter().all(|word| line.contains(word))
+            })
+            .collect();
+        if found.is_empty() {
+            vec!["No line of the help matches.".to_owned()]
+        } else {
+            found
+        }
+    } else if inner.width >= 77 {
         (0..left.len().max(right.len()))
             .map(|i| {
                 format!(
@@ -2214,6 +2319,14 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     } else {
         left.into_iter().chain(right).collect()
     };
+    if words.is_empty() {
+        // What the screen underneath is for comes before the list of shortcuts.
+        let guide = screen_guide(m.parents.last().map(|(view, _)| view));
+        text.splice(
+            0..0,
+            guide.into_iter().map(String::from).chain([String::new()]),
+        );
+    }
     if let Some(path) = &m.source_filter {
         text.insert(
             0,
@@ -2261,10 +2374,18 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         parts[0],
     );
     f.render_widget(
-        Paragraph::new(format!(
-            "↑↓/PgUp/PgDn: scroll • Esc, {}, q or Enter: close",
-            keymap.hint(PaletteAction::Help)
-        ))
+        Paragraph::new(if m.help_search || !m.selector_query.value.is_empty() {
+            format!(
+                "Search: {}{} • Enter: keep • Esc: clear",
+                m.selector_query.value,
+                if m.help_search { "_" } else { "" }
+            )
+        } else {
+            format!(
+                "/: search • ↑↓/PgUp/PgDn: scroll • Esc, {}, q or Enter: close",
+                keymap.hint(PaletteAction::Help)
+            )
+        })
         .style(Style::default().fg(GRAY)),
         parts[1],
     );
@@ -2653,13 +2774,16 @@ fn columns_selector(f: &mut Frame, m: &Model, area: Rect, table_width: u16) {
     };
     let inner = border.inner(area);
     f.render_widget(border, area);
-    let error_height = if m.error.is_empty() {
-        0
-    } else {
-        2.min(inner.height.saturating_sub(5))
-    };
     // Roomy panels add the outcome at the current width and the named actions.
     let roomy = inner.height >= 14;
+    // An error is shown whole: it takes the rows its wrapped text needs.
+    let error_rows: usize = m
+        .error
+        .lines()
+        .map(|line| select::wrapped_rows(line, usize::from(inner.width).max(1)))
+        .sum();
+    let error_height =
+        (error_rows as u16).min(inner.height.saturating_sub(if roomy { 10 } else { 5 }));
     let parts = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),

@@ -758,8 +758,56 @@ def scenario_batch():
           'indicator, Enter stops on Review, review launches nothing by itself, terminal restored')
 
 
+def scenario_help():
+    preferences()
+    s = Session('help', width=100, height=30)
+    s.expect('?: help')
+    # Help: what the screen is for, then a search over its lines.
+    s.send(b'?')
+    s.expect('This screen: the host list.')
+    s.send(b'/dupliquer')
+    s.expect('Search: dupliquer_')
+    s.expect('D         Dupliquer')
+    s.absent('Se connecter')
+    s.send(b'q')                      # a closing letter is text while searching
+    s.expect('No line of the help matches.')
+    s.send(ESC)
+    s.expect('Se connecter')
+    s.send(ESC)
+    s.expect('?: help')
+    # A write is confirmed in words, until the next key.
+    s.send(b'\x1b[F')                 # last host
+    s.send(b'd')
+    s.expect("Operation: DELETE host 'beta'")
+    s.send(b'\x13')                   # Ctrl+S: explicit confirmation
+    s.expect('✓ Deleted beta')
+    s.send(DOWN)
+    s.absent('✓ Deleted')
+    assert b'Host beta' not in CONFIG.read_bytes()
+    # A failing reload gives an error that is readable in full.
+    CONFIG.write_bytes(ORIGINAL_CONFIG)
+    CONFIG.chmod(0)
+    try:
+        s.send(b'\x1b[15~')           # F5
+        s.expect('Error:')
+        s.send(b'!')
+        s.expect('Messages')
+        s.expect('[Error]')
+        s.send(ESC)
+    finally:
+        CONFIG.chmod(0o600)
+    s.send(b'\x1b[15~')
+    s.expect('beta')
+    assert not connections()
+    s.send(CTRL_C)
+    s.close()
+    CONFIG.write_bytes(ORIGINAL_CONFIG)
+    print('PTY PASS [help]: contextual help with search, write confirmed in words, error '
+          'readable in full, terminal restored')
+
+
 SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,
-             'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes, 'tunnels': scenario_tunnels, 'batch': scenario_batch}
+             'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes, 'tunnels': scenario_tunnels, 'batch': scenario_batch, 'help': scenario_help}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

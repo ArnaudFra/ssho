@@ -193,7 +193,7 @@ pub(super) fn file_detail(path: &Path, hosts: usize) -> Vec<String> {
 }
 
 /// Rows a line takes once wrapped at word boundaries, as the paragraph draws it.
-fn wrapped_rows(line: &str, width: usize) -> usize {
+pub(super) fn wrapped_rows(line: &str, width: usize) -> usize {
     let mut rows = 1;
     let mut used = 0;
     for word in line.split_whitespace() {

@@ -109,6 +109,8 @@ enum View {
     },
     Note(notes::Editor),
     Help,
+    /// Every current message in full: last error, warnings, last SSH result.
+    Messages,
     Forward(ForwardForm),
     Profiles(profiles::List),
     Active {
@@ -271,6 +273,8 @@ struct Model {
     copied: Option<(String, String)>,
     // Owned tunnel whose stop is being confirmed.
     stop_pending: Option<u64>,
+    // The help is being searched: typed keys filter its lines.
+    help_search: bool,
     view: View,
     parents: Vec<(View, usize)>,
     preferences: AppConfig,
@@ -332,6 +336,7 @@ impl Model {
             sheet_focus: None,
             copied: None,
             stop_pending: None,
+            help_search: false,
             view: View::List,
             parents: vec![],
             preferences,
@@ -622,6 +627,21 @@ impl Model {
         }
         self.delete = None;
         self.error.clear();
+        // A short confirmation in words; it leaves with the next key.
+        self.hint = match action {
+            Action::Save(None, host, target) => {
+                format!("✓ Added {} to {}", host.name, target.display())
+            }
+            Action::Save(Some(_), host, _) => format!("✓ Saved {}", host.name),
+            Action::SaveCopy(host, target) => {
+                format!("✓ Copied to {} in {}", host.name, target.display())
+            }
+            Action::Delete(host) => format!("✓ Deleted {}", host.name),
+            Action::MoveTo(host, target) => {
+                format!("✓ Moved {} to {}", host.name, target.display())
+            }
+            _ => String::new(),
+        };
     }
     /// Refresh metadata without rebuilding the browser's visible order or viewport.
     fn resume_connection(&mut self, name: &str, result: Result<i32>, history: Result<History>) {
@@ -662,6 +682,10 @@ impl Model {
         if matches!(view, View::Info(_)) {
             self.sheet_focus = None;
             self.copied = None;
+        }
+        if matches!(view, View::Help) {
+            self.selector_query.set("");
+            self.help_search = false;
         }
         let parent = std::mem::replace(&mut self.view, view);
         self.parents.push((parent, self.scroll));
@@ -1042,11 +1066,35 @@ impl Model {
                 };
             }
             View::Help => {
-                if matches!(
+                // `/` searches the help; while searching, every key is text.
+                if self.help_search {
+                    match k.code {
+                        KeyCode::Enter => self.help_search = false,
+                        _ if nav::cancels(k) => {
+                            self.help_search = false;
+                            self.selector_query.set("");
+                        }
+                        _ => {
+                            self.selector_query.key(k);
+                            self.scroll = 0;
+                        }
+                    }
+                } else if k.code == KeyCode::Char('/') {
+                    self.help_search = true;
+                } else if matches!(
                     k.code,
                     KeyCode::Esc | KeyCode::Char('q' | 'h' | '?') | KeyCode::Enter | KeyCode::F(1)
                 ) || (ctrl && k.code == KeyCode::Char('c'))
                 {
+                    self.selector_query.set("");
+                    self.back();
+                } else {
+                    self.scroll_key(k);
+                }
+                return Action::None;
+            }
+            View::Messages => {
+                if nav::cancels(k) || matches!(k.code, KeyCode::Char('q') | KeyCode::Enter) {
                     self.back();
                 } else {
                     self.scroll_key(k);
@@ -1193,6 +1241,70 @@ impl Model {
             }
         }
     }
+    /// Everything worth reading in full: the last error or warning, refused
+    /// preferences, configuration warnings and the last SSH result. Each entry
+    /// names its level in words.
+    fn messages(&self) -> Vec<(&'static str, String)> {
+        let mut messages = vec![];
+        if !self.error.is_empty() {
+            messages.push((
+                if self.error.starts_with("Warning") {
+                    "Warning"
+                } else {
+                    "Error"
+                },
+                self.error.clone(),
+            ));
+        }
+        for conflict in self.keymap().conflicts {
+            messages.push((
+                "Warning",
+                format!("Shortcut preference refused: {conflict}"),
+            ));
+        }
+        for warning in &self.config_warnings {
+            messages.push(("Warning", format!("FileTags ignored: {warning}")));
+        }
+        if !self.connection_result.is_empty() {
+            messages.push(("Info", self.connection_result.clone()));
+        }
+        messages
+    }
+    /// Owned work still running, in words: it stays findable from any screen.
+    fn jobs(&self) -> Vec<String> {
+        let mut jobs = vec![];
+        let tunnels = self
+            .tunnels
+            .iter()
+            .filter(|record| record.state == runtime::tunnels::State::Active)
+            .count();
+        if tunnels > 0 {
+            jobs.push(format!("tunnels: {tunnels} active (F7: follow or stop)"));
+        }
+        if self.batch.manager.has_active() {
+            use runtime::batch::State as Run;
+            let records = self.batch.manager.records();
+            let done = records
+                .iter()
+                .filter(|record| !matches!(record.state, Run::Pending | Run::Running))
+                .count();
+            jobs.push(format!(
+                "batch: {done}/{} done ({} in the list: follow or cancel)",
+                records.len(),
+                self.keymap().hint(PaletteAction::BatchOpen)
+            ));
+        }
+        // A probe in progress is neither a past measure nor an SSH session.
+        let probes = self
+            .statuses
+            .values()
+            .filter(|result| result.status == PingStatus::Connecting)
+            .count();
+        if probes > 0 {
+            jobs.push(format!("availability: {probes} probe(s) running"));
+        }
+        jobs
+    }
     /// Shortcuts of the host list, resolved from the current preferences.
     fn keymap(&self) -> Keymap {
         Keymap::new(&self.preferences.key_bindings)
@@ -1335,6 +1447,13 @@ impl Model {
                 self.favorites_only = false;
                 self.show_hidden = false;
                 self.filter(true);
+            }
+            PaletteAction::Messages => {
+                if self.messages().is_empty() {
+                    self.hint = "Messages — Aucun message à afficher".into();
+                } else {
+                    self.open_view(View::Messages);
+                }
             }
             PaletteAction::Palette => palette::open(self, palette::Scope::List),
             PaletteAction::Quit => return Action::Quit,

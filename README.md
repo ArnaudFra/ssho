@@ -185,6 +185,13 @@ Le formulaire d'hôte tient sur **une page**, sans onglets, et son titre nomme l
 
 Sur un terminal de moins de 44 colonnes, le libellé passe au-dessus de sa saisie. Le curseur natif reste visible dans le champ actif ; un bouton ou un titre de section ayant le focus n'a pas de curseur et ne reçoit ni frappe ni collage.
 
+### Aide, messages et travaux en cours
+
+- **Aide contextuelle** (`?`, F1, ou « aide » dans F2 depuis une fiche ou un formulaire) : elle commence par dire à quoi sert l'écran d'où elle a été ouverte (liste, fiche, formulaire d'hôte, tunnel, note), puis liste les actions avec les raccourcis réellement actifs. `/` y lance une **recherche** : seules les lignes correspondantes restent, casse et accents ignorés ; pendant la saisie les lettres sont du texte, Échap efface la recherche avant de fermer l'aide.
+- **Niveaux de message en toutes lettres** : `Error:`, `Warning:`, et une confirmation brève après chaque écriture (« ✓ Saved alpha », « ✓ Deleted beta », « ✓ Moved … to … ») qui disparaît à la touche suivante. Un avertissement n'est plus présenté comme une erreur.
+- **Message lisible en entier** : une erreur trop longue pour sa ligne se termine par « (!: full text) ». `!` (ou F2 → « Messages et dernière erreur ») ouvre un écran qui affiche en entier, avec retour à la ligne et défilement, la dernière erreur, les avertissements en cours (raccourcis refusés, FileTags ignorés) et le dernier résultat SSH. Lire un message ne l'efface pas. Dans l'éditeur de colonnes et les sélecteurs, une erreur occupe désormais le nombre de lignes dont elle a besoin.
+- **Travaux en cours** : tant qu'un tunnel possédé, un lot ou une sonde de disponibilité tourne, une ligne « Jobs — tunnels: 2 active (F7: follow or stop) • batch: 3/10 done (B in the list: follow or cancel) • availability: 5 probe(s) running » reste affichée en bas de **tous** les écrans. Une sonde en cours n'y est confondue ni avec une mesure passée ni avec une session SSH.
+
 ### Colonnes de la liste
 
 L'éditeur de colonnes (`v`) montre, sous la liste à cocher, le **résultat à la largeur courante** : « Shown at this width: Name | Hostname | Tags » dans l'ordre final, puis « Active but short of room: … » pour les colonnes activées mais masquées faute de place. Une colonne désactivée (`[ ]`, « off ») ne se confond donc plus avec une colonne manquant de place (« hidden: width »). `Name` reste obligatoire et première (« fixed »).
@@ -216,7 +223,7 @@ Une ligne en tête situe le parcours : **Targets → Command → Review → Resu
 - **Aucune cible marquée** : `B` ouvre une page qui l'explique et nomme deux issues, **Back to the list** (focus initial) et **Add the n host(s) shown by the filter**. Le filtre n'est jamais transformé en cibles sans ce choix, et aucune commande ne peut être saisie avant d'avoir une cible.
 - **Préparation** : Tab parcourt la commande, le parallélisme, le délai, la liste des cibles puis les boutons **Review** et **Back**. Les flèches agissent dans le contrôle actif : elles ne déplacent la sélection des cibles que lorsque la liste a le focus (son cadre l'annonce), sinon elles passent au contrôle voisin. Entrée avance d'un champ au suivant et s'arrête sur Review.
 - **Vérification** : commande complète, parallélisme, délai et cibles figées ; boutons **Back to edit** (focus initial) et **Launch on n target(s)**. *Entrée ne lance plus le lot : elle valide le choix marqué, donc revient à l'édition tant que Launch n'a pas été choisi avec Tab. Ctrl+L, affiché en pied de page, reste la confirmation explicite.*
-- **Résultats** : deux onglets nommés **Output** et **Errors** (Tab), l'onglet ouvert marqué `▶`, troncature signalée. Revenir ne stoppe pas le lot ; `s` l'annule. Tant qu'un lot tourne, la liste affiche « Lot en cours : 3/10 terminé(s) • B : suivre ou annuler ».
+- **Résultats** : deux onglets nommés **Output** et **Errors** (Tab), l'onglet ouvert marqué `▶`, troncature signalée. Revenir ne stoppe pas le lot ; `s` l'annule. Tant qu'un lot tourne, la ligne « Jobs » le rappelle en bas de tous les écrans.
 
 ### Tunnels : formulaire, profils et suivi
 
