@@ -2159,3 +2159,75 @@ fn summary_tells_files_and_what_happens_to_personal_data() {
     );
     assert!(text.contains("[  Move ]  [  Back ]"), "{text}");
 }
+
+#[test]
+fn columns_show_their_outcome_and_moving_is_a_named_action() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('v')));
+    let text = screen(&mut m, 120, 30);
+    for expected in [
+        "[x] Name (fixed)",
+        "Shown at this width: Name | Hostname | Tags | Last Attempt",
+        "Every active column fits.",
+        "[  Move up ] [  Move down ] [  Reset ] [  Apply ] [  Cancel ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // A narrow table: the active column short of room is told apart from "off".
+    let narrow = screen(&mut m, 60, 30);
+    assert!(narrow.contains("Active but short of room: "), "{narrow}");
+    assert!(narrow.contains("(hidden: width)"), "{narrow}");
+    // Switch User on with Space, then move it up with the named button.
+    let View::Columns(editor) = &m.view else {
+        panic!()
+    };
+    let user = editor
+        .items()
+        .iter()
+        .position(|column| *column == HostColumn::User)
+        .unwrap();
+    for _ in 0..user {
+        m.key(key(KeyCode::Down));
+    }
+    m.key(key(KeyCode::Char(' ')));
+    let View::Columns(editor) = &m.view else {
+        panic!()
+    };
+    assert_eq!(editor.draft.last(), Some(&HostColumn::User));
+    let before = editor.draft.clone();
+    m.key(key(KeyCode::Tab));
+    assert!(screen(&mut m, 120, 30).contains("[▶ Move up ]"));
+    m.key(key(KeyCode::Enter));
+    let View::Columns(editor) = &m.view else {
+        panic!()
+    };
+    assert_eq!(
+        editor.draft[before.len() - 2],
+        HostColumn::User,
+        "moved up by one"
+    );
+    assert_eq!(
+        m.preferences.host_columns.len(),
+        before.len() - 1,
+        "still a draft"
+    );
+    // Moving does not wrap: Name stays first whatever is pressed.
+    for _ in 0..10 {
+        m.key(key(KeyCode::Enter));
+    }
+    let View::Columns(editor) = &m.view else {
+        panic!()
+    };
+    assert_eq!(editor.draft[0], HostColumn::Name);
+    assert_eq!(editor.draft[1], HostColumn::User);
+    let draft = editor.draft.clone();
+    // Apply and Cancel are named too; the draft is published only by Apply.
+    m.key(key(KeyCode::Right));
+    m.key(key(KeyCode::Right));
+    m.key(key(KeyCode::Right));
+    assert!(screen(&mut m, 120, 30).contains("[▶ Apply ]"));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::Columns(draft));
+    m.key(key(KeyCode::Right));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(matches!(m.view, View::List));
+}

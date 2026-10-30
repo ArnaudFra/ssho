@@ -2644,7 +2644,7 @@ fn columns_selector(f: &mut Frame, m: &Model, area: Rect, table_width: u16) {
     let View::Columns(editor) = &m.view else {
         return;
     };
-    let area = panel(area, 76, 17);
+    let area = panel(area, 76, 20);
     f.render_widget(Clear, area);
     let border = if area.height >= 10 {
         block("Columns", true)
@@ -2658,10 +2658,13 @@ fn columns_selector(f: &mut Frame, m: &Model, area: Rect, table_width: u16) {
     } else {
         2.min(inner.height.saturating_sub(5))
     };
+    // Roomy panels add the outcome at the current width and the named actions.
+    let roomy = inner.height >= 14;
     let parts = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(error_height),
+        Constraint::Length(if roomy { 3 } else { 0 }),
         Constraint::Length(3),
     ])
     .split(inner);
@@ -2711,10 +2714,52 @@ fn columns_selector(f: &mut Frame, m: &Model, area: Rect, table_width: u16) {
             .wrap(Wrap { trim: false }),
         parts[2],
     );
+    // The final order as the table will show it, and what the width leaves out:
+    // a column switched off and a column short of room are two different things.
+    let names = |columns: Vec<HostColumn>| {
+        columns
+            .iter()
+            .map(|column| column.label())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let visible: Vec<HostColumn> = plan.iter().map(|(column, _)| *column).collect();
+    let waiting: Vec<HostColumn> = editor
+        .draft
+        .iter()
+        .copied()
+        .filter(|column| !visible.contains(column))
+        .collect();
+    let mut buttons = vec![];
+    for (index, label) in columns::ACTIONS.into_iter().enumerate() {
+        buttons.push(nav::button(label, editor.button == Some(index)));
+        buttons.push(Span::raw(" "));
+    }
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(ellipsize(
+                &format!("Shown at this width: {}", names(visible)),
+                usize::from(parts[3].width),
+            )),
+            Line::styled(
+                ellipsize(
+                    &if waiting.is_empty() {
+                        "Every active column fits.".to_owned()
+                    } else {
+                        format!("Active but short of room: {}", names(waiting))
+                    },
+                    usize::from(parts[3].width),
+                ),
+                Style::default().fg(GRAY),
+            ),
+            Line::from(buttons),
+        ]),
+        parts[3],
+    );
     f.render_widget(
         Paragraph::new(
-            "↑↓ select • Space toggle\nShift+↑↓ move • r reset\nEnter save • Esc cancel",
+            "↑↓ select • Space toggle • Tab: actions\nShift+↑↓ move • r reset\nEnter save • Esc cancel",
         ),
-        parts[3],
+        parts[4],
     );
 }

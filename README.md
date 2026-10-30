@@ -185,6 +185,12 @@ Le formulaire d'hôte tient sur **une page**, sans onglets, et son titre nomme l
 
 Sur un terminal de moins de 44 colonnes, le libellé passe au-dessus de sa saisie. Le curseur natif reste visible dans le champ actif ; un bouton ou un titre de section ayant le focus n'a pas de curseur et ne reçoit ni frappe ni collage.
 
+### Colonnes de la liste
+
+L'éditeur de colonnes (`v`) montre, sous la liste à cocher, le **résultat à la largeur courante** : « Shown at this width: Name | Hostname | Tags » dans l'ordre final, puis « Active but short of room: … » pour les colonnes activées mais masquées faute de place. Une colonne désactivée (`[ ]`, « off ») ne se confond donc plus avec une colonne manquant de place (« hidden: width »). `Name` reste obligatoire et première (« fixed »).
+
+Les actions sont nommées et atteintes par Tab : **Move up**, **Move down**, **Reset**, **Apply**, **Cancel**. Déplacer une colonne est ainsi une action distincte du choix de la ligne, sans avoir à mémoriser Maj+↑/↓ (toujours disponible, comme Espace, `r`, Entrée et Échap). Le déplacement ne boucle pas, et tout reste un brouillon jusqu'à Apply.
+
 ### Aperçu des modifications, suppression et restauration
 
 Avant toute écriture dans un fichier SSH, l'aperçu affiche d'abord un **résumé en clair** : l'opération (`ADD`, `EDIT`, `COPY`, `DELETE`, `MOVE`, `RESTORE`) et l'hôte concerné, le ou les fichiers (source → destination pour un déplacement), et ce qu'il advient des données personnelles — par exemple « Favorite, note and tunnel profiles follow a renamed alias », ou qu'elles restent en place après une suppression. Une suppression nomme donc son objet sans dépendre de la couleur du diff.
