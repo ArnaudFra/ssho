@@ -43,6 +43,10 @@ fn panel(area: Rect, width: u16, height: u16) -> Rect {
         h,
     )
 }
+/// Below this size the host list can no longer show a host and its legend.
+/// Forms and confirmations keep their own compact layout, caret included.
+pub(super) const MIN_WIDTH: u16 = 24;
+pub(super) const MIN_HEIGHT: u16 = 6;
 
 pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     // Every text of the frame is drawn in the language of this model.
@@ -51,7 +55,72 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    draw_frame(f, m, area);
+    let too_small = area.width < MIN_WIDTH || area.height < MIN_HEIGHT;
+    if too_small && matches!(m.view, View::List) && !m.quit_tunnels {
+        // Said plainly rather than drawing a list whose rows are cut off.
+        let text = crate::tf!(
+            "Terminal too small ({}x{}): enlarge it to {MIN_WIDTH}x{MIN_HEIGHT} or more.",
+            "Terminal trop petit ({}x{}) : agrandissez-le à {MIN_WIDTH}x{MIN_HEIGHT} ou plus.",
+            area.width,
+            area.height
+        );
+        f.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), area);
+    } else {
+        draw_frame(f, m, area);
+    }
+    plain_display(f, !m.preferences.colors || m.no_color, m.preferences.ascii);
+}
+
+/// Display preferences applied to the finished frame, so that no screen can
+/// forget them: colours removed, symbols replaced by ASCII characters.
+fn plain_display(f: &mut Frame, no_colors: bool, ascii: bool) {
+    if !no_colors && !ascii {
+        return;
+    }
+    for cell in &mut f.buffer_mut().content {
+        if no_colors {
+            // A coloured background was a selection: it becomes a reversed cell.
+            // Grey was an indicative value: it becomes a dimmed one.
+            if cell.bg != Color::Reset {
+                cell.modifier.insert(Modifier::REVERSED);
+            }
+            if cell.fg == Color::DarkGray || cell.fg == Color::Gray {
+                cell.modifier.insert(Modifier::DIM);
+            }
+            cell.fg = Color::Reset;
+            cell.bg = Color::Reset;
+        }
+        if ascii {
+            let mut symbols = cell.symbol().chars();
+            if let (Some(symbol), None) = (symbols.next(), symbols.next()) {
+                if let Some(plain) = ascii_symbol(symbol) {
+                    cell.set_char(plain);
+                }
+            }
+        }
+    }
+}
+
+/// ASCII stand-in of an interface symbol; text and user data are left alone.
+fn ascii_symbol(symbol: char) -> Option<char> {
+    Some(match symbol {
+        '─' | '━' | '═' | '—' | '–' => '-',
+        '│' | '┃' | '║' | '•' => '|',
+        '╭' | '╮' | '╰' | '╯' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' => {
+            '+'
+        }
+        '▶' | '▸' | '→' | '›' => '>',
+        '←' => '<',
+        '↑' => '^',
+        '▼' | '▾' | '↓' => 'v',
+        '●' => 'o',
+        '✓' => '+',
+        '≡' => '=',
+        '…' | '·' => '.',
+        '«' | '»' => '"',
+        '’' => '\'',
+        _ => return None,
+    })
 }
 
 fn draw_frame(f: &mut Frame, m: &mut Model, area: Rect) {

@@ -419,6 +419,12 @@ pub struct AppConfig {
     pub group_mode: GroupMode,
     /// Interface language: `"en"` (default, also for null or unknown) or `"fr"`.
     pub language: crate::i18n::Language,
+    /// `false` draws without any colour: states keep their text, sign or emphasis.
+    #[serde(deserialize_with = "nullable_true")]
+    pub colors: bool,
+    /// `true` replaces box drawing and symbols with ASCII characters.
+    #[serde(deserialize_with = "nullable_false")]
+    pub ascii: bool,
 }
 
 impl Default for AppConfig {
@@ -434,6 +440,8 @@ impl Default for AppConfig {
             group_aliases: false,
             group_mode: GroupMode::Flat,
             language: crate::i18n::Language::En,
+            colors: true,
+            ascii: false,
         }
     }
 }

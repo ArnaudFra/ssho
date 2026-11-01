@@ -65,6 +65,8 @@ Exemple de préférences, dans `ssho/config.json` :
   "group_aliases": false,
   "group_mode": "flat",
   "language": "en",
+  "colors": true,
+  "ascii": false,
   "key_bindings": {
     "quit_keys": ["q", "ctrl+c"],
     "disable_esc_quit": false,
@@ -156,13 +158,21 @@ En JSON, `tags` contient l’union sans préfixes graphiques. Lorsqu’un hôte 
 
 ## Navigation au clavier
 
-### Langue de l'interface
+### Langue, couleurs, symboles et petits terminaux
 
 **Langue.** L'interface existe en anglais et en français. L'anglais est la langue par défaut ; elle se change dans l'application par F2 → **Language** (en français : **Langue de l'interface**), action que la recherche de la palette trouve dans les deux langues (`language`, `langue`). Le sélecteur porte un titre lisible dans les deux langues, marque la langue en cours par `✓`, enregistre le choix dans `ssho/config.json` (`"language": "en"` ou `"fr"`) et l'applique aussitôt, sans redémarrage. Une valeur absente, `null` ou inconnue donne l'anglais et ne bloque jamais le lancement. Les noms de touches suivent la langue (Enter / Entrée, Esc / Échap, Space / Espace). Restent en anglais dans les deux langues : les termes et directives OpenSSH (`ProxyJump`, `RequestTTY`, `Local (-L)`…), la syntaxe de recherche (`tag:`, `is:online`, `AND`), l'aide en ligne de commande (`ssho --help`) et le détail technique des erreurs renvoyées par le système ou par OpenSSH.
 
 Ce guide cite les libellés tantôt en français, tantôt en anglais selon les sections ; l'application, elle, n'affiche qu'une langue à la fois. Les correspondances sont directes (Filtres / Filters, Enregistrer / Save, Lancer / Launch, Revenir / Go back…).
 
+**Sans couleurs.** F2 → **Display: colours** (*Affichage : couleurs*) coupe ou rétablit les couleurs (`"colors": false` dans `config.json`). La variable d'environnement `NO_COLOR` (toute valeur non vide, convention [no-color.org](https://no-color.org)) les coupe aussi, et passe avant la préférence : l'action l'explique au lieu de basculer pour rien. Sans couleurs, aucune séquence de couleur n'est envoyée au terminal ; la sélection reste visible (vidéo inverse et `▶`), les valeurs indicatives sont atténuées, et chaque état garde son texte ou son signe (`Error:`, `+ Online`, `● Modifiée`…). Le contenu des écrans est identique caractère pour caractère.
+
+**Symboles ASCII.** F2 → **Display: ASCII symbols** (*Affichage : symboles ASCII*, `"ascii": true`) remplace cadres et signes par des caractères ASCII pour les polices ou terminaux qui ne les affichent pas : `+`, `-`, `|` pour les cadres, `>` pour `▶`, `o` pour `●`, `+` pour `✓`, `=` pour `≡`, `v` pour `▼`, `^v<>` pour les flèches, `|` pour `•`. Les lettres accentuées du texte et les données de l'utilisateur (noms d'hôtes, notes) ne sont pas réécrites.
+
 **Largeurs.** La légende de la liste choisit sa version selon la largeur, puis renonce à une ligne qui serait coupée plutôt que de l'afficher sans sa fin : une langue plus longue ne perd jamais la fin d'une ligne. En français, le rappel de la séquence rapide (`Ctrl+G : rapide`) apparaît quand une ligne a la place pour lui (par exemple à 100 ou à 140 colonnes, pas à 120) ; l'aide et F2 l'indiquent toujours. L'aide occupe jusqu'à 126 colonnes.
+
+**Terminal trop petit.** En dessous de 24 × 6, la liste des hôtes annonce « Terminal too small (L×H) » / « Terminal trop petit » avec la taille minimale, au lieu d'un tableau tronqué. Formulaires, sélecteurs et confirmations gardent leur disposition compacte, avec le contrôle actif et le curseur ; Échap y revient toujours d'un niveau.
+
+Non pris en charge : lecteurs d'écran et souris. Sur un thème clair, l'affichage sans couleurs sert de repli.
 
 ### Rechercher, filtrer, naviguer
 

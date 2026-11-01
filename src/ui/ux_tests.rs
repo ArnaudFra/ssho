@@ -2532,3 +2532,115 @@ fn both_languages_draw_every_screen_and_keep_the_legend_whole() {
         }
     }
 }
+
+#[test]
+fn without_colours_every_state_keeps_a_text_a_sign_or_an_emphasis() {
+    use ratatui::{backend::TestBackend, style::Color, style::Modifier, Terminal};
+    let draw = |m: &mut Model| {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| render::draw(frame, m)).unwrap();
+        terminal.backend().buffer().clone()
+    };
+    let mut m = english();
+    m.error = "Error: unreadable file".into();
+    let coloured = draw(&mut m);
+    assert!(coloured.content.iter().any(|cell| cell.fg != Color::Reset));
+    // The preference and the NO_COLOR environment variable give the same frame.
+    for from_environment in [false, true] {
+        let mut m = english();
+        m.error = "Error: unreadable file".into();
+        m.preferences.colors = from_environment;
+        m.no_color = from_environment;
+        let plain = draw(&mut m);
+        assert!(
+            plain
+                .content
+                .iter()
+                .all(|cell| cell.fg == Color::Reset && cell.bg == Color::Reset),
+            "no cell keeps a colour"
+        );
+        // Same characters as the coloured frame: nothing was told by colour alone.
+        let text = |buffer: &ratatui::buffer::Buffer| -> String {
+            buffer.content.iter().map(|cell| cell.symbol()).collect()
+        };
+        assert_eq!(text(&plain), text(&coloured));
+        assert!(text(&plain).contains("Error: unreadable file"));
+        // The selected row is still told apart from the others.
+        let emphasised = |buffer: &ratatui::buffer::Buffer, name: &str| {
+            let row = (0..buffer.area.height)
+                .find(|y| {
+                    let line: String = (0..buffer.area.width)
+                        .map(|x| buffer[(x, *y)].symbol())
+                        .collect();
+                    line.contains(name) && line.contains('│')
+                })
+                .unwrap();
+            (0..buffer.area.width).any(|x| {
+                let modifier = buffer[(x, row)].modifier;
+                modifier.contains(Modifier::REVERSED) || modifier.contains(Modifier::BOLD)
+            })
+        };
+        assert!(
+            emphasised(&plain, "alpha"),
+            "the selection keeps an emphasis"
+        );
+        assert!(!emphasised(&plain, "beta"));
+    }
+    // With NO_COLOR the palette explains why its toggle cannot turn colours on.
+    let mut m = english();
+    m.no_color = true;
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "colours");
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(m.hint.contains("NO_COLOR"), "{}", m.hint);
+    let mut m = english();
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "colours");
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::ToggleColors);
+}
+
+#[test]
+fn ascii_symbols_replace_frames_and_signs_and_are_saved() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut m = english();
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "ascii");
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::ToggleAscii);
+    save_display(&mut m, temp.path(), |config| config.ascii = !config.ascii).unwrap();
+    assert!(matches!(m.view, View::List), "the palette is closed");
+    assert!(AppConfig::load(temp.path()).unwrap().ascii);
+    for opener in [None, Some(KeyCode::F(2)), Some(KeyCode::Char('e'))] {
+        if let Some(code) = opener {
+            m.key(key(code));
+        }
+        let text = screen(&mut m, 100, 24);
+        assert!(text.is_ascii(), "{opener:?}: {text}");
+        m.key(key(KeyCode::Esc));
+    }
+    let text = screen(&mut m, 100, 24);
+    for expected in ["+o Hosts", "|?  alpha", "F2: actions | ", "^v: select"] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // User data is not rewritten: only interface symbols are.
+    m.all[0].name = "界-alpha".into();
+    m.filter(true);
+    let text = screen(&mut m, 100, 24);
+    assert!(text.contains('界') && text.contains("-alpha"), "{text}");
+}
+
+#[test]
+fn a_list_too_small_to_be_used_says_so_and_forms_keep_their_caret() {
+    let mut m = english();
+    let text = screen(&mut m, 23, 8);
+    assert!(text.contains("Terminal too small"), "{text}");
+    let joined: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(joined.contains("24x6"), "{joined}");
+    assert!(!screen(&mut m, 24, 6).contains("Terminal too small"));
+    let mut m = model(serde_json::json!({}));
+    assert!(screen(&mut m, 60, 5).contains("Terminal trop petit"));
+    // A form keeps its compact layout: the notice never replaces a draft.
+    m.key(key(KeyCode::Char('e')));
+    assert!(!screen(&mut m, 20, 5).contains("Terminal trop petit"));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::List));
+}

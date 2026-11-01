@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import struct
 import subprocess
@@ -845,12 +846,51 @@ def scenario_language():
     s.expect('F2 : actions')
     s.send(F2)
     s.expect('Rechercher une action :')
-    s.send(ESC)
+    # ASCII symbols: frames and signs are replaced at once, and the choice is saved.
+    s.send(b'ascii')
+    s.send(b'\r')
+    s.expect('+o Hôtes')
+    s.expect('F2 : actions | ')
+    s.absent('│')
+    assert json.loads((APP / 'config.json').read_text())['ascii'] is True
     s.send(CTRL_C)
     s.close()
+    # NO_COLOR: not a single colour sequence reaches the terminal.
+    def colours(raw):
+        found = []
+        for sequence in re.findall(rb'\x1b\[([0-9;]*)m', bytes(raw)):
+            for value in filter(None, sequence.split(b';')):
+                number = int(value)
+                if 30 <= number <= 38 or 40 <= number <= 48 or 90 <= number <= 107:
+                    found.append(sequence)
+        return found
+    ENV['NO_COLOR'] = '1'
+    try:
+        s = Session('language-no-color', width=100, height=30)
+        s.expect('F2 : actions')
+        s.send(F2)
+        s.send(b'couleurs')
+        s.expect('Affichage : couleurs')
+        s.send(b'\r')                 # the environment decides: the toggle says so
+        s.expect('NO_COLOR')
+        s.send(ESC)
+        s.send(b'e')
+        s.expect('Alias *')
+        s.send(ESC)
+        s.send(CTRL_C)
+        s.close()
+        assert not colours(s.raw), colours(s.raw)[:5]
+    finally:
+        del ENV['NO_COLOR']
+    s = Session('language-colour', width=100, height=30)
+    s.expect('F2 : actions')
+    s.send(CTRL_C)
+    s.close()
+    assert colours(s.raw), 'colours are back without NO_COLOR'
     assert not connections()
     print('PTY PASS [language]: English by default, language changed from the palette in either '
-          'language, cancel keeps it, saved and applied at once, kept at restart, terminal restored')
+          'language, cancel keeps it, saved and applied at once, kept at restart, ASCII symbols, '
+          'no colour sequence under NO_COLOR, terminal restored')
 
 
 SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,

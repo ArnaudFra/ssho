@@ -45,6 +45,8 @@ pub(super) enum PaletteAction {
     ClearFilters,
     Messages,
     Language,
+    ToggleColors,
+    ToggleAscii,
     Palette,
     Quit,
 }
@@ -81,7 +83,7 @@ impl Category {
 impl PaletteAction {
     /// Every catalogue entry, grouped by category. The palette lists them in this
     /// order; only the action that opens the palette itself is left out of it.
-    pub(super) const CATALOGUE: [Self; 42] = [
+    pub(super) const CATALOGUE: [Self; 44] = [
         Self::Connect,
         Self::Tunnel,
         Self::Profiles,
@@ -121,6 +123,8 @@ impl PaletteAction {
         Self::Reload,
         Self::Messages,
         Self::Language,
+        Self::ToggleColors,
+        Self::ToggleAscii,
         Self::Palette,
         Self::Help,
         Self::Quit,
@@ -169,6 +173,8 @@ impl PaletteAction {
             Self::ClearFilters => "filter.clear",
             Self::Messages => "app.messages",
             Self::Language => "app.language",
+            Self::ToggleColors => "app.colors",
+            Self::ToggleAscii => "app.ascii",
             Self::Palette => "app.palette",
             Self::Quit => "app.quit",
         }
@@ -227,6 +233,8 @@ impl PaletteAction {
             Self::ClearFilters => ("Clear all filters", "Effacer tous les filtres"),
             Self::Messages => ("Messages and last error", "Messages et dernière erreur"),
             Self::Language => ("Language", "Langue de l'interface"),
+            Self::ToggleColors => ("Display: colours", "Affichage : couleurs"),
+            Self::ToggleAscii => ("Display: ASCII symbols", "Affichage : symboles ASCII"),
             Self::Palette => ("Action palette", "Palette d'actions"),
             Self::Quit => ("Quit", "Quitter"),
         }
@@ -278,6 +286,8 @@ impl PaletteAction {
             Self::Reload
             | Self::Messages
             | Self::Language
+            | Self::ToggleColors
+            | Self::ToggleAscii
             | Self::Palette
             | Self::Help
             | Self::Quit => Category::Application,
@@ -334,6 +344,10 @@ impl PaletteAction {
             Self::Reload => "rafraîchir relire actualiser refresh reread",
             Self::Messages => "erreur avertissement warning error détail journal log",
             Self::Language => "langue language english français anglais french traduction",
+            Self::ToggleColors => {
+                "couleur color monochrome sobre contraste thème clair sombre no_color plain theme light dark"
+            }
+            Self::ToggleAscii => "ascii unicode bordure cadre caractères police border font glyph",
             Self::Palette => "f2 commandes",
             Self::Help => "raccourcis touches documentation shortcuts keys documentation",
             Self::Quit => "sortir fermer exit leave close",
@@ -495,6 +509,14 @@ impl PaletteAction {
             Self::Language => crate::t!(
                 "Chooses the language of the interface: English or French.",
                 "Choisit la langue de l'interface : anglais ou français."
+            ),
+            Self::ToggleColors => crate::t!(
+                "Turns colours on or off; without them every state keeps its text or sign.",
+                "Active ou coupe les couleurs ; sans elles chaque état garde son texte ou son signe."
+            ),
+            Self::ToggleAscii => crate::t!(
+                "Draws frames and signs with ASCII characters, for fonts without the symbols.",
+                "Dessine cadres et signes en caractères ASCII, pour les polices sans ces symboles."
             ),
             Self::Palette => crate::t!("Opens this palette.", "Ouvre cette palette."),
             Self::Help => crate::t!(

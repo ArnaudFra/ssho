@@ -188,6 +188,8 @@ enum Action {
     Columns(Vec<HostColumn>),
     Availability(AvailabilityMethod),
     Language(crate::i18n::Language),
+    ToggleColors,
+    ToggleAscii,
     None,
     OpenKeys(bool),
     RefreshKeys,
@@ -280,6 +282,8 @@ struct Model {
     stop_pending: Option<u64>,
     // The help is being searched: typed keys filter its lines.
     help_search: bool,
+    /// `NO_COLOR` was set when the application started: colours stay off.
+    no_color: bool,
     view: View,
     parents: Vec<(View, usize)>,
     preferences: AppConfig,
@@ -344,6 +348,7 @@ impl Model {
             copied: None,
             stop_pending: None,
             help_search: false,
+            no_color: false,
             view: View::List,
             parents: vec![],
             preferences,
@@ -1513,6 +1518,19 @@ impl Model {
                 self.show_hidden = false;
                 self.filter(true);
             }
+            PaletteAction::ToggleColors => {
+                if self.no_color {
+                    // The environment decides first: say so instead of toggling in vain.
+                    self.hint = crate::t!(
+                        "Colours are off because NO_COLOR is set in the environment",
+                        "Les couleurs sont coupées par la variable d'environnement NO_COLOR"
+                    )
+                    .into();
+                } else {
+                    return Action::ToggleColors;
+                }
+            }
+            PaletteAction::ToggleAscii => return Action::ToggleAscii,
             PaletteAction::Language => {
                 let selected = crate::i18n::Language::ALL
                     .iter()
@@ -1860,6 +1878,8 @@ pub fn run(
         history.connections.clone(),
         force_search,
     );
+    // https://no-color.org: any non-empty value asks for an output without colour.
+    m.no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
     m.metadata = metadata.hosts().clone();
     m.batch.root = config.to_path_buf();
     m.batch.history_root = Some(paths.root.clone());
@@ -2033,6 +2053,8 @@ pub fn run(
             Action::ToggleAliases
             | Action::Availability(_)
             | Action::Language(_)
+            | Action::ToggleColors
+            | Action::ToggleAscii
             | Action::GroupMode(_)
             | Action::Columns(_) => apply_preference_action(
                 &inspector,
@@ -2141,6 +2163,16 @@ fn search_placeholder() -> &'static str {
     )
 }
 
+/// Display preferences are saved first, then adopted; the list stays in place.
+fn save_display(m: &mut Model, root: &Path, change: impl FnOnce(&mut AppConfig)) -> Result<()> {
+    m.preferences = AppConfig::update(root, change)?;
+    m.error.clear();
+    if matches!(m.view, View::Actions(_)) {
+        m.back();
+    }
+    Ok(())
+}
+
 /// The language is a preference like the others: saved first, then adopted.
 fn save_language(m: &mut Model, root: &Path, language: crate::i18n::Language) -> Result<()> {
     let preferences = AppConfig::update(root, |config| config.language = language)?;
@@ -2168,6 +2200,8 @@ fn apply_preference_action(
         Action::GroupMode(mode) => groups::save(m, root, *mode),
         Action::Availability(method) => save_availability(m, root, *method),
         Action::Language(language) => save_language(m, root, *language),
+        Action::ToggleColors => save_display(m, root, |config| config.colors = !config.colors),
+        Action::ToggleAscii => save_display(m, root, |config| config.ascii = !config.ascii),
         _ => unreachable!("only preference adoption actions reach this dispatcher"),
     }?;
     // Alias/group saves also adopt the entire fresh config, including external

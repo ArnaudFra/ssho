@@ -216,6 +216,8 @@ impl Model {
             A::FavoritesOnly => on(self.favorites_only),
             A::ToggleHidden => on(self.show_hidden),
             A::ToggleAliases => on(self.preferences.group_aliases),
+            A::ToggleColors => on(self.preferences.colors && !self.no_color),
+            A::ToggleAscii => on(self.preferences.ascii),
             A::Details => on(self.details.shown),
             A::SortName => on(!self.recent),
             A::SortRecent => on(self.recent),
