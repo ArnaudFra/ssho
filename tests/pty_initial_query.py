@@ -120,7 +120,7 @@ class Session:
         while time.monotonic() < end:
             text = self.drain(.05)
             # The search zone is an input while editing and a filter band otherwise.
-            zone = any(marker in text for marker in ('/ > ', 'Search: > ', 'Filtres', 'Rechercher'))
+            zone = any(marker in text for marker in ('/ > ', 'Search: > ', 'Filters', '/ Search'))
             if b'\x1b[2J' in self.raw[mark:] and zone and 'F2: actions' in text:
                 return
         raise AssertionError(f'{self.name}: missing fresh compact frame:\n{self.screen.text()}')
@@ -160,7 +160,7 @@ session.expect(query)
 # Save group/column/method preferences through existing dispatch; query survives.
 session.send(b'\t')
 session.send(b'g')
-session.expect('Groupes — présentation')
+session.expect('Groups — presentation')
 session.send(b'\x1b[B')
 session.send(b'\r')
 session.expect(query)
@@ -169,7 +169,7 @@ session.expect('Columns')
 session.send(b'\r')
 session.expect(query)
 session.send(b'P')
-session.expect('Méthode de disponibilité')
+session.expect('Availability method')
 session.send(b'\x1b[B')
 session.send(b'\r')
 session.expect('ICMP local')

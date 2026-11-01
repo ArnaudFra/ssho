@@ -15,7 +15,7 @@ impl State {
     pub fn ensure_foreground_idle(&self) -> Result<()> {
         anyhow::ensure!(
             !self.manager.has_active(),
-            "Batch active: wait or cancel in B before launching a foreground tool"
+            crate::t!("Batch active: wait or cancel in B before launching a foreground tool", "Lot en cours : attendez ou annulez dans B avant de lancer un outil au premier plan")
         );
         Ok(())
     }
@@ -146,26 +146,30 @@ impl Editor {
     }
     fn options(&self) -> Result<Options> {
         let options = Options {
-            parallel: self
-                .parallel
-                .value
-                .parse()
-                .map_err(|_| anyhow::anyhow!("parallel connections must be 1–16"))?,
-            timeout: Duration::from_secs(
-                self.timeout
-                    .value
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("timeout must be 1–3600 seconds"))?,
-            ),
+            parallel: self.parallel.value.parse().map_err(|_| {
+                anyhow::anyhow!(crate::t!(
+                    "parallel connections must be 1–16",
+                    "le nombre de connexions parallèles doit être entre 1 et 16"
+                ))
+            })?,
+            timeout: Duration::from_secs(self.timeout.value.parse().map_err(|_| {
+                anyhow::anyhow!(crate::t!(
+                    "timeout must be 1–3600 seconds",
+                    "le délai doit être entre 1 et 3600 secondes"
+                ))
+            })?),
         };
         options.validate()?;
         anyhow::ensure!(
             !self.targets.is_empty(),
-            "mark at least one target first (x or F2)"
+            crate::t!(
+                "mark at least one target first (x or F2)",
+                "marquez d'abord au moins une cible (x ou F2)"
+            )
         );
         anyhow::ensure!(
             !self.command.value.trim().is_empty(),
-            "enter a remote command"
+            crate::t!("enter a remote command", "saisissez une commande distante")
         );
         Ok(options)
     }
@@ -225,7 +229,13 @@ pub(super) fn start(m: &mut Model) -> Result<()> {
     let View::Batch(editor) = &m.view else {
         anyhow::bail!("batch preparation is absent")
     };
-    anyhow::ensure!(editor.confirm, "explicit confirmation required");
+    anyhow::ensure!(
+        editor.confirm,
+        crate::t!(
+            "explicit confirmation required",
+            "une confirmation explicite est requise"
+        )
+    );
     let options = editor.options()?;
     m.batch.manager.start(
         editor.targets.clone(),
@@ -258,7 +268,11 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
                     select_visible(m);
                     if m.batch.marks.is_empty() {
                         if m.error.is_empty() {
-                            m.error = "No host is shown by the current filter".into();
+                            m.error = crate::t!(
+                                "No host is shown by the current filter",
+                                "Le filtre courant n'affiche aucun hôte"
+                            )
+                            .into();
                         }
                     } else {
                         m.view = View::Batch(Editor::new(m.batch.marks.clone()));
@@ -406,9 +420,9 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
     match &mut m.view {
         View::Batch(editor) => {
             let title = if editor.confirm {
-                "Confirm batch"
+                crate::t!("Confirm batch", "Confirmer le lot")
             } else {
-                "Batch"
+                crate::t!("Batch", "Lot")
             };
             // Where the journey stands: Targets → Command → Review → Results.
             let step = if editor.targets.is_empty() {
@@ -418,17 +432,26 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
             } else {
                 1
             };
-            let steps = ["Targets", "Command", "Review", "Results"]
-                .iter()
-                .enumerate()
-                .map(|(index, name)| match index.cmp(&step) {
-                    std::cmp::Ordering::Less => format!("{name} ✓"),
-                    std::cmp::Ordering::Equal => format!("[{name}]"),
-                    std::cmp::Ordering::Greater => (*name).to_owned(),
-                })
-                .collect::<Vec<_>>()
-                .join(" → ");
-            let heading = format!("{title}: {} targets • {steps}", editor.targets.len());
+            let steps = [
+                crate::t!("Targets", "Cibles"),
+                crate::t!("Command", "Commande"),
+                crate::t!("Review", "Vérification"),
+                crate::t!("Results", "Résultats"),
+            ]
+            .iter()
+            .enumerate()
+            .map(|(index, name)| match index.cmp(&step) {
+                std::cmp::Ordering::Less => format!("{name} ✓"),
+                std::cmp::Ordering::Equal => format!("[{name}]"),
+                std::cmp::Ordering::Greater => (*name).to_owned(),
+            })
+            .collect::<Vec<_>>()
+            .join(" → ");
+            let heading = crate::tf!(
+                "{title}: {} targets • {steps}",
+                "{title} : {} cibles • {steps}",
+                editor.targets.len()
+            );
             if editor.targets.is_empty() {
                 // Step 1 with nothing marked: say why, and name the two ways out.
                 f.render_widget(Paragraph::new(heading), areas[0]);
@@ -440,17 +463,17 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                 let hosts = m.visible.len();
                 f.render_widget(
                     Paragraph::new(vec![
-                        Line::from("No targets selected."),
+                        Line::from(crate::t!("No targets selected.", "Aucune cible sélectionnée.")),
                         Line::from(
-                            "A batch only runs on the aliases you marked: the filter is never turned into targets on its own.",
+                            crate::t!("A batch only runs on the aliases you marked: the filter is never turned into targets on its own.", "Un lot ne s'exécute que sur les alias marqués : le filtre n'est jamais transformé en cibles de lui-même."),
                         ),
-                        Line::from("Back in the list, x marks the selected alias."),
+                        Line::from(crate::t!("Back in the list, x marks the selected alias.", "De retour dans la liste, x marque l'alias sélectionné.")),
                         Line::from(""),
                         Line::from(vec![
-                            nav::button("Back to the list", editor.button == 0),
+                            nav::button(crate::t!("Back to the list", "Retour à la liste"), editor.button == 0),
                             ratatui::text::Span::raw("  "),
                             nav::button(
-                                &format!("Add the {hosts} host(s) shown by the filter"),
+                                &crate::tf!("Add the {hosts} host(s) shown by the filter", "Ajouter les {hosts} hôte(s) affichés par le filtre"),
                                 editor.button == 1,
                             ),
                         ]),
@@ -459,15 +482,20 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                     body,
                 );
                 f.render_widget(
-                    Paragraph::new("Tab/←→: choose • Enter: confirm • Esc: return"),
+                    Paragraph::new(crate::t!(
+                        "Tab/←→: choose • Enter: confirm • Esc: return",
+                        "Tab/←→ : choisir • Entrée : valider • Échap : retour"
+                    )),
                     areas[3],
                 );
             } else {
                 let focus = editor.focus;
                 let (label, input) = match focus {
-                    1 if !editor.confirm => ("Parallel: ", &editor.parallel),
-                    2 if !editor.confirm => ("Timeout: ", &editor.timeout),
-                    _ => ("Cmd: ", &editor.command),
+                    1 if !editor.confirm => {
+                        (crate::t!("Parallel: ", "Parallèle : "), &editor.parallel)
+                    }
+                    2 if !editor.confirm => (crate::t!("Timeout: ", "Délai : "), &editor.timeout),
+                    _ => (crate::t!("Cmd: ", "Cmd : "), &editor.command),
                 };
                 let input_width = usize::from(areas[0].width)
                     .saturating_sub(label.len())
@@ -475,27 +503,36 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                 let (value, cursor) = input.viewport(!editor.confirm && focus < 3, input_width);
                 let buttons = if editor.confirm {
                     Line::from(vec![
-                        nav::button("Back to edit", editor.button == 0),
+                        nav::button(
+                            crate::t!("Back to edit", "Retour à l'édition"),
+                            editor.button == 0,
+                        ),
                         ratatui::text::Span::raw("  "),
                         nav::button(
-                            &format!("Launch on {} target(s)", editor.targets.len()),
+                            &crate::tf!(
+                                "Launch on {} target(s)",
+                                "Lancer sur {} cible(s)",
+                                editor.targets.len()
+                            ),
                             editor.button == 1,
                         ),
                     ])
                 } else {
                     Line::from(vec![
-                        nav::button("Review", focus == Editor::REVIEW),
+                        nav::button(crate::t!("Review", "Vérification"), focus == Editor::REVIEW),
                         ratatui::text::Span::raw("  "),
-                        nav::button("Back", focus == Editor::BACK),
+                        nav::button(crate::t!("Back", "Retour"), focus == Editor::BACK),
                     ])
                 };
                 f.render_widget(
                     Paragraph::new(vec![
                         Line::from(heading),
                         Line::from(format!("{label}{value}")),
-                        Line::from(format!(
+                        Line::from(crate::tf!(
                             "Parallel: {} (1–16) • Timeout: {}s (1–3600)",
-                            editor.parallel.value, editor.timeout.value
+                            "Parallèle : {} (1–16) • Délai : {} s (1–3600)",
+                            editor.parallel.value,
+                            editor.timeout.value
                         )),
                         buttons,
                     ]),
@@ -517,15 +554,19 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                 f.render_stateful_widget(
                     Table::new(rows, [Constraint::Min(1)])
                         .block(border(if listing {
-                            "● Frozen targets — ↑↓ select".into()
+                            crate::t!(
+                                "● Frozen targets — ↑↓ select",
+                                "● Cibles figées — ↑↓ choisir"
+                            )
+                            .into()
                         } else {
-                            "Frozen targets".into()
+                            crate::t!("Frozen targets", "Cibles figées").into()
                         }))
                         .row_highlight_style(selected_style),
                     areas[1],
                     &mut TableState::default().with_selected(Some(editor.selected)),
                 );
-                let text=editor.targets.get(editor.selected).map(|t|format!("Alias: {}\nSource: {}\nSSH root: {}\nCommand: {}\nParallel: {} • Timeout: {}s\nNative SSH, no prompts. Stopping local SSH cannot promise to stop detached remote commands.",t.alias,t.source.display(),t.root.display(),editor.command.value,editor.parallel.value,editor.timeout.value)).unwrap_or_default();
+                let text=editor.targets.get(editor.selected).map(|t|crate::tf!("Alias: {}\nSource: {}\nSSH root: {}\nCommand: {}\nParallel: {} • Timeout: {}s\nNative SSH, no prompts. Stopping local SSH cannot promise to stop detached remote commands.", "Alias : {}\nSource : {}\nRacine SSH : {}\nCommande : {}\nParallèle : {} • Délai : {} s\nSSH natif, sans invite. Arrêter le SSH local ne garantit pas l'arrêt d'une commande distante détachée.",t.alias,t.source.display(),t.root.display(),editor.command.value,editor.parallel.value,editor.timeout.value)).unwrap_or_default();
                 details::render_rows(
                     f,
                     areas[2],
@@ -535,9 +576,9 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                     &mut editor.scroll,
                 );
                 let footer = if editor.confirm {
-                    "Tab/←→: choose • Enter: confirm the choice • Ctrl+L: launch • Esc: edit\n↑↓: review targets • PgUp/PgDn: details"
+                    crate::t!("Tab/←→: choose • Enter: confirm the choice • Ctrl+L: launch • Esc: edit\n↑↓: review targets • PgUp/PgDn: details", "Tab/←→ : choisir • Entrée : valider le choix • Ctrl+L : lancer • Échap : éditer\n↑↓ : revoir les cibles • PgUp/PgDn : détails")
                 } else {
-                    "Tab/↑↓: next control • Enter: next field, then Review • Ctrl+L: review • Esc: return\nPgUp/PgDn: full command/details"
+                    crate::t!("Tab/↑↓: next control • Enter: next field, then Review • Ctrl+L: review • Esc: return\nPgUp/PgDn: full command/details", "Tab/↑↓ : contrôle suivant • Entrée : champ suivant, puis Vérification • Ctrl+L : vérifier • Échap : retour\nPgUp/PgDn : commande/détails complets")
                 };
                 f.render_widget(Paragraph::new(footer), areas[3]);
             }
@@ -549,7 +590,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
         } => {
             let records = m.batch.manager.records();
             let count = |state| records.iter().filter(|r| r.state == state).count();
-            f.render_widget(Paragraph::new(format!("Batch results: {} targets\nOK {} • failed {} • running {} • pending {}\nTimed out {} • cancelled {}\nCommand: {}",records.len(),count(RunState::Succeeded),count(RunState::Failed),count(RunState::Running),count(RunState::Pending),count(RunState::TimedOut),count(RunState::Cancelled),m.batch.command)),areas[0]);
+            f.render_widget(Paragraph::new(crate::tf!("Batch results: {} targets\nOK {} • failed {} • running {} • pending {}\nTimed out {} • cancelled {}\nCommand: {}", "Résultats du lot : {} cibles\nOK {} • échecs {} • en cours {} • en attente {}\nDélai dépassé {} • annulées {}\nCommande : {}",records.len(),count(RunState::Succeeded),count(RunState::Failed),count(RunState::Running),count(RunState::Pending),count(RunState::TimedOut),count(RunState::Cancelled),m.batch.command)),areas[0]);
             let rows = records.iter().map(|r| {
                 Row::new([
                     r.target.alias.clone(),
@@ -565,7 +606,9 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                     rows,
                     [Constraint::Percentage(45), Constraint::Percentage(55)],
                 )
-                .block(border("Host / state (exit)".into()))
+                .block(border(
+                    crate::t!("Host / state (exit)", "Hôte / état (code)").into(),
+                ))
                 .row_highlight_style(selected_style),
                 areas[1],
                 &mut TableState::default().with_selected(Some(*selected)),
@@ -575,16 +618,15 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                     .get(*selected)
                     .map(|r| {
                         let output = if *stderr { &r.stderr } else { &r.stdout };
-                        format!(
-                        "{}  {}\n{} — {} • {} bytes{}\nSource: {}\nRoot: {}\nCommand: {}\n{}\n{}",
+                        crate::tf!("{}  {}\n{} — {} • {} bytes{}\nSource: {}\nRoot: {}\nCommand: {}\n{}\n{}", "{}  {}\n{} — {} • {} octets{}\nSource : {}\nRacine : {}\nCommande : {}\n{}\n{}",
                         // Two named tabs; the open one carries the marker.
-                        if *stderr { "[  Output ]" } else { "[▶ Output ]" },
-                        if *stderr { "[▶ Errors ]" } else { "[  Errors ]" },
+                        if *stderr { crate::t!("[  Output ]", "[  Sortie ]") } else { crate::t!("[▶ Output ]", "[▶ Sortie ]") },
+                        if *stderr { crate::t!("[▶ Errors ]", "[▶ Erreurs ]") } else { crate::t!("[  Errors ]", "[  Erreurs ]") },
                         r.target.alias,
                         if *stderr { "stderr" } else { "stdout" },
                         output.bytes.len(),
                         if output.truncated {
-                            " [TRUNCATED at 256 KiB]"
+                            crate::t!(" [TRUNCATED at 256 KiB]", " [TRONQUÉ à 256 Kio]")
                         } else {
                             ""
                         },
@@ -595,7 +637,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                         output.text()
                     )
                     })
-                    .unwrap_or_else(|| "No batch results yet".into());
+                    .unwrap_or_else(|| crate::t!("No batch results yet", "Aucun résultat de lot pour l'instant").into());
             details::render_rows(
                 f,
                 areas[2],
@@ -604,7 +646,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                     .collect(),
                 offset,
             );
-            f.render_widget(Paragraph::new("s: cancel batch • Tab: Output / Errors • Esc/q: return, batch keeps running\n↑↓: host • PgUp/PgDn: output"),areas[3]);
+            f.render_widget(Paragraph::new(crate::t!("s: cancel batch • Tab: Output / Errors • Esc/q: return, batch keeps running\n↑↓: host • PgUp/PgDn: output", "s : annuler le lot • Tab : Sortie / Erreurs • Échap/q : retour, le lot continue\n↑↓ : hôte • PgUp/PgDn : sortie")),areas[3]);
         }
         _ => {}
     }

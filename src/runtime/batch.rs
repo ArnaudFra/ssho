@@ -103,12 +103,12 @@ pub enum State {
 impl State {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Pending => "Pending",
-            Self::Running => "Running",
-            Self::Succeeded => "Succeeded",
-            Self::Failed => "Failed",
-            Self::TimedOut => "Timed out",
-            Self::Cancelled => "Cancelled",
+            Self::Pending => crate::t!("Pending", "En attente"),
+            Self::Running => crate::t!("Running", "En cours"),
+            Self::Succeeded => crate::t!("Succeeded", "Réussi"),
+            Self::Failed => crate::t!("Failed", "Échec"),
+            Self::TimedOut => crate::t!("Timed out", "Délai dépassé"),
+            Self::Cancelled => crate::t!("Cancelled", "Annulé"),
         }
     }
 }

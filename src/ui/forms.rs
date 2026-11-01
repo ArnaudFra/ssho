@@ -231,19 +231,40 @@ pub(super) enum Stop {
 /// Input indices: 0 alias (add/copy), 1 address, 2 user, 3 port, 4 key, 5 ProxyJump,
 /// 6 ProxyCommand, 7 options, 8 tags, 9 remote command, 10 RequestTTY.
 const ADVANCED: [usize; 5] = [5, 6, 7, 9, 10];
-const EXAMPLES: [&str; 11] = [
-    "ex. : api-prod",
-    "ex. : 192.168.1.100 ou example.com",
-    "ex. : deploy",
-    "ex. : 2222",
-    "ex. : ~/.ssh/id_ed25519 — F9 ou [Choisir] liste les clés",
-    "ex. : user@bastion:22 ou un alias existant",
-    "ex. : ssh -W %h:%p bastion",
-    "ex. : -o Compression=yes -o ServerAliveInterval=60",
-    "ex. : production, web — « hidden » masque l'hôte dans la liste",
-    "ex. : htop — laissé vide : shell de connexion",
-    "yes, no, force ou auto",
-];
+/// Example of each input, shown under the form for the focused field only.
+fn example_of(index: usize) -> &'static str {
+    match index {
+        0 => crate::t!("e.g. api-prod", "ex. : api-prod"),
+        1 => crate::t!(
+            "e.g. 192.168.1.100 or example.com",
+            "ex. : 192.168.1.100 ou example.com"
+        ),
+        2 => crate::t!("e.g. deploy", "ex. : deploy"),
+        3 => crate::t!("e.g. 2222", "ex. : 2222"),
+        4 => crate::t!(
+            "e.g. ~/.ssh/id_ed25519 — F9 or [Choose] lists the keys",
+            "ex. : ~/.ssh/id_ed25519 — F9 ou [Choisir] liste les clés"
+        ),
+        5 => crate::t!(
+            "e.g. user@bastion:22 or an existing alias",
+            "ex. : user@bastion:22 ou un alias existant"
+        ),
+        6 => crate::t!("e.g. ssh -W %h:%p bastion", "ex. : ssh -W %h:%p bastion"),
+        7 => crate::t!(
+            "e.g. -o Compression=yes -o ServerAliveInterval=60",
+            "ex. : -o Compression=yes -o ServerAliveInterval=60"
+        ),
+        8 => crate::t!(
+            "e.g. production, web — \"hidden\" hides the host from the list",
+            "ex. : production, web — « hidden » masque l'hôte dans la liste"
+        ),
+        9 => crate::t!(
+            "e.g. htop — left empty: login shell",
+            "ex. : htop — laissé vide : shell de connexion"
+        ),
+        _ => crate::t!("yes, no, force or auto", "yes, no, force ou auto"),
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct HostForm {
@@ -347,33 +368,37 @@ impl HostForm {
     /// What an empty field means, shown in its place: a value is never suggested
     /// by a greyed example that looks like one already entered.
     fn describe_empty_fields(&mut self) {
-        let openssh = "laissé à OpenSSH";
+        let openssh = crate::t!("left to OpenSSH", "selon OpenSSH");
         // An empty field writes nothing: OpenSSH then uses the local user name,
         // or whatever an earlier `Host *` block declares.
         let user = openssh.to_owned();
         let port = if self.copy_source.is_some() {
             openssh.to_owned()
         } else {
-            "22 — défaut OpenSSH, non écrit".to_owned()
+            crate::t!(
+                "22 — OpenSSH default, not written",
+                "22 — défaut OpenSSH, non écrit"
+            )
+            .to_owned()
         };
         let texts = [
-            "requis".to_owned(),
-            "requis".to_owned(),
+            crate::t!("required", "requis").to_owned(),
+            crate::t!("required", "requis").to_owned(),
             user,
             port,
             openssh.to_owned(),
             openssh.to_owned(),
             openssh.to_owned(),
-            "aucune option supplémentaire".to_owned(),
-            "aucun tag".to_owned(),
-            "aucune : shell de connexion".to_owned(),
+            crate::t!("no additional option", "aucune option supplémentaire").to_owned(),
+            crate::t!("no tag", "aucun tag").to_owned(),
+            crate::t!("none: login shell", "aucune : shell de connexion").to_owned(),
             openssh.to_owned(),
         ];
         for (input, text) in self.inputs.iter_mut().zip(texts) {
             input.placeholder = text;
         }
         for name in &mut self.names {
-            name.placeholder = "requis".into();
+            name.placeholder = crate::t!("required", "requis").into();
         }
     }
     /// Existing values are never hidden behind a closed section.
@@ -386,8 +411,11 @@ impl HostForm {
     }
     pub fn example(field: FormField) -> &'static str {
         match field {
-            FormField::Input(i) => EXAMPLES[i],
-            FormField::Name(_) => "partage le bloc de configuration de l'alias principal",
+            FormField::Input(i) => example_of(i),
+            FormField::Name(_) => crate::t!(
+                "shares the configuration block of the main alias",
+                "partage le bloc de configuration de l'alias principal"
+            ),
         }
     }
     pub fn extra_identities(&self) -> &[String] {
@@ -525,7 +553,7 @@ impl HostForm {
     }
     fn add_alias(&mut self) {
         self.names.push(Input {
-            placeholder: "requis".into(),
+            placeholder: crate::t!("required", "requis").into(),
             limit: 50,
             ..Input::default()
         });
@@ -629,7 +657,7 @@ impl HostForm {
                 errors.push(FieldError {
                     field: FormField::Input(0),
                     message:
-                        "copy requires a new concrete host name, distinct from every source alias"
+                        crate::t!("copy requires a new concrete host name, distinct from every source alias", "la copie exige un nouveau nom d'hôte concret, distinct de tous les alias de la source")
                             .into(),
                 });
             }
@@ -729,7 +757,10 @@ impl HostForm {
             std::iter::once(value(0)).chain(listed).collect()
         };
         if names.is_empty() || names[0].is_empty() {
-            bail!("at least one host name is required");
+            bail!(crate::t!(
+                "at least one host name is required",
+                "au moins un nom d'hôte est requis"
+            ));
         }
         let mut host = Host {
             name: names[0].clone(),
@@ -817,7 +848,10 @@ impl ForwardForm {
             (1, "8080"),
             (2, "localhost"),
             (3, "80"),
-            (4, "127.0.0.1 (optional)"),
+            (
+                4,
+                crate::t!("127.0.0.1 (optional)", "127.0.0.1 (facultatif)"),
+            ),
         ] {
             inputs[i].placeholder = hint.into();
             inputs[i].limit = [0, 5, 100, 5, 50][i];
@@ -948,34 +982,37 @@ impl ForwardForm {
         };
         let bind = self.inputs[4].value.trim();
         match self.kind {
-            0 => format!(
+            0 => crate::tf!(
                 "Listen on this machine, {}port {} → reach {}:{} from the SSH server",
+                "Écouter sur ce poste, {}port {} → joindre {}:{} depuis le serveur SSH",
                 if bind.is_empty() {
                     String::new()
                 } else {
-                    format!("address {bind}, ")
+                    crate::tf!("address {bind}, ", "adresse {bind}, ")
                 },
                 value(1, "?"),
                 value(2, "localhost"),
                 value(3, "?")
             ),
-            1 => format!(
+            1 => crate::tf!(
                 "Listen on the SSH server, {}port {} → reach {}:{} from this machine",
+                "Écouter sur le serveur SSH, {}port {} → joindre {}:{} depuis ce poste",
                 if bind.is_empty() {
                     String::new()
                 } else {
-                    format!("address {bind}, ")
+                    crate::tf!("address {bind}, ", "adresse {bind}, ")
                 },
                 value(1, "?"),
                 value(2, "localhost"),
                 value(3, "?")
             ),
-            _ => format!(
+            _ => crate::tf!(
                 "SOCKS proxy on this machine, {}port {} → connections leave from the SSH server",
+                "Proxy SOCKS sur ce poste, {}port {} → les connexions sortent par le serveur SSH",
                 if bind.is_empty() {
                     String::new()
                 } else {
-                    format!("address {bind}, ")
+                    crate::tf!("address {bind}, ", "adresse {bind}, ")
                 },
                 value(1, "?")
             ),

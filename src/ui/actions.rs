@@ -44,6 +44,7 @@ pub(super) enum PaletteAction {
     ClearSearch,
     ClearFilters,
     Messages,
+    Language,
     Palette,
     Quit,
 }
@@ -68,10 +69,10 @@ impl Category {
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Connection => "Connexion",
-            Self::Host => "Hôte",
-            Self::Organization => "Organisation",
-            Self::Tools => "Outils",
+            Self::Connection => crate::t!("Connection", "Connexion"),
+            Self::Host => crate::t!("Host", "Hôte"),
+            Self::Organization => crate::t!("Organization", "Organisation"),
+            Self::Tools => crate::t!("Tools", "Outils"),
             Self::Application => "Application",
         }
     }
@@ -80,7 +81,7 @@ impl Category {
 impl PaletteAction {
     /// Every catalogue entry, grouped by category. The palette lists them in this
     /// order; only the action that opens the palette itself is left out of it.
-    pub(super) const CATALOGUE: [Self; 41] = [
+    pub(super) const CATALOGUE: [Self; 42] = [
         Self::Connect,
         Self::Tunnel,
         Self::Profiles,
@@ -119,6 +120,7 @@ impl PaletteAction {
         Self::Backups,
         Self::Reload,
         Self::Messages,
+        Self::Language,
         Self::Palette,
         Self::Help,
         Self::Quit,
@@ -166,55 +168,73 @@ impl PaletteAction {
             Self::ClearSearch => "search.clear",
             Self::ClearFilters => "filter.clear",
             Self::Messages => "app.messages",
+            Self::Language => "app.language",
             Self::Palette => "app.palette",
             Self::Quit => "app.quit",
         }
     }
 
-    pub(super) fn label(self) -> &'static str {
+    /// English and French names. Both are searched by the palette, so an action
+    /// is found by either name whatever the interface language.
+    pub(super) fn labels(self) -> (&'static str, &'static str) {
         match self {
-            Self::Columns => "Colonnes : ordre et visibilité",
-            Self::Availability => "Méthode de disponibilité",
-            Self::Keys => "Clés OpenSSH",
-            Self::BatchMark => "Lot : marquer l'alias",
-            Self::BatchSelectVisible => "Lot : cibler les résultats du filtre",
-            Self::BatchClear => "Lot : effacer les marques",
-            Self::BatchOpen => "Lot : préparer / suivre",
-            Self::BatchResults => "Lot : derniers résultats",
-            Self::GroupMode => "Groupes",
-            Self::ToggleAliases => "Alias regroupés",
-            Self::ChooseAlias => "Choisir un alias",
-            Self::SourceFilter => "Filtrer par fichier source",
-            Self::ClearSourceFilter => "Tous les fichiers",
-            Self::Add => "Ajouter un hôte",
-            Self::Edit => "Modifier",
-            Self::Tunnel => "Créer un tunnel",
-            Self::Test => "Tester la disponibilité",
-            Self::Help => "Aide",
-            Self::Details => "Panneau de détails",
-            Self::Reload => "Recharger",
-            Self::Favorite => "Favori : épingler / retirer",
-            Self::Note => "Note personnelle",
-            Self::FavoritesOnly => "Favoris seuls",
-            Self::Duplicate => "Dupliquer",
-            Self::Backups => "Sauvegardes",
-            Self::Active => "Tunnels actifs",
-            Self::Profiles => "Profils de tunnels",
-            Self::Connect => "Se connecter",
-            Self::Info => "Fiche d'informations",
-            Self::Move => "Déplacer",
-            Self::Delete => "Supprimer",
-            Self::ToggleHidden => "Hôtes masqués : afficher / cacher",
-            Self::SortToggle => "Tri : alterner",
-            Self::SortName => "Tri : par nom",
-            Self::SortRecent => "Tri : par connexion récente",
-            Self::Search => "Rechercher",
-            Self::ClearSearch => "Effacer la recherche",
-            Self::ClearFilters => "Effacer tous les filtres",
-            Self::Messages => "Messages et dernière erreur",
-            Self::Palette => "Palette d'actions",
-            Self::Quit => "Quitter",
+            Self::Columns => (
+                "Columns: order and visibility",
+                "Colonnes : ordre et visibilité",
+            ),
+            Self::Availability => ("Availability method", "Méthode de disponibilité"),
+            Self::Keys => ("OpenSSH keys", "Clés OpenSSH"),
+            Self::BatchMark => ("Batch: mark this alias", "Lot : marquer l'alias"),
+            Self::BatchSelectVisible => (
+                "Batch: target the filter results",
+                "Lot : cibler les résultats du filtre",
+            ),
+            Self::BatchClear => ("Batch: clear the marks", "Lot : effacer les marques"),
+            Self::BatchOpen => ("Batch: prepare / follow", "Lot : préparer / suivre"),
+            Self::BatchResults => ("Batch: last results", "Lot : derniers résultats"),
+            Self::GroupMode => ("Groups", "Groupes"),
+            Self::ToggleAliases => ("Grouped aliases", "Alias regroupés"),
+            Self::ChooseAlias => ("Choose an alias", "Choisir un alias"),
+            Self::SourceFilter => ("Filter by source file", "Filtrer par fichier source"),
+            Self::ClearSourceFilter => ("All files", "Tous les fichiers"),
+            Self::Add => ("Add host", "Ajouter un hôte"),
+            Self::Edit => ("Edit", "Modifier"),
+            Self::Tunnel => ("Create a tunnel", "Créer un tunnel"),
+            Self::Test => ("Test availability", "Tester la disponibilité"),
+            Self::Help => ("Help", "Aide"),
+            Self::Details => ("Details pane", "Panneau de détails"),
+            Self::Reload => ("Reload", "Recharger"),
+            Self::Favorite => ("Favorite: pin / unpin", "Favori : épingler / retirer"),
+            Self::Note => ("Personal note", "Note personnelle"),
+            Self::FavoritesOnly => ("Favorites only", "Favoris seuls"),
+            Self::Duplicate => ("Duplicate", "Dupliquer"),
+            Self::Backups => ("Backups", "Sauvegardes"),
+            Self::Active => ("Active tunnels", "Tunnels actifs"),
+            Self::Profiles => ("Tunnel profiles", "Profils de tunnels"),
+            Self::Connect => ("Connect", "Se connecter"),
+            Self::Info => ("Host sheet", "Fiche d'informations"),
+            Self::Move => ("Move", "Déplacer"),
+            Self::Delete => ("Delete", "Supprimer"),
+            Self::ToggleHidden => (
+                "Hidden hosts: show / hide",
+                "Hôtes masqués : afficher / cacher",
+            ),
+            Self::SortToggle => ("Sort: toggle", "Tri : alterner"),
+            Self::SortName => ("Sort: by name", "Tri : par nom"),
+            Self::SortRecent => ("Sort: by recent connection", "Tri : par connexion récente"),
+            Self::Search => ("Search", "Rechercher"),
+            Self::ClearSearch => ("Clear the search", "Effacer la recherche"),
+            Self::ClearFilters => ("Clear all filters", "Effacer tous les filtres"),
+            Self::Messages => ("Messages and last error", "Messages et dernière erreur"),
+            Self::Language => ("Language", "Langue de l'interface"),
+            Self::Palette => ("Action palette", "Palette d'actions"),
+            Self::Quit => ("Quit", "Quitter"),
         }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        let (en, fr) = self.labels();
+        crate::t!(en, fr)
     }
 
     pub(super) fn category(self) -> Category {
@@ -255,115 +275,236 @@ impl PaletteAction {
             | Self::BatchResults
             | Self::Keys
             | Self::Backups => Category::Tools,
-            Self::Reload | Self::Messages | Self::Palette | Self::Help | Self::Quit => {
-                Category::Application
-            }
+            Self::Reload
+            | Self::Messages
+            | Self::Language
+            | Self::Palette
+            | Self::Help
+            | Self::Quit => Category::Application,
         }
     }
 
     /// Words that also find the action in the palette, beyond its label.
     pub(super) fn keywords(self) -> &'static str {
         match self {
-            Self::Connect => "connexion ssh session ouvrir connect login",
-            Self::Tunnel => "transfert port forwarding redirection socks local distant",
-            Self::Profiles => "tunnel transfert forwarding enregistrés lancer",
-            Self::Active => "tunnel en cours suivi arrêter processus",
-            Self::Test => "ping sonde vérifier joignable",
-            Self::Availability => "ping icmp ssh sonde tester",
-            Self::Add => "nouveau créer new add",
-            Self::Edit => "éditer changer hôte edit",
-            Self::Duplicate => "copier cloner copy",
-            Self::Move => "fichier include déplacement move",
-            Self::Delete => "effacer retirer remove delete",
-            Self::Info => "détails configuration effective historique info",
-            Self::Details => "latéral aperçu volet",
-            Self::Favorite => "étoile épingle pin star",
-            Self::Note => "commentaire mémo",
-            Self::ChooseAlias => "cible exacte nom bloc",
-            Self::Search => "filtrer chercher trouver find",
-            Self::ClearSearch => "vider retirer texte requête",
-            Self::ClearFilters => "réinitialiser reset vider tout",
-            Self::FavoritesOnly => "filtre étoile épinglés",
-            Self::ToggleHidden => "cachés hidden visibilité",
-            Self::SourceFilter => "include config fichier filtre",
-            Self::ClearSourceFilter => "effacer retirer filtre fichier",
-            Self::ToggleAliases => "regrouper bloc noms",
-            Self::GroupMode => "arborescence replier fichier tag regroupement",
-            Self::SortToggle | Self::SortName | Self::SortRecent => "ordre trier classer",
-            Self::Columns => "affichage tableau champs",
+            Self::Connect => "connexion ssh session ouvrir connect login open",
+            Self::Tunnel => "transfert port forwarding redirection socks local distant tunnel port",
+            Self::Profiles => "tunnel transfert forwarding enregistrés lancer saved launch",
+            Self::Active => "tunnel en cours suivi arrêter processus running follow stop",
+            Self::Test => "ping sonde vérifier joignable probe check reachable",
+            Self::Availability => "ping icmp ssh sonde tester probe test",
+            Self::Add => "nouveau créer new add create host",
+            Self::Edit => "éditer changer hôte edit change modify",
+            Self::Duplicate => "copier cloner copy clone",
+            Self::Move => "fichier include déplacement move file",
+            Self::Delete => "effacer retirer remove delete erase",
+            Self::Info => {
+                "détails configuration effective historique info details effective history sheet"
+            }
+            Self::Details => "latéral aperçu volet side preview pane",
+            Self::Favorite => "étoile épingle pin star favorite",
+            Self::Note => "commentaire mémo comment memo",
+            Self::ChooseAlias => "cible exacte nom bloc exact target name block",
+            Self::Search => "filtrer chercher trouver find filter find",
+            Self::ClearSearch => "vider retirer texte requête empty remove query text",
+            Self::ClearFilters => "réinitialiser reset vider tout reset empty all",
+            Self::FavoritesOnly => "filtre étoile épinglés filter pinned starred",
+            Self::ToggleHidden => "cachés hidden visibilité hidden visibility",
+            Self::SourceFilter => "include config fichier filtre file filter",
+            Self::ClearSourceFilter => "effacer retirer filtre fichier clear remove file filter",
+            Self::ToggleAliases => "regrouper bloc noms group block names",
+            Self::GroupMode => {
+                "arborescence replier fichier tag regroupement tree collapse file tag grouping"
+            }
+            Self::SortToggle | Self::SortName | Self::SortRecent => {
+                "ordre trier classer order sort"
+            }
+            Self::Columns => "affichage tableau champs display table fields",
             Self::BatchMark
             | Self::BatchSelectVisible
             | Self::BatchClear
             | Self::BatchOpen
-            | Self::BatchResults => "commande multi-hôtes exécuter cibles batch",
-            Self::Keys => "clef ssh-keygen agent identité déployer générer",
-            Self::Backups => "restaurer restauration historique diff annuler",
-            Self::Reload => "rafraîchir relire actualiser",
-            Self::Messages => "erreur avertissement warning error détail journal",
+            | Self::BatchResults => {
+                "commande multi-hôtes exécuter cibles batch command multi-host run targets"
+            }
+            Self::Keys => {
+                "clef ssh-keygen agent identité déployer générer key agent identity deploy generate"
+            }
+            Self::Backups => "restaurer restauration historique diff annuler restore history undo",
+            Self::Reload => "rafraîchir relire actualiser refresh reread",
+            Self::Messages => "erreur avertissement warning error détail journal log",
+            Self::Language => "langue language english français anglais french traduction",
             Self::Palette => "f2 commandes",
-            Self::Help => "raccourcis touches documentation",
-            Self::Quit => "sortir fermer exit",
+            Self::Help => "raccourcis touches documentation shortcuts keys documentation",
+            Self::Quit => "sortir fermer exit leave close",
         }
     }
 
     /// One sentence shown under the palette for the selected action.
     pub(super) fn description(self) -> &'static str {
         match self {
-            Self::Connect => "Ouvre une session SSH sur l'alias sélectionné, puis revient ici.",
-            Self::Tunnel => "Prépare un transfert de port local, distant ou SOCKS pour cet hôte.",
-            Self::Profiles => {
+            Self::Connect => crate::t!(
+                "Opens an SSH session on the selected alias, then comes back here.",
+                "Ouvre une session SSH sur l'alias sélectionné, puis revient ici."
+            ),
+            Self::Tunnel => crate::t!(
+                "Prepares a local, remote or SOCKS port forwarding for this host.",
+                "Prépare un transfert de port local, distant ou SOCKS pour cet hôte."
+            ),
+            Self::Profiles => crate::t!(
+                "Lists the saved tunnels of this host: open, launch, delete.",
                 "Liste les tunnels enregistrés de cet hôte : ouvrir, lancer, supprimer."
-            }
-            Self::Active => "Suit les tunnels lancés par l'application et permet de les arrêter.",
-            Self::Test => "Relance les sondes de disponibilité de tous les hôtes.",
-            Self::Availability => "Choisit ce que mesure la disponibilité : SSH ou ICMP local.",
-            Self::Add => "Crée un nouvel hôte dans un fichier de configuration SSH.",
-            Self::Edit => "Modifie le bloc SSH de l'hôte sélectionné, avec aperçu avant écriture.",
-            Self::Duplicate => "Copie l'hôte sous un nouveau nom, dans le fichier de votre choix.",
-            Self::Move => "Déplace le bloc de l'hôte vers un autre fichier inclus.",
-            Self::Delete => {
+            ),
+            Self::Active => crate::t!(
+                "Follows the tunnels started by the application and lets you stop them.",
+                "Suit les tunnels lancés par l'application et permet de les arrêter."
+            ),
+            Self::Test => crate::t!(
+                "Runs the availability probes of every host again.",
+                "Relance les sondes de disponibilité de tous les hôtes."
+            ),
+            Self::Availability => crate::t!(
+                "Chooses what availability measures: SSH or local ICMP.",
+                "Choisit ce que mesure la disponibilité : SSH ou ICMP local."
+            ),
+            Self::Add => crate::t!(
+                "Creates a new host in an SSH configuration file.",
+                "Crée un nouvel hôte dans un fichier de configuration SSH."
+            ),
+            Self::Edit => crate::t!(
+                "Edits the SSH block of the selected host, with a preview before writing.",
+                "Modifie le bloc SSH de l'hôte sélectionné, avec aperçu avant écriture."
+            ),
+            Self::Duplicate => crate::t!(
+                "Copies the host under a new name, in the file of your choice.",
+                "Copie l'hôte sous un nouveau nom, dans le fichier de votre choix."
+            ),
+            Self::Move => crate::t!(
+                "Moves the host block to another included file.",
+                "Déplace le bloc de l'hôte vers un autre fichier inclus."
+            ),
+            Self::Delete => crate::t!(
+                "Deletes the host after a preview of the change; nothing is written before.",
                 "Supprime l'hôte après aperçu de la modification ; rien n'est écrit avant."
-            }
-            Self::Info => {
+            ),
+            Self::Info => crate::t!(
+                "Shows the declared and effective configuration, the note and the history.",
                 "Affiche la configuration déclarée et effective, la note et l'historique."
-            }
-            Self::Details => "Affiche ou masque le volet de détails à côté de la liste.",
-            Self::Favorite => "Épingle l'hôte en tête de liste, ou retire l'épingle.",
-            Self::Note => "Édite la note personnelle, conservée hors du fichier SSH.",
-            Self::ChooseAlias => "Choisit l'alias exact du bloc utilisé pour se connecter.",
-            Self::Search => "Place le curseur dans la recherche de la liste.",
-            Self::ClearSearch => "Vide la recherche ; les autres filtres restent actifs.",
-            Self::ClearFilters => {
+            ),
+            Self::Details => crate::t!(
+                "Shows or hides the details pane next to the list.",
+                "Affiche ou masque le volet de détails à côté de la liste."
+            ),
+            Self::Favorite => crate::t!(
+                "Pins the host at the top of the list, or removes the pin.",
+                "Épingle l'hôte en tête de liste, ou retire l'épingle."
+            ),
+            Self::Note => crate::t!(
+                "Edits the personal note, kept outside the SSH file.",
+                "Édite la note personnelle, conservée hors du fichier SSH."
+            ),
+            Self::ChooseAlias => crate::t!(
+                "Chooses the exact alias of the block used to connect.",
+                "Choisit l'alias exact du bloc utilisé pour se connecter."
+            ),
+            Self::Search => crate::t!(
+                "Puts the cursor in the search of the list.",
+                "Place le curseur dans la recherche de la liste."
+            ),
+            Self::ClearSearch => crate::t!(
+                "Empties the search; the other filters stay active.",
+                "Vide la recherche ; les autres filtres restent actifs."
+            ),
+            Self::ClearFilters => crate::t!(
+                "Empties the search and removes the file, favorites and hidden-hosts filters.",
                 "Vide la recherche et retire les filtres par fichier, favoris et masqués."
-            }
-            Self::FavoritesOnly => "N'affiche que les favoris, ou revient à tous les hôtes.",
-            Self::ToggleHidden => "Affiche ou cache les hôtes portant le tag hidden.",
-            Self::SourceFilter => "Limite la liste aux hôtes d'un fichier de configuration.",
-            Self::ClearSourceFilter => "Retire le filtre par fichier source.",
-            Self::ToggleAliases => {
+            ),
+            Self::FavoritesOnly => crate::t!(
+                "Shows favorites only, or goes back to every host.",
+                "N'affiche que les favoris, ou revient à tous les hôtes."
+            ),
+            Self::ToggleHidden => crate::t!(
+                "Shows or hides the hosts carrying the hidden tag.",
+                "Affiche ou cache les hôtes portant le tag hidden."
+            ),
+            Self::SourceFilter => crate::t!(
+                "Limits the list to the hosts of one configuration file.",
+                "Limite la liste aux hôtes d'un fichier de configuration."
+            ),
+            Self::ClearSourceFilter => crate::t!(
+                "Removes the filter by source file.",
+                "Retire le filtre par fichier source."
+            ),
+            Self::ToggleAliases => crate::t!(
+                "Groups the aliases of one block on a single row, or separates them.",
                 "Regroupe les alias d'un même bloc sur une seule ligne, ou les sépare."
-            }
-            Self::GroupMode => "Présente la liste à plat, par fichier, ou par fichier puis tag.",
-            Self::SortToggle => "Alterne entre le tri par nom et par connexion récente.",
-            Self::SortName => "Trie les hôtes par nom.",
-            Self::SortRecent => "Trie les hôtes par dernière connexion.",
-            Self::Columns => "Choisit les colonnes de la liste et leur ordre.",
-            Self::BatchMark => "Marque ou démarque l'alias sélectionné comme cible d'un lot.",
-            Self::BatchSelectVisible => "Ajoute aux cibles tous les hôtes que le filtre affiche.",
-            Self::BatchClear => "Retire toutes les cibles marquées.",
-            Self::BatchOpen => {
+            ),
+            Self::GroupMode => crate::t!(
+                "Presents the list flat, by file, or by file then tag.",
+                "Présente la liste à plat, par fichier, ou par fichier puis tag."
+            ),
+            Self::SortToggle => crate::t!(
+                "Switches between sorting by name and by recent connection.",
+                "Alterne entre le tri par nom et par connexion récente."
+            ),
+            Self::SortName => crate::t!("Sorts the hosts by name.", "Trie les hôtes par nom."),
+            Self::SortRecent => crate::t!(
+                "Sorts the hosts by last connection.",
+                "Trie les hôtes par dernière connexion."
+            ),
+            Self::Columns => crate::t!(
+                "Chooses the columns of the list and their order.",
+                "Choisit les colonnes de la liste et leur ordre."
+            ),
+            Self::BatchMark => crate::t!(
+                "Marks or unmarks the selected alias as a batch target.",
+                "Marque ou démarque l'alias sélectionné comme cible d'un lot."
+            ),
+            Self::BatchSelectVisible => crate::t!(
+                "Adds every host the filter shows to the targets.",
+                "Ajoute aux cibles tous les hôtes que le filtre affiche."
+            ),
+            Self::BatchClear => crate::t!(
+                "Removes every marked target.",
+                "Retire toutes les cibles marquées."
+            ),
+            Self::BatchOpen => crate::t!(
+                "Prepares a command for the marked targets, or follows the running batch.",
                 "Prépare une commande pour les cibles marquées, ou suit le lot en cours."
-            }
-            Self::BatchResults => "Rouvre les résultats du dernier lot lancé.",
-            Self::Keys => "Inventorie les clés, en génère, les ajoute à l'agent ou les déploie.",
-            Self::Backups => "Liste les sauvegardes des fichiers SSH et prépare une restauration.",
-            Self::Reload => "Relit le fichier SSH et ses Includes après une modification externe.",
-            Self::Messages => {
+            ),
+            Self::BatchResults => crate::t!(
+                "Opens the results of the last batch again.",
+                "Rouvre les résultats du dernier lot lancé."
+            ),
+            Self::Keys => crate::t!(
+                "Lists the keys, generates one, adds it to the agent or deploys it.",
+                "Inventorie les clés, en génère, les ajoute à l'agent ou les déploie."
+            ),
+            Self::Backups => crate::t!(
+                "Lists the backups of the SSH files and prepares a restoration.",
+                "Liste les sauvegardes des fichiers SSH et prépare une restauration."
+            ),
+            Self::Reload => crate::t!(
+                "Reads the SSH file and its Includes again after an external change.",
+                "Relit le fichier SSH et ses Includes après une modification externe."
+            ),
+            Self::Messages => crate::t!(
+                "Shows the last error and the current warnings in full.",
                 "Affiche en entier la dernière erreur et les avertissements en cours."
-            }
-            Self::Palette => "Ouvre cette palette.",
-            Self::Help => "Affiche les raccourcis et les conventions de l'écran.",
-            Self::Quit => "Ferme l'application ; les travaux en cours sont récapitulés avant.",
+            ),
+            Self::Language => crate::t!(
+                "Chooses the language of the interface: English or French.",
+                "Choisit la langue de l'interface : anglais ou français."
+            ),
+            Self::Palette => crate::t!("Opens this palette.", "Ouvre cette palette."),
+            Self::Help => crate::t!(
+                "Shows the shortcuts and the conventions of the screen.",
+                "Affiche les raccourcis et les conventions de l'écran."
+            ),
+            Self::Quit => crate::t!(
+                "Closes the application; running work is summarised first.",
+                "Ferme l'application ; les travaux en cours sont récapitulés avant."
+            ),
         }
     }
 
@@ -392,24 +533,39 @@ impl PaletteAction {
     /// `Err` carries the precise reason shown instead of running the action.
     pub(super) fn availability(self, context: &Context) -> Result<(), &'static str> {
         let no_host = if context.group {
-            "Sélectionnez un hôte, pas un groupe"
+            crate::t!(
+                "Select a host, not a group",
+                "Sélectionnez un hôte, pas un groupe"
+            )
         } else {
-            "Sélectionnez un hôte"
+            crate::t!("Select a host", "Sélectionnez un hôte")
         };
         match self {
             _ if self.needs_host() && !context.host => Err(no_host),
             Self::Connect if !context.host => Err(no_host),
-            Self::Info if !context.host && !context.group => {
-                Err("Sélectionnez un hôte ou un groupe")
+            Self::Info if !context.host && !context.group => Err(crate::t!(
+                "Select a host or a group",
+                "Sélectionnez un hôte ou un groupe"
+            )),
+            Self::ClearSourceFilter if !context.source_filter => Err(crate::t!(
+                "No file filter is active",
+                "Aucun filtre de fichier actif"
+            )),
+            Self::ClearSearch if !context.query => {
+                Err(crate::t!("No search is active", "Aucune recherche active"))
             }
-            Self::ClearSourceFilter if !context.source_filter => {
-                Err("Aucun filtre de fichier actif")
+            Self::ClearFilters if !context.filters => {
+                Err(crate::t!("No filter is active", "Aucun filtre actif"))
             }
-            Self::ClearSearch if !context.query => Err("Aucune recherche active"),
-            Self::ClearFilters if !context.filters => Err("Aucun filtre actif"),
-            Self::Messages if !context.messages => Err("Aucun message à afficher"),
-            Self::BatchClear if context.marks == 0 => Err("Aucune cible marquée"),
-            Self::BatchResults if !context.batch_results => Err("Aucun lot lancé"),
+            Self::Messages if !context.messages => {
+                Err(crate::t!("No message to show", "Aucun message à afficher"))
+            }
+            Self::BatchClear if context.marks == 0 => {
+                Err(crate::t!("No target is marked", "Aucune cible marquée"))
+            }
+            Self::BatchResults if !context.batch_results => {
+                Err(crate::t!("No batch was launched", "Aucun lot lancé"))
+            }
             _ => Ok(()),
         }
     }
@@ -577,14 +733,18 @@ impl Keymap {
                 .into_iter()
                 .find(|action| action.id() == id)
             {
-                Some(PaletteAction::Quit) => conflicts.push(format!(
+                Some(PaletteAction::Quit) => conflicts.push(crate::tf!(
+                    "shortcuts.{id}: use key_bindings.quit_keys for Quit",
                     "shortcuts.{id} : utilisez key_bindings.quit_keys pour Quitter"
                 )),
                 Some(action) => {
                     bindings.retain(|(_, bound)| *bound != action);
                     overrides.push((action, keys));
                 }
-                None => conflicts.push(format!("shortcuts.{id} : action inconnue")),
+                None => conflicts.push(crate::tf!(
+                    "shortcuts.{id}: unknown action",
+                    "shortcuts.{id} : action inconnue"
+                )),
             }
         }
         for (action, keys) in overrides {
@@ -595,13 +755,15 @@ impl Keymap {
                 }
                 let shown = display_key(&key);
                 if RESERVED.contains(&key.as_str()) {
-                    conflicts.push(format!(
+                    conflicts.push(crate::tf!(
+                        "{shown} is reserved for navigation: ignored for \"{}\"",
                         "{shown} est réservé à la navigation : ignoré pour « {} »",
                         action.label()
                     ));
                 } else if let Some((_, holder)) = bindings.iter().find(|(bound, _)| *bound == key) {
                     if *holder != action {
-                        conflicts.push(format!(
+                        conflicts.push(crate::tf!(
+                            "{shown} is already used by \"{}\": ignored for \"{}\"",
                             "{shown} sert déjà à « {} » : ignoré pour « {} »",
                             holder.label(),
                             action.label()
@@ -621,13 +783,15 @@ impl Keymap {
         let prefix = if prefix.is_empty() {
             None
         } else if RESERVED.contains(&prefix.as_str()) || prefix.chars().count() == 1 {
-            conflicts.push(format!(
+            conflicts.push(crate::tf!(
+                "Prefix {} refused: navigation key or text character",
                 "Préfixe {} refusé : touche de navigation ou caractère de saisie",
                 display_key(&prefix)
             ));
             None
         } else if let Some((_, holder)) = bindings.iter().find(|(bound, _)| *bound == prefix) {
-            conflicts.push(format!(
+            conflicts.push(crate::tf!(
+                "Prefix {} disabled: already used by \"{}\"",
                 "Préfixe {} désactivé : sert déjà à « {} »",
                 display_key(&prefix),
                 holder.label()
@@ -635,7 +799,8 @@ impl Keymap {
             None
         } else {
             if EDITING.contains(&prefix.as_str()) {
-                conflicts.push(format!(
+                conflicts.push(crate::tf!(
+                    "Prefix {}: it edits text in fields, so it only applies outside inputs",
                     "Préfixe {} : édite le texte dans les champs, actif hors saisie seulement",
                     display_key(&prefix)
                 ));
@@ -693,12 +858,13 @@ pub(super) fn display_key(key: &str) -> String {
         _ => (None, key),
     };
     let base = match base {
-        "enter" => "Enter".to_owned(),
-        "esc" => "Esc".to_owned(),
+        // Key names follow the interface language, like the texts around them.
+        "enter" => crate::t!("Enter", "Entrée").to_owned(),
+        "esc" => crate::t!("Esc", "Échap").to_owned(),
         "tab" => "Tab".to_owned(),
         "backspace" => "Backspace".to_owned(),
-        "delete" => "Del".to_owned(),
-        " " => "Space".to_owned(),
+        "delete" => crate::t!("Del", "Suppr").to_owned(),
+        " " => crate::t!("Space", "Espace").to_owned(),
         _ if base.len() > 1 && base.starts_with('f') && base[1..].parse::<u8>().is_ok() => {
             base.to_uppercase()
         }
@@ -792,7 +958,7 @@ mod tests {
         assert_eq!(keymap.shortcut(PaletteAction::Note), None);
         assert_eq!(keymap.action("z"), None);
         assert_eq!(keymap.conflicts.len(), 4, "{:?}", keymap.conflicts);
-        assert!(keymap.conflicts.iter().any(|c| c.contains("Supprimer")));
+        assert!(keymap.conflicts.iter().any(|c| c.contains("Delete")));
         assert!(keymap.is_prefix("ctrl+g", true));
         assert_eq!(keymap.prefix().as_deref(), Some("Ctrl+G"));
         // Two actions may exchange their keys without any conflict.

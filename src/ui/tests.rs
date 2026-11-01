@@ -182,7 +182,7 @@ fn form_inputs_show_a_cursor_on_the_placeholder_after_scrolling() {
     )));
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
     terminal.draw(|frame| render::draw(frame, &mut m)).unwrap();
-    // An empty field says what it means ("requis"); the caret sits on its start.
+    // An empty field says what it means ("required"); the caret sits on its start.
     let position = terminal.backend_mut().get_cursor_position().unwrap();
     assert_eq!(terminal.backend().buffer()[position].symbol(), "r");
     assert_eq!(terminal.backend().buffer()[position].fg, Color::DarkGray);
@@ -206,7 +206,7 @@ fn form_inputs_show_a_cursor_on_the_placeholder_after_scrolling() {
         })
         .collect();
     assert!(
-        row.contains("> RequestTTY") && row.contains("laissé à OpenSSH"),
+        row.contains("> RequestTTY") && row.contains("left to OpenSSH"),
         "{row}"
     );
     // A focused button owns no caret: the terminal cursor is left where it was.
@@ -277,19 +277,19 @@ fn form_render_fields_and_readonly_keys() {
     m.view = View::Host(Box::new(forms::HostForm::edit(h)));
     let s = screen(&mut m, 120, 60);
     for label in [
-        "Hôtes > Modifier one",
-        "Fichier : ",
+        "Hosts > Edit one",
+        "File: ",
         "Alias *",
-        "Adresse *",
-        "Utilisateur",
-        "Clé SSH",
-        "[  Choisir ]",
-        "extra key (lecture seule, conservée)",
-        "▸ Alias supplémentaires (0)",
-        "▸ Options avancées (0 renseignée(s))",
-        "▸ Tags et note",
-        "[  Prévisualiser les modifications ]",
-        "[  Annuler ]",
+        "Address *",
+        "User",
+        "SSH key",
+        "[  Choose ]",
+        "extra key (read-only, kept)",
+        "▸ Additional aliases (0)",
+        "▸ Advanced options (0 set)",
+        "▸ Tags and note",
+        "[  Preview the changes ]",
+        "[  Cancel ]",
     ] {
         assert!(s.contains(label), "missing {label}: {s}");
     }
@@ -496,10 +496,10 @@ fn secondary_views_render_and_scroll_without_panics() {
     m.view = View::Info(h.clone());
     let info = screen(&mut m, 100, 30);
     assert!(info.contains("key2"));
-    assert!(info.contains("[  Connexion ]") && info.contains("[  Modifier ]"));
+    assert!(info.contains("[  Connect ]") && info.contains("[  Edit ]"));
     m.view = View::Help;
     let help = screen(&mut m, 100, 30);
-    for section in ["Connexion", "Organisation", "Outils", "Application"] {
+    for section in ["Connection", "Organization", "Tools", "Application"] {
         assert!(help.contains(section));
     }
     for view in [
@@ -659,7 +659,7 @@ fn palette_from_search_edits_the_filtered_host() {
     let mut m = model();
     typing(&mut m, "beta");
     assert_eq!(m.key(key(KeyCode::F(2))), Action::None);
-    assert!(screen(&mut m, 100, 30).contains("Modifier"));
+    assert!(screen(&mut m, 100, 30).contains("Edit"));
     typing(&mut m, "modifier");
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
     let View::Host(form) = &m.view else {
@@ -679,7 +679,7 @@ fn palette_cancel_preserves_query_selection_and_focus() {
         m.key(key(KeyCode::Left));
         m.search_focus = search_focus;
         m.key(key(KeyCode::F(2)));
-        assert!(screen(&mut m, 100, 30).contains("Modifier"));
+        assert!(screen(&mut m, 100, 30).contains("Edit"));
         // Modal keys must not edit the search or trigger list shortcuts.
         typing(&mut m, "q");
         m.key(key(KeyCode::Down));
@@ -707,7 +707,7 @@ fn palette_empty_list_disables_host_actions_but_allows_add_and_help() {
         };
         m.key(key(KeyCode::F(2)));
         let output = screen(&mut m, 100, 30);
-        assert!(output.contains("Ajouter un hôte"), "{output}");
+        assert!(output.contains("Add host"), "{output}");
         // Host actions stay listed, explain why they cannot run, and run nothing.
         for words in ["modifier", "dupliquer", "creer tunnel"] {
             typing(&mut m, words);
@@ -715,7 +715,7 @@ fn palette_empty_list_disables_host_actions_but_allows_add_and_help() {
             assert!(matches!(m.view, View::Actions(_)));
             let output = screen(&mut m, 100, 30);
             assert!(
-                output.contains("Indisponible : Sélectionnez un hôte. Rien n'a été lancé."),
+                output.contains("Unavailable: Select a host. Nothing was run."),
                 "{words}: {output}"
             );
             m.key(ctrl('u'));
@@ -750,7 +750,7 @@ fn palette_tunnel_and_test_reuse_existing_actions() {
         },
     );
     m.key(key(KeyCode::F(2)));
-    assert!(screen(&mut m, 100, 30).contains("Créer un tunnel"));
+    assert!(screen(&mut m, 100, 30).contains("Create a tunnel"));
     typing(&mut m, "creer tunnel");
     m.key(key(KeyCode::Enter));
     let View::Forward(form) = &m.view else {
@@ -805,8 +805,9 @@ fn adaptive_list_keeps_selection_counts_and_scroll_range_visible() {
     use ratatui::style::Color;
     for (width, height, first_range, last_range, minimum_rows) in [
         (28, 8, "1-3", "38-40", 3),
-        // Without an inactive search box the table gains two rows.
-        (70, 18, "1-8", "33-40", 8),
+        // Without an inactive search box the table gains two rows, and a
+        // legend row that would be cut at this width leaves one more.
+        (70, 18, "1-9", "32-40", 9),
         (80, 18, "1-8", "33-40", 8),
         (120, 35, "1-25", "16-40", 25),
     ] {
@@ -974,7 +975,7 @@ fn adaptive_compact_notices_reserve_real_selected_host_rows() {
         "secret",
         "Error",
         "Update",
-        "Filtres : Masqués",
+        "Filters: Hidden",
         "41/41",
         "40-41",
         "F2: actions",
@@ -1011,9 +1012,9 @@ fn palette_selected_actions_and_selector_have_explicit_high_contrast_colors() {
     use ratatui::style::{Color, Modifier};
 
     for (has_host, words, label) in [
-        (true, "ajouter", "Ajouter un hôte"),
-        (true, "creer tunnel", "Créer un tunnel"),
-        (false, "modifier", "Modifier"),
+        (true, "ajouter", "Add host"),
+        (true, "creer tunnel", "Create a tunnel"),
+        (false, "modifier", "Edit"),
     ] {
         let mut m = if has_host {
             model()
@@ -1035,8 +1036,8 @@ fn palette_selected_actions_and_selector_have_explicit_high_contrast_colors() {
         assert!(text.contains(label), "wrong selected action: {text}");
         let mut selected_text = vec![label, "▶"];
         if !has_host {
-            assert!(text.contains("Sélectionnez un hôte"));
-            selected_text.push("Sélectionnez un hôte");
+            assert!(text.contains("Select a host"));
+            selected_text.push("Select a host");
         }
         for text in selected_text {
             // The list stays visible beside the palette: locate the whole text.
@@ -1116,7 +1117,7 @@ fn details_palette_appends_toggle_and_allows_empty_list() {
         m.key(key(KeyCode::F(2)));
         typing(&mut m, "panneau");
         let output = screen(&mut m, 150, 40);
-        assert!(output.contains("Panneau de détails"));
+        assert!(output.contains("Details pane"));
         m.key(key(KeyCode::Enter));
         assert!(matches!(m.view, View::List));
         let output = screen(&mut m, 150, 40);
@@ -1187,7 +1188,7 @@ fn details_long_values_scroll_to_all_tails_without_changing_search_or_selection(
     assert!(m.query.value.is_empty());
     assert!(m.search_focus);
     let bottom = screen(&mut m, 120, 20);
-    assert!(bottom.contains("Last attempt: aucune connexion enregistrée"));
+    assert!(bottom.contains("Last attempt: no recorded connection"));
     for _ in 0..120 {
         m.key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::CONTROL));
     }
@@ -1195,7 +1196,7 @@ fn details_long_values_scroll_to_all_tails_without_changing_search_or_selection(
     for _ in 0..120 {
         m.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL));
     }
-    assert!(screen(&mut m, 120, 20).contains("Last attempt: aucune connexion enregistrée"));
+    assert!(screen(&mut m, 120, 20).contains("Last attempt: no recorded connection"));
     m.key(key(KeyCode::Down));
     assert!(
         screen(&mut m, 120, 20).contains("Host: beta"),
@@ -1274,14 +1275,14 @@ fn details_alt_arrows_scroll_without_navigating_or_consuming_search_text() {
         m.search_focus = search_focus;
         m.key(key(KeyCode::F(4)));
         let output = screen(&mut m, 120, 20);
-        assert!(output.contains("── Résumé") && output.contains("Host: alpha"));
+        assert!(output.contains("── Summary") && output.contains("Host: alpha"));
         m.key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
         let output = screen(&mut m, 120, 20);
-        assert!(!output.contains("── Résumé"));
+        assert!(!output.contains("── Summary"));
         assert!(output.contains("Host: alpha"));
         assert_eq!(m.selected, 0, "Alt+Down scrolls details, not the list");
         m.key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
-        assert!(screen(&mut m, 120, 20).contains("── Résumé"));
+        assert!(screen(&mut m, 120, 20).contains("── Summary"));
         assert_eq!(m.search_focus, search_focus);
         if search_focus {
             typing(&mut m, "[]jk");
@@ -1362,11 +1363,11 @@ fn navigation_escape_leaves_search_focus_and_backtab_matches_tab() {
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
     let text = screen(&mut m, 100, 20);
     assert!(
-        text.contains("Esc ne quitte pas la liste — q / Ctrl+C : quitter"),
+        text.contains("Esc does not quit the list — q / Ctrl+C: quit"),
         "{text}"
     );
     m.key(key(KeyCode::Down));
-    assert!(!screen(&mut m, 100, 20).contains("Esc ne quitte pas"));
+    assert!(!screen(&mut m, 100, 20).contains("Esc does not quit"));
 }
 
 #[test]
@@ -1537,11 +1538,11 @@ fn dirty_host_cancel_resume_and_discard() {
     m.key(key(KeyCode::Esc));
     let text = screen(&mut m, 100, 24);
     assert!(
-        text.contains("Abandonner les modifications de ce brouillon ?"),
+        text.contains("Discard the changes of this draft?"),
         "{text}"
     );
     assert!(
-        text.contains("[▶ Continuer l'édition ]") && text.contains("[  Abandonner ]"),
+        text.contains("[▶ Keep editing ]") && text.contains("[  Discard ]"),
         "{text}"
     );
     // Enter on the focused choice, like Esc, keeps the draft.
@@ -1754,13 +1755,13 @@ fn fields_take_one_row_and_errors_stay_under_their_field() {
     let text = screen(&mut m, 100, 26);
     let rows: Vec<_> = text.lines().collect();
     assert!(
-        text.contains("2 champ(s) à corriger — invalid hostname"),
+        text.contains("2 field(s) to fix — invalid hostname"),
         "{text}"
     );
     let name = rows.iter().position(|s| s.contains("Alias *")).unwrap();
-    let address = rows.iter().position(|s| s.contains("Adresse *")).unwrap();
+    let address = rows.iter().position(|s| s.contains("Address *")).unwrap();
     assert_eq!(address, name + 1);
-    assert!(rows[address].contains("> Adresse *") && rows[address].contains("bad address"));
+    assert!(rows[address].contains("> Address *") && rows[address].contains("bad address"));
     assert!(rows[address + 1].contains("invalid hostname"));
     let port = rows
         .iter()
@@ -1770,7 +1771,7 @@ fn fields_take_one_row_and_errors_stay_under_their_field() {
     // On a narrow terminal the label goes above its input.
     let narrow = screen(&mut m, 40, 26);
     let rows: Vec<_> = narrow.lines().collect();
-    let address = rows.iter().position(|s| s.contains("Adresse *")).unwrap();
+    let address = rows.iter().position(|s| s.contains("Address *")).unwrap();
     assert!(rows[address + 1].contains("> bad address"), "{narrow}");
     assert!(rows[address + 2].contains("invalid hostname"), "{narrow}");
 }
@@ -1910,7 +1911,7 @@ fn help_keeps_existing_system_keys_after_form_shortcuts() {
         "Alt+A/D",
         "Ctrl+A/E",
         "Modified draft:",
-        "q, Ctrl+C Quitter",
+        "q, Ctrl+C Quit",
         "back one level",
     ] {
         assert!(text.contains(shortcut), "missing {shortcut}: {text}");
@@ -2122,7 +2123,7 @@ fn manual_reload_palette_is_available_with_empty_filtered_list_and_retains_caret
     m.key(key(KeyCode::Left));
     m.key(key(KeyCode::F(2)));
     typing(&mut m, "recharger");
-    assert!(screen(&mut m, 100, 30).contains("Recharger"));
+    assert!(screen(&mut m, 100, 30).contains("Reload"));
     assert_eq!(m.key(key(KeyCode::Enter)), Action::Reload);
     assert!(matches!(m.view, View::List));
     assert!(m.search_focus);
@@ -2559,7 +2560,7 @@ fn favorites_commit_before_reordering_preserve_identity_and_filter_empty_palette
     typing(&mut m, "favoris seuls");
     let text = screen(&mut m, 80, 24);
     assert!(
-        text.contains("Favoris seuls") && text.contains("activé"),
+        text.contains("Favorites only") && text.contains("on"),
         "{text}"
     );
     m.key(key(KeyCode::Enter));
@@ -3630,7 +3631,7 @@ fn duplication_shortcut_and_palette_offer_selected_host() {
         m.key(key(KeyCode::Char('D'))),
         Action::Duplicate(m.all[0].clone())
     );
-    assert_eq!(PaletteAction::Duplicate.label(), "Dupliquer");
+    assert_eq!(PaletteAction::Duplicate.label(), "Duplicate");
     assert_eq!(
         m.keymap().shortcut(PaletteAction::Duplicate).as_deref(),
         Some("D")
@@ -4381,7 +4382,7 @@ fn mode_save_launch_and_quit_cancel_preserve_editor() {
     m.paste("should not edit");
     let text = screen(&mut m, 90, 30);
     assert!(
-        text.contains("Quitter ssho ?") && text.contains("[▶ Revenir ]"),
+        text.contains("Quit ssho?") && text.contains("[▶ Go back ]"),
         "{text}"
     );
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
@@ -4428,7 +4429,7 @@ fn active_ids_survive_profile_reload_and_visible_high_contrast() {
     assert_eq!(m.key(key(KeyCode::Char('s'))), Action::None);
     let text = screen(&mut m, 100, 30);
     assert!(
-        text.contains("Arrêter ce tunnel ?") && text.contains("#91"),
+        text.contains("Stop this tunnel?") && text.contains("#91"),
         "{text}"
     );
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
@@ -4728,8 +4729,8 @@ fn active_quit_confirms_discard_of_suspended_dirty_forms_and_preserves_caret_on_
     // A quit request names the draft and only an explicit choice loses it.
     m.ask_quit();
     let text = screen(&mut m, 100, 20);
-    assert!(text.contains("Modifications non enregistrées"), "{text}");
-    assert!(text.contains("[  Abandonner et quitter ]"), "{text}");
+    assert!(text.contains("Unsaved changes"), "{text}");
+    assert!(text.contains("[  Discard and quit ]"), "{text}");
     m.paste("\r\n");
     assert!(m.quit_tunnels);
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
@@ -5028,7 +5029,7 @@ fn selector_lists_empty_files_and_all_and_preserves_parent_caret() {
     m.scroll = 7;
     source_filter::open(&mut m, &root).unwrap();
     let text = screen(&mut m, 100, 20);
-    assert!(text.contains("Tous les fichiers"), "{text}");
+    assert!(text.contains("All files"), "{text}");
     assert!(text.contains(temp.path().join("empty").to_str().unwrap()));
     if let View::SourceFiles { files, .. } = &m.view {
         assert_eq!(files.len(), 4);
@@ -5103,11 +5104,11 @@ fn empty_filter_banner_survives_query_reload_and_compact_errors() {
     m.filter(true);
     for (w, h) in [(100, 25), (60, 10), (24, 8)] {
         let s = screen(&mut m, w, h);
-        assert!(s.contains("Fichier"), "{w}x{h}: {s}");
+        assert!(s.contains("File"), "{w}x{h}: {s}");
         assert!(s.contains("C/F2"), "{w}x{h}: {s}");
     }
     screen(&mut m, 1, 1);
-    palette(&mut m, "tous les fichiers");
+    palette(&mut m, "all files");
     assert!(m.source_filter.is_none());
     assert!(m.search_focus);
 }
@@ -5235,7 +5236,7 @@ fn expanding_or_retaining_source_keeps_applicable_pending_save_resolution() {
             }
             "F2-clear" => {
                 m.search_focus = true;
-                palette(&mut m, "tous les fichiers");
+                palette(&mut m, "all files");
             }
             "all" => choose_source(&mut m, &root, None),
             "same" => choose_source(&mut m, &root, Some(&a)),
@@ -5281,7 +5282,7 @@ fn availability_p_opens_selector_but_remains_search_text_and_f2_is_palette() {
     assert_eq!(m.query.value, "P");
     m.key(key(KeyCode::Char('P')));
     let rendered = screen(&mut m, 80, 24);
-    assert!(rendered.contains("Méthode de disponibilité"), "{rendered}");
+    assert!(rendered.contains("Availability method"), "{rendered}");
     assert!(rendered.contains("ICMP local"));
     m.key(key(KeyCode::Esc));
     m.key(key(KeyCode::F(2)));
@@ -5368,7 +5369,7 @@ fn availability_method_visible_in_list_details_and_help_and_filters_use_selected
     assert_eq!(m.statuses["alpha"].status, PingStatus::Online);
     assert!(!m.effective.contains_key("alpha"));
     m.view = View::Help;
-    assert!(screen(&mut m, 110, 60).contains("P         Méthode de disponibilité"));
+    assert!(screen(&mut m, 110, 60).contains("P         Availability method"));
 }
 
 #[test]
@@ -5417,7 +5418,7 @@ fn availability_selected_option_remains_visible_in_tiny_terminal() {
         rendered.contains("✓ SSH"),
         "the value in effect stays marked: {rendered}"
     );
-    assert!(rendered.contains("Entrée : enregistrer"), "{rendered}");
+    assert!(rendered.contains("Enter: save"), "{rendered}");
 }
 
 fn availability_external_preference_action(group_action: bool) {

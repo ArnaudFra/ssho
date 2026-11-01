@@ -18,7 +18,9 @@ impl Key {
     pub(super) fn label(&self) -> String {
         match self {
             Self::File(path) => path.display().to_string(),
-            Self::Tag(_, tag) => tag.clone().unwrap_or_else(|| "Sans tag".into()),
+            Self::Tag(_, tag) => tag
+                .clone()
+                .unwrap_or_else(|| crate::t!("No tag", "Sans tag").into()),
         }
     }
 }
@@ -223,16 +225,25 @@ impl Model {
     }
 }
 
-pub(super) const MODES: [(GroupMode, &str); 3] = [
-    (GroupMode::Flat, "Flat — liste plate"),
-    (GroupMode::Files, "Files — fichiers"),
-    (
-        GroupMode::FileTags,
-        "File / tags — fichiers et tag principal",
-    ),
-];
+/// Each mode with its name in the interface language.
+pub(super) fn modes() -> [(GroupMode, &'static str); 3] {
+    [
+        (
+            GroupMode::Flat,
+            crate::t!("Flat — one list", "Flat — liste plate"),
+        ),
+        (GroupMode::Files, crate::t!("Files", "Files — fichiers")),
+        (
+            GroupMode::FileTags,
+            crate::t!(
+                "File / tags — files, then main tag",
+                "File / tags — fichiers et tag principal"
+            ),
+        ),
+    ]
+}
 pub(super) fn open(m: &mut Model) {
-    let selected = MODES
+    let selected = modes()
         .iter()
         .position(|(mode, _)| *mode == m.preferences.group_mode)
         .unwrap_or(0);
@@ -242,10 +253,13 @@ pub(super) fn key(m: &mut Model, key: KeyEvent) -> Action {
     let View::GroupMode { selected } = &mut m.view else {
         return Action::None;
     };
-    let texts: Vec<String> = MODES.iter().map(|(_, label)| (*label).to_owned()).collect();
+    let texts: Vec<String> = modes()
+        .iter()
+        .map(|(_, label)| (*label).to_owned())
+        .collect();
     match select::key(selected, &texts, None, key) {
         select::Outcome::Cancel => m.back(),
-        select::Outcome::Apply => return Action::GroupMode(MODES[*selected].0),
+        select::Outcome::Apply => return Action::GroupMode(modes()[*selected].0),
         select::Outcome::Stay => {}
     }
     Action::None

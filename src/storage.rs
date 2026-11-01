@@ -341,8 +341,14 @@ impl AvailabilityMethod {
     }
     pub fn scope(self) -> &'static str {
         match self {
-            Self::Ssh => "SSH: direct handshake or configured proxy check",
-            Self::Icmp => "ICMP local: network availability; no bastion, no SSH authentication",
+            Self::Ssh => crate::t!(
+                "SSH: direct handshake or configured proxy check",
+                "SSH : poignée de main directe ou contrôle via le proxy configuré"
+            ),
+            Self::Icmp => crate::t!(
+                "ICMP local: network availability; no bastion, no SSH authentication",
+                "ICMP local : disponibilité réseau ; ni bastion ni authentification SSH"
+            ),
         }
     }
 }
@@ -411,6 +417,8 @@ pub struct AppConfig {
     pub group_aliases: bool,
     #[serde(deserialize_with = "nullable_group_mode")]
     pub group_mode: GroupMode,
+    /// Interface language: `"en"` (default, also for null or unknown) or `"fr"`.
+    pub language: crate::i18n::Language,
 }
 
 impl Default for AppConfig {
@@ -425,6 +433,7 @@ impl Default for AppConfig {
             ssh_command: default_ssh_command(),
             group_aliases: false,
             group_mode: GroupMode::Flat,
+            language: crate::i18n::Language::En,
         }
     }
 }

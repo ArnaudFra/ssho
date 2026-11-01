@@ -19,10 +19,21 @@ fn hosts() -> Vec<Host> {
         .collect()
 }
 
+/// These journeys read the French interface: English, the default language, is
+/// what the other test modules read.
+fn french() -> AppConfig {
+    AppConfig {
+        language: crate::i18n::Language::Fr,
+        ..AppConfig::default()
+    }
+}
+
 /// Table focus by default; `preferences` receives the `key_bindings` object.
 fn model(key_bindings: serde_json::Value) -> Model {
-    let preferences: AppConfig =
-        serde_json::from_value(serde_json::json!({ "key_bindings": key_bindings })).unwrap();
+    let preferences: AppConfig = serde_json::from_value(
+        serde_json::json!({ "key_bindings": key_bindings, "language": "fr" }),
+    )
+    .unwrap();
     let mut m = Model::new(hosts(), preferences, BTreeMap::new(), false);
     m.search_focus = false;
     m
@@ -65,7 +76,7 @@ fn prefix_sequence_runs_named_letters_and_ignores_unknown_ones() {
 
 #[test]
 fn prefix_explains_an_unavailable_letter_without_running_it() {
-    let mut m = Model::new(vec![], AppConfig::default(), BTreeMap::new(), false);
+    let mut m = Model::new(vec![], french(), BTreeMap::new(), false);
     m.search_focus = false;
     m.key(ctrl('g'));
     assert_eq!(m.key(key(KeyCode::Char('e'))), Action::None);
@@ -133,7 +144,8 @@ fn prefix_can_be_disabled_and_every_action_stays_reachable() {
     assert!(matches!(m.view, View::Actions { .. }));
     let enabled = model(serde_json::json!({}));
     let mut enabled = enabled;
-    assert!(screen(&mut enabled, 120, 30).contains("Ctrl+G: quick"));
+    // The French rows are longer: the reminder needs a wider terminal.
+    assert!(screen(&mut enabled, 140, 30).contains("Ctrl+G : rapide"));
 }
 
 #[test]
@@ -170,7 +182,7 @@ fn configured_shortcut_updates_dispatch_palette_footer_and_help() {
         "the released key runs nothing"
     );
     let footer = screen(&mut m, 120, 30);
-    assert!(footer.contains("E: edit"), "{footer}");
+    assert!(footer.contains("E : modifier"), "{footer}");
     m.key(key(KeyCode::Char('E')));
     assert!(matches!(m.view, View::Host(_)));
     m.key(key(KeyCode::Esc));
@@ -230,7 +242,7 @@ fn escape_walks_back_to_the_list_and_never_closes_it() {
     // At the root Esc explains how to quit instead of closing the application.
     assert_eq!(m.key(key(KeyCode::Esc)), Action::None);
     assert!(matches!(m.view, View::List));
-    assert!(screen(&mut m, 100, 20).contains("Esc ne quitte pas la liste"));
+    assert!(screen(&mut m, 100, 20).contains("Échap ne quitte pas la liste"));
     assert_eq!(m.selected_host().unwrap().name, "alpha");
     assert_eq!(m.key(key(KeyCode::Char('q'))), Action::Quit);
 }
@@ -277,7 +289,9 @@ fn simple_selectors_wrap_while_the_host_table_stays_bounded() {
     let mut m = model(serde_json::json!({}));
     m.key(key(KeyCode::Char('g')));
     m.key(key(KeyCode::Up));
-    assert!(matches!(m.view, View::GroupMode { selected } if selected == groups::MODES.len() - 1));
+    assert!(
+        matches!(m.view, View::GroupMode { selected } if selected == groups::modes().len() - 1)
+    );
     m.key(key(KeyCode::Down));
     assert!(matches!(m.view, View::GroupMode { selected: 0 }));
     m.key(key(KeyCode::Esc));
@@ -608,7 +622,7 @@ fn no_inactive_input_remains_after_tab_and_the_filter_stays_visible() {
     m.search_focus = true;
     let editing = screen(&mut m, 100, 24);
     assert!(
-        editing.contains("● Recherche") && editing.contains("Search: > "),
+        editing.contains("● Recherche") && editing.contains("Recherche : > "),
         "{editing}"
     );
     assert!(
@@ -621,7 +635,7 @@ fn no_inactive_input_remains_after_tab_and_the_filter_stays_visible() {
     let browsing = screen(&mut m, 100, 24);
     // No boxed input is left behind; the table is named as the focused element.
     assert!(
-        !browsing.contains("Search: > ") && !browsing.contains("Recherche──"),
+        !browsing.contains("Recherche : > ") && !browsing.contains("Recherche──"),
         "{browsing}"
     );
     assert!(browsing.contains("● Hôtes"), "{browsing}");
@@ -744,7 +758,7 @@ fn count_names_hosts_and_never_counts_group_headers() {
     m.query.set("tag:\"");
     m.filter(true);
     let text = screen(&mut m, 120, 30);
-    assert!(text.contains("Search: Unclosed quote"), "{text}");
+    assert!(text.contains("Recherche : Guillemet non fermé"), "{text}");
     assert!(text.contains("Filtres : tag:\""), "{text}");
 }
 
@@ -826,7 +840,7 @@ fn empty_fields_say_what_they_mean_and_examples_are_never_values() {
     let text = screen(&mut m, 110, 30);
     for expected in [
         "requis",
-        "Utilisateur       laissé à OpenSSH",
+        "Utilisateur       selon OpenSSH",
         "22 — défaut OpenSSH, non écrit",
         // The example of the focused field is a hint under the form, not a value.
         "ex. : api-prod",
@@ -861,7 +875,7 @@ fn empty_fields_say_what_they_mean_and_examples_are_never_values() {
     assert_eq!(edit.host().unwrap().user, "");
     edit.focus_on(forms::Stop::Field(forms::FormField::Input(2)));
     m.view = View::Host(Box::new(edit));
-    assert!(screen(&mut m, 110, 30).contains("> Utilisateur       laissé à OpenSSH"));
+    assert!(screen(&mut m, 110, 30).contains("> Utilisateur       selon OpenSSH"));
 }
 
 #[test]
@@ -1121,7 +1135,7 @@ fn current_choice_is_marked_and_cancelling_changes_nothing() {
             3,
         );
     }
-    // "All files" is a choice of its own, applied like any other.
+    // "Tous les fichiers" is a choice of its own, applied like any other.
     m.key(key(KeyCode::Down));
     assert!(
         matches!(m.view, View::SourceFiles { selected: 0, .. }),
@@ -1255,7 +1269,7 @@ fn marking_model(mode: GroupMode, group_aliases: bool) -> (tempfile::TempDir, Mo
     )
     .unwrap();
     let hosts = config::load_report(&root).unwrap().hosts;
-    let mut m = Model::new(hosts, AppConfig::default(), BTreeMap::new(), false);
+    let mut m = Model::new(hosts, french(), BTreeMap::new(), false);
     m.search_focus = false;
     m.batch.root = root;
     m.batch.cache_sources(&m.all.clone());
@@ -1360,7 +1374,7 @@ fn group_header_is_never_a_silent_target_and_enter_is_announced() {
     m.key(key(KeyCode::Home));
     assert!(m.selected_group().is_some());
     let text = screen(&mut m, 120, 24);
-    assert!(text.contains("Enter: open/close group"), "{text}");
+    assert!(text.contains("Entrée : déplier"), "{text}");
     // Host shortcuts explain why they do nothing on a header.
     assert_eq!(m.key(key(KeyCode::Char('x'))), Action::None);
     assert!(m.batch.marks.is_empty());
@@ -1383,7 +1397,7 @@ fn group_header_is_never_a_silent_target_and_enter_is_announced() {
     );
     m.key(key(KeyCode::Enter));
     m.key(key(KeyCode::Down));
-    assert!(screen(&mut m, 120, 24).contains("Enter: connect"));
+    assert!(screen(&mut m, 120, 24).contains("Entrée : connexion"));
     assert!(matches!(m.key(key(KeyCode::Enter)), Action::Connect(..)));
 }
 
@@ -1574,7 +1588,7 @@ fn wide_terminals_keep_controls_and_counts_next_to_their_content() {
         m.filter(true);
         // Table: the last column stays within reading distance of the name.
         assert!(
-            column_of(&screen(&mut m, width, 50), "Last Attempt") < 140,
+            column_of(&screen(&mut m, width, 50), "Dernière tentative") < 140,
             "{width}"
         );
         // Host form: every button sits right after its value.
@@ -1617,7 +1631,7 @@ fn wide_terminals_keep_controls_and_counts_next_to_their_content() {
         // Tables of the other screens keep their last column in reach too.
         m.key(key(KeyCode::F(7)));
         assert!(
-            column_of(&screen(&mut m, width, 50), "State") < 160,
+            column_of(&screen(&mut m, width, 50), "État") < 160,
             "{width}"
         );
         m.key(key(KeyCode::Esc));
@@ -1627,7 +1641,7 @@ fn wide_terminals_keep_controls_and_counts_next_to_their_content() {
         );
         m.key(key(KeyCode::F(6)));
         assert!(
-            column_of(&screen(&mut m, width, 50), "Forwarding") < 160,
+            column_of(&screen(&mut m, width, 50), "Transfert") < 160,
             "{width}"
         );
     }
@@ -1643,8 +1657,8 @@ fn note_says_whose_it_is_where_it_lives_and_whether_it_changed() {
     m.key(key(KeyCode::Char('N')));
     let text = screen(&mut m, 120, 24);
     for expected in [
-        "Personal note",
-        "Host: alpha",
+        "Note personnelle",
+        "Hôte : alpha",
         "Enregistrée",
         "Fichier SSH de l'hôte : /etc/ssh/work",
         "Donnée de ssho : /home/me/.config/ssho/metadata.json",
@@ -1706,7 +1720,7 @@ fn list_marks_a_note_discreetly_without_a_column() {
         "the note itself stays in the sheet: {text}"
     );
     m.key(key(KeyCode::Char('i')));
-    assert!(screen(&mut m, 120, 40).contains("Personal note: Bastion requis"));
+    assert!(screen(&mut m, 120, 40).contains("Note personnelle: Bastion requis"));
 }
 
 fn forward_form(m: &Model) -> &forms::ForwardForm {
@@ -1726,11 +1740,11 @@ fn tunnel_direction_is_said_in_words_for_each_type() {
         "{text}"
     );
     assert!(
-        text.contains("Listen on this machine, port ? → reach localhost:? from the SSH server"),
+        text.contains("Écouter sur ce poste, port ? → joindre localhost:? depuis le serveur SSH"),
         "{text}"
     );
     assert!(
-        text.contains("Local Port (listens on this machine):"),
+        text.contains("Port local (écoute sur ce poste) :"),
         "{text}"
     );
     m.key(key(KeyCode::Tab));
@@ -1743,7 +1757,7 @@ fn tunnel_direction_is_said_in_words_for_each_type() {
     let text = screen(&mut m, 110, 40);
     assert!(
         text.contains(
-            "Listen on this machine, port 5433 → reach db.internal:5432 from the SSH server"
+            "Écouter sur ce poste, port 5433 → joindre db.internal:5432 depuis le serveur SSH"
         ),
         "{text}"
     );
@@ -1756,19 +1770,19 @@ fn tunnel_direction_is_said_in_words_for_each_type() {
     assert!(text.contains("( ) Local (-L)   (•) Remote (-R)"), "{text}");
     assert!(
         text.contains(
-            "Listen on the SSH server, port 5433 → reach db.internal:5432 from this machine"
+            "Écouter sur le serveur SSH, port 5433 → joindre db.internal:5432 depuis ce poste"
         ),
         "{text}"
     );
     assert!(
-        text.contains("Remote Port (listens on the SSH server):"),
+        text.contains("Port distant (écoute sur le serveur SSH) :"),
         "{text}"
     );
     m.key(key(KeyCode::Right));
     let text = screen(&mut m, 110, 40);
     assert!(
         text.contains(
-            "SOCKS proxy on this machine, port 5433 → connections leave from the SSH server"
+            "Proxy SOCKS sur ce poste, port 5433 → les connexions sortent par le serveur SSH"
         ),
         "{text}"
     );
@@ -1792,24 +1806,24 @@ fn save_and_launch_are_separate_buttons_and_enter_reaches_neither() {
     assert_eq!(forward_form(&m).focus, F::MODE);
     let text = screen(&mut m, 110, 40);
     assert!(
-        text.contains("> (•) Shell session   ( ) Tunnel only"),
+        text.contains("> (•) Session shell   ( ) Tunnel seul"),
         "{text}"
     );
     assert!(
-        text.contains("the tunnel ends when you leave that shell"),
+        text.contains("le tunnel s'arrête quand vous quittez ce shell"),
         "{text}"
     );
     m.key(key(KeyCode::Char(' ')));
     let text = screen(&mut m, 110, 40);
     assert!(
-        text.contains("( ) Shell session   (•) Tunnel only"),
+        text.contains("( ) Session shell   (•) Tunnel seul"),
         "{text}"
     );
-    assert!(text.contains("follow or stop it in F7"), "{text}");
+    assert!(text.contains("suivi et arrêt dans F7"), "{text}");
     m.key(key(KeyCode::Tab));
     let text = screen(&mut m, 110, 40);
     assert!(
-        text.contains("[▶ Launch ]  [  Save profile ]  [  Cancel ]"),
+        text.contains("[▶ Lancer ]  [  Enregistrer le profil ]  [  Annuler ]"),
         "{text}"
     );
     // Saving needs a name; launching does not.
@@ -1856,12 +1870,12 @@ fn profiles_show_their_route_and_named_actions() {
     let text = screen(&mut m, 120, 30);
     assert!(
         text.contains(
-            "Listen on this machine, port 5433 → reach db.internal:5432 from the SSH server"
+            "Écouter sur ce poste, port 5433 → joindre db.internal:5432 depuis le serveur SSH"
         ),
         "{text}"
     );
     assert!(
-        text.contains("[▶ Open ] [  Launch ] [  Duplicate ] [  Delete ] [  New ]"),
+        text.contains("[▶ Ouvrir ] [  Lancer ] [  Dupliquer ] [  Supprimer ] [  Nouveau ]"),
         "{text}"
     );
     // Launch is a named action, no longer a line of the help.
@@ -1884,11 +1898,11 @@ fn profiles_show_their_route_and_named_actions() {
     // Deleting names the profile; Enter on the default action opens it.
     m.key(key(KeyCode::Right));
     m.key(key(KeyCode::Enter));
-    assert!(screen(&mut m, 120, 30).contains("Delete profile 'db'?"));
+    assert!(screen(&mut m, 120, 30).contains("Supprimer le profil « db » ?"));
     m.key(key(KeyCode::Esc));
     // Without any profile only New can act.
     m.tunnel_profiles.clear();
-    assert!(screen(&mut m, 120, 30).contains("[▶ New ]"));
+    assert!(screen(&mut m, 120, 30).contains("[▶ Nouveau ]"));
     m.key(key(KeyCode::Enter));
     assert!(forward_form(&m).original_name.is_none());
 }
@@ -1899,10 +1913,10 @@ fn no_target_page_never_turns_the_filter_into_targets_on_its_own() {
     m.key(key(KeyCode::Char('B')));
     let text = screen(&mut m, 120, 24);
     for expected in [
-        "Batch: 0 targets • [Targets] → Command → Review → Results",
-        "No targets selected.",
-        "the filter is never turned into targets on its own",
-        "[▶ Back to the list ]  [  Add the 4 host(s) shown by the filter ]",
+        "Lot : 0 cibles • [Cibles] → Commande → Vérification → Résultats",
+        "Aucune cible sélectionnée.",
+        "le filtre n'est jamais transformé en cibles de lui-même",
+        "[▶ Retour à la liste ]  [  Ajouter les 4 hôte(s) affichés par le filtre ]",
     ] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
@@ -1916,7 +1930,7 @@ fn no_target_page_never_turns_the_filter_into_targets_on_its_own() {
     m.query.set("beta");
     m.filter(true);
     m.key(key(KeyCode::Char('B')));
-    assert!(screen(&mut m, 120, 24).contains("Add the 1 host(s) shown by the filter"));
+    assert!(screen(&mut m, 120, 24).contains("Ajouter les 1 hôte(s) affichés par le filtre"));
     m.key(key(KeyCode::Tab));
     m.key(key(KeyCode::Enter));
     let View::Batch(editor) = &m.view else {
@@ -1931,7 +1945,7 @@ fn no_target_page_never_turns_the_filter_into_targets_on_its_own() {
         ["beta"]
     );
     assert!(screen(&mut m, 120, 24)
-        .contains("Batch: 1 targets • Targets ✓ → [Command] → Review → Results"));
+        .contains("Lot : 1 cibles • Cibles ✓ → [Commande] → Vérification → Résultats"));
 }
 
 #[test]
@@ -1951,7 +1965,7 @@ fn arrows_belong_to_the_focused_control_and_enter_stops_on_review() {
     let before = screen(&mut m, 120, 30);
     m.key(key(KeyCode::Down));
     assert!(
-        screen(&mut m, 120, 30).contains("Parallel: 4"),
+        screen(&mut m, 120, 30).contains("Parallèle : 4"),
         "focus moved to the next input"
     );
     m.key(key(KeyCode::Up));
@@ -1965,20 +1979,20 @@ fn arrows_belong_to_the_focused_control_and_enter_stops_on_review() {
         assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
     }
     let text = screen(&mut m, 120, 30);
-    assert!(text.contains("[▶ Review ]  [  Back ]"), "{text}");
+    assert!(text.contains("[▶ Vérification ]  [  Retour ]"), "{text}");
     assert!(!m.batch.manager.has_active());
     // The list announces when the arrows are its own.
     m.key(key(KeyCode::BackTab));
-    assert!(screen(&mut m, 120, 30).contains("● Frozen targets — ↑↓ select"));
+    assert!(screen(&mut m, 120, 30).contains("● Cibles figées — ↑↓ choisir"));
     m.key(key(KeyCode::Tab));
     m.key(key(KeyCode::Enter));
     let text = screen(&mut m, 120, 30);
-    assert!(text.contains("Confirm batch: 4 targets"), "{text}");
+    assert!(text.contains("Confirmer le lot : 4 cibles"), "{text}");
     assert!(
-        text.contains("Command: uptime") && text.contains("Parallel: 4 • Timeout: 30s"),
+        text.contains("Commande : uptime") && text.contains("Parallèle : 4 • Délai : 30 s"),
         "{text}"
     );
-    assert!(text.contains("[  Launch on 4 target(s) ]"), "{text}");
+    assert!(text.contains("[  Lancer sur 4 cible(s) ]"), "{text}");
     // Repeating Enter never launches: it goes back to the edit step.
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
@@ -1991,16 +2005,16 @@ fn key_screen_names_its_context_and_separates_local_from_remote() {
     keys::open_view(&mut m, false);
     let text = screen(&mut m, 130, 30);
     assert!(
-        text.contains("Keys — OpenSSH assistant • target: alpha"),
+        text.contains("Clés — Assistant OpenSSH • cible : alpha"),
         "{text}"
     );
     assert!(
-        text.contains("Local: [▶ Create key ] [  Add to agent ] [  Associate with this host ] • Remote server: [  Deploy public key ]"),
+        text.contains("Local : [▶ Créer une clé ] [  Ajouter à l'agent ] [  Associer à cet hôte ] • Serveur distant : [  Déployer la clé publique ]"),
         "{text}"
     );
     // Without a reviewed public key, deploying explains itself and does nothing.
     m.key(key(KeyCode::Left));
-    assert!(screen(&mut m, 130, 30).contains("[▶ Deploy public key ]"));
+    assert!(screen(&mut m, 130, 30).contains("[▶ Déployer la clé publique ]"));
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
     assert!(!m.error.is_empty());
     m.key(key(KeyCode::Esc));
@@ -2012,16 +2026,16 @@ fn key_screen_names_its_context_and_separates_local_from_remote() {
     let text = screen(&mut m, 130, 30);
     assert!(
         text.contains(
-            "Choose a key for this draft: only its IdentityFile is filled, nothing is deployed"
+            "Choisir une clé pour ce brouillon : seul son IdentityFile est rempli, rien n'est déployé"
         ),
         "{text}"
     );
     assert!(
-        text.contains("Local: [▶ Use this key ] [  Create key ] [  Add to agent ]"),
+        text.contains("Local : [▶ Utiliser cette clé ] [  Créer une clé ] [  Ajouter à l'agent ]"),
         "{text}"
     );
     assert!(
-        !text.contains("Deploy public key") && !text.contains("Associate"),
+        !text.contains("Déployer la clé publique") && !text.contains("Associate"),
         "{text}"
     );
     for forbidden in ['d', 't'] {
@@ -2039,11 +2053,11 @@ fn generation_waits_for_its_button() {
     m.key(key(KeyCode::Enter));
     let text = screen(&mut m, 120, 30);
     assert!(
-        text.contains("ssh-keygen then asks for the passphrase in the terminal"),
+        text.contains("ssh-keygen demande ensuite la phrase secrète dans le terminal"),
         "{text}"
     );
     assert!(
-        text.contains("[  Continue in terminal ]  [  Back ]"),
+        text.contains("[  Continuer dans le terminal ]  [  Retour ]"),
         "{text}"
     );
     // Enter in the first field no longer generates.
@@ -2051,7 +2065,7 @@ fn generation_waits_for_its_button() {
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
     typing(&mut m, "comment");
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
-    assert!(screen(&mut m, 120, 30).contains("[▶ Continue in terminal ]"));
+    assert!(screen(&mut m, 120, 30).contains("[▶ Continuer dans le terminal ]"));
     m.key(key(KeyCode::Right));
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
     assert!(matches!(&m.view, View::Keys(editor) if matches!(editor.mode, keys::Mode::List)));
@@ -2071,7 +2085,7 @@ fn review_model() -> (tempfile::TempDir, PathBuf, Model) {
     )
     .unwrap();
     let hosts = config::load_report(&root).unwrap().hosts;
-    let mut m = Model::new(hosts, AppConfig::default(), BTreeMap::new(), false);
+    let mut m = Model::new(hosts, french(), BTreeMap::new(), false);
     m.search_focus = false;
     (temp, root, m)
 }
@@ -2087,11 +2101,11 @@ fn reading_a_diff_writes_nothing_and_the_button_names_the_operation() {
     let text = screen(&mut m, 120, 30);
     for expected in [
         // The object of a deletion is written, not only coloured.
-        "Operation: DELETE host 'alpha'",
-        &format!("File: {}", root.display()),
-        "Its favorite, note and tunnel profiles stay in the ssho data.",
-        "[  Delete ]  [  Back ]  (reading the diff)",
-        "Ctrl+S: confirm exact changes",
+        "Opération : SUPPRIMER l'hôte « alpha »",
+        &format!("Fichier : {}", root.display()),
+        "Son favori, sa note et ses profils de tunnels restent dans les données de ssho.",
+        "[  Supprimer ]  [  Retour ]  (lecture du diff)",
+        "Ctrl+S : confirmer ces modifications",
     ] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
@@ -2099,14 +2113,14 @@ fn reading_a_diff_writes_nothing_and_the_button_names_the_operation() {
     for _ in 0..3 {
         assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
     }
-    assert!(screen(&mut m, 120, 30).contains("Nothing written: Tab reaches the buttons"));
+    assert!(screen(&mut m, 120, 30).contains("Rien d'écrit : Tab atteint les boutons"));
     assert_eq!(std::fs::read(&root).unwrap(), before);
     assert!(matches!(m.view, View::Changes(_)));
     // Tab reaches Delete, then Back; each does what its name says.
     m.key(key(KeyCode::Tab));
-    assert!(screen(&mut m, 120, 30).contains("[▶ Delete ]"));
+    assert!(screen(&mut m, 120, 30).contains("[▶ Supprimer ]"));
     m.key(key(KeyCode::Tab));
-    assert!(screen(&mut m, 120, 30).contains("[▶ Back ]"));
+    assert!(screen(&mut m, 120, 30).contains("[▶ Retour ]"));
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
     assert!(matches!(m.view, View::List));
     assert_eq!(std::fs::read(&root).unwrap(), before);
@@ -2135,29 +2149,35 @@ fn summary_tells_files_and_what_happens_to_personal_data() {
     )
     .unwrap();
     let text = screen(&mut m, 130, 30);
-    assert!(text.contains("Operation: EDIT host 'alpha'"), "{text}");
+    assert!(
+        text.contains("Opération : MODIFIER l'hôte « alpha »"),
+        "{text}"
+    );
     assert!(
         text.contains(
-            "Aliases: alpha → gamma. Favorite, note and tunnel profiles follow a renamed alias."
+            "Alias : alpha → gamma. Favori, note et profils de tunnels suivent un alias renommé."
         ),
         "{text}"
     );
-    assert!(text.contains("[  Save ]  [  Back ]"), "{text}");
+    assert!(text.contains("[  Enregistrer ]  [  Retour ]"), "{text}");
     m.key(key(KeyCode::Esc));
     // A move shows where from and where to.
     std::fs::write(&other, "").unwrap();
     changes::open(&mut m, Action::MoveTo(original, other.clone()), &root).unwrap();
     let text = screen(&mut m, 130, 30);
-    assert!(text.contains("Operation: MOVE host 'alpha'"), "{text}");
+    assert!(
+        text.contains("Opération : DÉPLACER l'hôte « alpha »"),
+        "{text}"
+    );
     assert!(
         text.contains(&format!(
-            "From: {} → To: {}",
+            "De : {} → Vers : {}",
             root.display(),
             other.display()
         )),
         "{text}"
     );
-    assert!(text.contains("[  Move ]  [  Back ]"), "{text}");
+    assert!(text.contains("[  Déplacer ]  [  Retour ]"), "{text}");
 }
 
 #[test]
@@ -2166,17 +2186,17 @@ fn columns_show_their_outcome_and_moving_is_a_named_action() {
     m.key(key(KeyCode::Char('v')));
     let text = screen(&mut m, 120, 30);
     for expected in [
-        "[x] Name (fixed)",
-        "Shown at this width: Name | Hostname | Tags | Last Attempt",
-        "Every active column fits.",
-        "[  Move up ] [  Move down ] [  Reset ] [  Apply ] [  Cancel ]",
+        "[x] Nom (fixe)",
+        "Affichées à cette largeur : Nom | Adresse | Tags | Dernière tentative",
+        "Toutes les colonnes actives tiennent.",
+        "[  Monter ] [  Descendre ] [  Réinitialiser ] [  Appliquer ] [  Annuler ]",
     ] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
-    // A narrow table: the active column short of room is told apart from "off".
+    // A narrow table: the active column short of room is told apart from the disabled one.
     let narrow = screen(&mut m, 60, 30);
-    assert!(narrow.contains("Active but short of room: "), "{narrow}");
-    assert!(narrow.contains("(hidden: width)"), "{narrow}");
+    assert!(narrow.contains("Actives mais sans place : "), "{narrow}");
+    assert!(narrow.contains("(masquée : largeur)"), "{narrow}");
     // Switch User on with Space, then move it up with the named button.
     let View::Columns(editor) = &m.view else {
         panic!()
@@ -2196,7 +2216,7 @@ fn columns_show_their_outcome_and_moving_is_a_named_action() {
     assert_eq!(editor.draft.last(), Some(&HostColumn::User));
     let before = editor.draft.clone();
     m.key(key(KeyCode::Tab));
-    assert!(screen(&mut m, 120, 30).contains("[▶ Move up ]"));
+    assert!(screen(&mut m, 120, 30).contains("[▶ Monter ]"));
     m.key(key(KeyCode::Enter));
     let View::Columns(editor) = &m.view else {
         panic!()
@@ -2225,7 +2245,7 @@ fn columns_show_their_outcome_and_moving_is_a_named_action() {
     m.key(key(KeyCode::Right));
     m.key(key(KeyCode::Right));
     m.key(key(KeyCode::Right));
-    assert!(screen(&mut m, 120, 30).contains("[▶ Apply ]"));
+    assert!(screen(&mut m, 120, 30).contains("[▶ Appliquer ]"));
     assert_eq!(m.key(key(KeyCode::Enter)), Action::Columns(draft));
     m.key(key(KeyCode::Right));
     assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
@@ -2239,8 +2259,11 @@ fn long_error_is_readable_in_full_even_on_a_small_terminal() {
     m.error = cause.into();
     // The list says the level in words and how to read the rest.
     let text = screen(&mut m, 60, 20);
-    assert!(text.contains("Error: refusing application file"), "{text}");
-    assert!(text.contains("(!: full text)"), "{text}");
+    assert!(
+        text.contains("Erreur : refusing application file"),
+        "{text}"
+    );
+    assert!(text.contains("(! : texte complet)"), "{text}");
     assert!(!text.contains("symbolic link"), "{text}");
     m.key(key(KeyCode::Char('!')));
     assert!(matches!(m.view, View::Messages));
@@ -2251,7 +2274,10 @@ fn long_error_is_readable_in_full_even_on_a_small_terminal() {
         .filter_map(|line| line.split('│').nth(1))
         .map(str::trim_end)
         .collect();
-    assert!(text.contains("[Error]") && joined.contains(cause), "{text}");
+    assert!(
+        text.contains("[Erreur]") && joined.contains(cause),
+        "{text}"
+    );
     m.key(key(KeyCode::Esc));
     assert_eq!(m.error, cause, "reading a message does not clear it");
     // A warning is named as such, never shown as an error.
@@ -2274,7 +2300,7 @@ fn running_work_stays_visible_on_every_screen() {
     use runtime::tunnels::{Record, Snapshot, State};
     let mut m = model(serde_json::json!({}));
     assert!(
-        !screen(&mut m, 110, 24).contains("Jobs —"),
+        !screen(&mut m, 110, 24).contains("Travaux —"),
         "nothing runs: no bar"
     );
     m.tunnels = vec![Record {
@@ -2300,7 +2326,7 @@ fn running_work_stays_visible_on_every_screen() {
         },
     );
     let expected =
-        "Jobs — tunnels: 1 active (F7: follow or stop) • availability: 1 probe(s) running";
+        "Travaux — tunnels : 1 actif(s) (F7 : suivre ou arrêter) • disponibilité : 1 sonde(s) en cours";
     // The list, a sheet, a form, the help and the palette all keep the reminder.
     assert!(screen(&mut m, 110, 24).contains(expected));
     for opener in [
@@ -2316,7 +2342,7 @@ fn running_work_stays_visible_on_every_screen() {
     // A finished tunnel and a settled probe leave the bar.
     m.tunnels[0].state = State::Stopped;
     m.statuses.clear();
-    assert!(!screen(&mut m, 110, 30).contains("Jobs —"));
+    assert!(!screen(&mut m, 110, 30).contains("Travaux —"));
 }
 
 #[test]
@@ -2324,19 +2350,19 @@ fn help_explains_the_screen_and_can_be_searched() {
     let mut m = model(serde_json::json!({}));
     m.key(key(KeyCode::Char('?')));
     let text = screen(&mut m, 120, 50);
-    assert!(text.contains("This screen: the host list."), "{text}");
-    assert!(text.contains("/: search"), "{text}");
+    assert!(text.contains("Cet écran : la liste des hôtes."), "{text}");
+    assert!(text.contains("/ : rechercher"), "{text}");
     // Searching lists the matching lines, with the keys of the active keymap.
     m.key(key(KeyCode::Char('/')));
     typing(&mut m, "dupliquer");
     let text = screen(&mut m, 120, 50);
     assert!(text.contains("D         Dupliquer"), "{text}");
     assert!(!text.contains("Se connecter"), "{text}");
-    assert!(text.contains("Search: dupliquer_"), "{text}");
+    assert!(text.contains("Recherche : dupliquer_"), "{text}");
     // While searching, the closing letters are text; Esc clears the search first.
     typing(&mut m, "q");
     assert!(matches!(m.view, View::Help));
-    assert!(screen(&mut m, 120, 50).contains("No line of the help matches."));
+    assert!(screen(&mut m, 120, 50).contains("Aucune ligne de l'aide ne correspond."));
     m.key(key(KeyCode::Esc));
     assert!(matches!(m.view, View::Help));
     assert!(screen(&mut m, 120, 50).contains("Se connecter"));
@@ -2347,7 +2373,7 @@ fn help_explains_the_screen_and_can_be_searched() {
     m.key(key(KeyCode::F(2)));
     typing(&mut m, "aide");
     m.key(key(KeyCode::Enter));
-    assert!(screen(&mut m, 120, 50).contains("This screen: the host form."));
+    assert!(screen(&mut m, 120, 50).contains("Cet écran : le formulaire d'hôte."));
     m.key(key(KeyCode::Esc));
     assert!(matches!(m.view, View::Host(_)));
 }
@@ -2359,8 +2385,150 @@ fn a_write_is_confirmed_in_words_until_the_next_key() {
     let remaining = vec![m.all[1].clone()];
     m.complete_mutation(remaining, &Action::Delete(host));
     let text = screen(&mut m, 110, 24);
-    assert!(text.contains("✓ Deleted alpha"), "{text}");
+    assert!(text.contains("✓ alpha supprimé"), "{text}");
     m.key(key(KeyCode::Down));
-    assert!(!screen(&mut m, 110, 24).contains("✓ Deleted"));
+    assert!(!screen(&mut m, 110, 24).contains("supprimé"));
     drop(root);
+}
+
+fn english() -> Model {
+    let mut m = Model::new(hosts(), AppConfig::default(), BTreeMap::new(), false);
+    m.search_focus = false;
+    m
+}
+
+#[test]
+fn english_is_the_default_and_french_follows_the_preference() {
+    let mut m = english();
+    let text = screen(&mut m, 120, 24);
+    for expected in [
+        "● Hosts",
+        "/ Search • 2 hosts",
+        "F2: actions",
+        "Enter: connect",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    let mut m = model(serde_json::json!({}));
+    let text = screen(&mut m, 120, 24);
+    for expected in [
+        "● Hôtes",
+        "/ Rechercher • 2 hôtes",
+        "F2 : actions",
+        "Entrée : connexion",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // An unknown or absent value never blocks the start: English is used.
+    for value in [
+        serde_json::json!({}),
+        serde_json::json!({ "language": null }),
+        serde_json::json!({ "language": "xx" }),
+    ] {
+        let preferences: AppConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(preferences.language, crate::i18n::Language::En);
+    }
+}
+
+#[test]
+fn language_is_chosen_in_the_application_saved_and_applied_at_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let mut m = english();
+    // The action is found in either language, whichever one is displayed.
+    for words in ["language", "langue"] {
+        m.key(key(KeyCode::F(2)));
+        typing(&mut m, words);
+        assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+        assert!(matches!(m.view, View::Language { selected: 0 }), "{words}");
+        m.key(key(KeyCode::Esc));
+        assert!(matches!(m.view, View::List));
+    }
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "language");
+    m.key(key(KeyCode::Enter));
+    let text = screen(&mut m, 100, 24);
+    for expected in [
+        // The title is readable from both languages.
+        "Language / Langue de l'interface",
+        "▶✓ English",
+        "   Français",
+        "Enter: save",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // Cancelling changes nothing, on screen or on disk.
+    m.key(key(KeyCode::Down));
+    m.key(key(KeyCode::Esc));
+    assert_eq!(m.preferences.language, crate::i18n::Language::En);
+    assert!(!root.join("config.json").exists());
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "language");
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Down));
+    let Action::Language(language) = m.key(key(KeyCode::Enter)) else {
+        panic!("Enter applies the selected language")
+    };
+    assert_eq!(language, crate::i18n::Language::Fr);
+    save_language(&mut m, root, language).unwrap();
+    assert!(matches!(m.view, View::List));
+    let text = screen(&mut m, 120, 24);
+    assert!(
+        text.contains("● Hôtes") && text.contains("F2 : actions"),
+        "{text}"
+    );
+    // Texts kept in the model follow as well.
+    m.key(key(KeyCode::Char('/')));
+    assert!(
+        screen(&mut m, 120, 24).contains("Mots, tag:"),
+        "placeholder"
+    );
+    assert_eq!(
+        AppConfig::load(root).unwrap().language,
+        crate::i18n::Language::Fr
+    );
+    let saved = std::fs::read_to_string(root.join("config.json")).unwrap();
+    assert!(saved.contains("\"language\": \"fr\""), "{saved}");
+}
+
+#[test]
+fn both_languages_draw_every_screen_and_keep_the_legend_whole() {
+    use unicode_width::UnicodeWidthStr;
+    for language in crate::i18n::Language::ALL {
+        let openers: [&[KeyCode]; 8] = [
+            &[],
+            &[KeyCode::F(2)],
+            &[KeyCode::F(1)],
+            &[KeyCode::Char('i')],
+            &[KeyCode::Char('e')],
+            &[KeyCode::Char('f')],
+            &[KeyCode::Char('g')],
+            &[KeyCode::Char('v')],
+        ];
+        for keys in openers {
+            let preferences = AppConfig {
+                language,
+                ..AppConfig::default()
+            };
+            let mut m = Model::new(hosts(), preferences, BTreeMap::new(), false);
+            m.search_focus = false;
+            for code in keys {
+                m.key(key(*code));
+            }
+            for (width, height) in [(80, 24), (40, 12)] {
+                let text = screen(&mut m, width, height);
+                assert!(
+                    text.lines().all(|row| row.width() <= usize::from(width)),
+                    "{language:?} {keys:?} {width}: {text}"
+                );
+            }
+            // The list legend is never cut: a row ends with a whole word.
+            if keys.is_empty() {
+                let text = screen(&mut m, 80, 24);
+                let legend = text.lines().rev().find(|row| row.contains("F2")).unwrap();
+                let end = crate::t!("quit", "quitter");
+                assert!(legend.trim_end().ends_with(end), "{language:?}: {legend}");
+            }
+        }
+    }
 }

@@ -58,7 +58,7 @@ fn groups_preferences_default_null_and_strict_enum() {
 fn groups_tree_primary_tags_distinct_paths_no_duplicate_hosts() {
     let mut m = model("file_tags");
     let text = screen(&mut m, 120, 30);
-    for label in ["/one/config", "/two/config", "own", "inherited", "Sans tag"] {
+    for label in ["/one/config", "/two/config", "own", "inherited", "No tag"] {
         assert!(text.contains(label), "missing {label}: {text}");
     }
     // Two file headers + three tags + three concrete hosts.

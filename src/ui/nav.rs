@@ -101,7 +101,10 @@ impl Confirm {
             Span::raw("  "),
             button(proceed, self.proceed),
         ]));
-        let hint = format!("Tab/←→ : choisir • Entrée : valider • Échap : {stay}");
+        let hint = crate::tf!(
+            "Tab/←→: choose • Enter: confirm • Esc: {stay}",
+            "Tab/←→ : choisir • Entrée : valider • Échap : {stay}"
+        );
         let width = lines
             .iter()
             .map(Line::width)

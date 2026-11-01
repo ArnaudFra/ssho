@@ -182,9 +182,16 @@ pub(super) fn path_labels(paths: &[PathBuf], width: u16) -> Vec<String> {
 /// Number of hosts declared in a file, worded for the detail zone.
 pub(super) fn host_count(hosts: usize) -> String {
     match hosts {
-        0 => "aucun hôte : fichier vide ou sans bloc Host".to_owned(),
-        1 => "1 hôte dans ce fichier".to_owned(),
-        hosts => format!("{hosts} hôtes dans ce fichier"),
+        0 => crate::t!(
+            "no host: empty file or no Host block",
+            "aucun hôte : fichier vide ou sans bloc Host"
+        )
+        .to_owned(),
+        1 => crate::t!("1 host in this file", "1 hôte dans ce fichier").to_owned(),
+        hosts => crate::tf!(
+            "{hosts} hosts in this file",
+            "{hosts} hôtes dans ce fichier"
+        ),
     }
 }
 
@@ -263,14 +270,14 @@ pub(super) fn draw(f: &mut Frame, area: Rect, spec: Spec) {
     );
     f.render_widget(Paragraph::new(spec.subject).style(gray), parts[1]);
     if let Some(query) = spec.query {
-        let prompt = "Rechercher : ";
+        let prompt = crate::t!("Search: ", "Rechercher : ");
         let prompt_width = prompt.width() as u16;
         let (text, cursor) = query.viewport(
             true,
             usize::from(parts[2].width.saturating_sub(prompt_width)),
         );
         let hint = if query.value.is_empty() {
-            "taper pour réduire la liste".to_owned()
+            crate::t!("type to narrow the list", "taper pour réduire la liste").to_owned()
         } else {
             text
         };
@@ -322,7 +329,7 @@ pub(super) fn draw(f: &mut Frame, area: Rect, spec: Spec) {
                 text.push_str(&item.aside);
             }
             if item.current && text.width() + 10 <= width {
-                text.push_str("  (actuel)");
+                text.push_str(crate::t!("  (current)", "  (actuel)"));
             }
             Line::styled(
                 text,
@@ -339,7 +346,10 @@ pub(super) fn draw(f: &mut Frame, area: Rect, spec: Spec) {
             Paragraph::new(if spec.items.is_empty() {
                 spec.empty
             } else {
-                "Aucun choix ne correspond à la recherche."
+                crate::t!(
+                    "No choice matches the search.",
+                    "Aucun choix ne correspond à la recherche."
+                )
             })
             .style(gray),
             parts[3],
@@ -358,11 +368,12 @@ pub(super) fn draw(f: &mut Frame, area: Rect, spec: Spec) {
         .unwrap_or_default();
     f.render_widget(Paragraph::new(detail).wrap(Wrap { trim: false }), parts[4]);
     f.render_widget(Paragraph::new(errors).wrap(Wrap { trim: false }), parts[5]);
-    let keys = format!(
+    let keys = crate::tf!(
+        "↑↓ choose (wraps) • Enter: {} • Esc: cancel, nothing changes{}",
         "↑↓ choisir (boucle) • Entrée : {} • Échap : annuler, rien ne change{}",
         spec.apply,
         if spec.query.is_some() {
-            " • lettres : rechercher"
+            crate::t!(" • letters: search", " • lettres : rechercher")
         } else {
             ""
         }
@@ -371,7 +382,11 @@ pub(super) fn draw(f: &mut Frame, area: Rect, spec: Spec) {
         Paragraph::new(if keys.width() <= width {
             keys
         } else {
-            format!("↑↓ • Entrée : {} • Échap", spec.apply)
+            crate::tf!(
+                "↑↓ • Enter: {} • Esc",
+                "↑↓ • Entrée : {} • Échap",
+                spec.apply
+            )
         })
         .style(gray),
         parts[6],

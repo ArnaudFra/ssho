@@ -5,12 +5,12 @@ use crate::storage::default_host_columns;
 impl HostColumn {
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Name => "Name",
-            Self::Hostname => "Hostname",
-            Self::User => "User",
+            Self::Name => crate::t!("Name", "Nom"),
+            Self::Hostname => crate::t!("Hostname", "Adresse"),
+            Self::User => crate::t!("User", "Utilisateur"),
             Self::Port => "Port",
             Self::Tags => "Tags",
-            Self::LastAttempt => "Last Attempt",
+            Self::LastAttempt => crate::t!("Last Attempt", "Dernière tentative"),
         }
     }
     fn minimum(self) -> u16 {
@@ -81,7 +81,15 @@ pub(super) struct Editor {
     pub button: Option<usize>,
 }
 /// Moving a column is its own action, distinct from choosing a row.
-pub(super) const ACTIONS: [&str; 5] = ["Move up", "Move down", "Reset", "Apply", "Cancel"];
+pub(super) fn actions() -> [&'static str; 5] {
+    [
+        crate::t!("Move up", "Monter"),
+        crate::t!("Move down", "Descendre"),
+        crate::t!("Reset", "Réinitialiser"),
+        crate::t!("Apply", "Appliquer"),
+        crate::t!("Cancel", "Annuler"),
+    ]
+}
 impl Editor {
     pub(super) fn items(&self) -> Vec<HostColumn> {
         self.draft
@@ -132,13 +140,13 @@ pub(super) fn key(m: &mut Model, key: KeyEvent) -> Action {
         KeyCode::Tab => {
             editor.button = match editor.button {
                 None => Some(0),
-                Some(button) if button + 1 < ACTIONS.len() => Some(button + 1),
+                Some(button) if button + 1 < actions().len() => Some(button + 1),
                 Some(_) => None,
             };
         }
         KeyCode::BackTab => {
             editor.button = match editor.button {
-                None => Some(ACTIONS.len() - 1),
+                None => Some(actions().len() - 1),
                 Some(0) => None,
                 Some(button) => Some(button - 1),
             };
@@ -147,7 +155,7 @@ pub(super) fn key(m: &mut Model, key: KeyEvent) -> Action {
             let delta = if key.code == KeyCode::Left { -1 } else { 1 };
             editor.button = editor
                 .button
-                .map(|button| nav::wrap(button, ACTIONS.len(), delta));
+                .map(|button| nav::wrap(button, actions().len(), delta));
         }
         KeyCode::Up if shift => {
             if editor.selected > 1 && editor.selected < editor.draft.len() {

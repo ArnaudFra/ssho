@@ -166,10 +166,10 @@ fn ui_search_display_hidden_and_source_compose() {
     assert!(text.contains("%inherited"), "{text}");
     assert!(text.contains("#own"));
     assert!(
-        text.contains("Fichier : ") && text.contains("(C/F2 : tous les fichiers)"),
+        text.contains("File: ") && text.contains("(C/F2: all files)"),
         "{text}"
     );
-    assert!(text.contains("Masqués visibles (H)"), "{text}");
+    assert!(text.contains("Hidden shown (H)"), "{text}");
     m.search_focus = false;
     m.key(key(KeyCode::Char('H')));
     assert!(m.visible.is_empty());
@@ -189,7 +189,7 @@ fn ui_reload_warning_is_durable_and_failed_reload_keeps_it() {
     for (w, h) in [(120, 30), (60, 10)] {
         let text = screen(&mut m, w, h);
         assert!(text.contains("FileTags"), "{text}");
-        assert!(text.contains("Fichier") && text.contains("C/F2"), "{text}");
+        assert!(text.contains("File") && text.contains("C/F2"), "{text}");
     }
     fs::remove_file(&root).unwrap();
     assert!(reload_hosts(&inspector, &mut m, &root).is_err());

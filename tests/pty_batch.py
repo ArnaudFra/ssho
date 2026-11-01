@@ -93,7 +93,7 @@ try:
  send(b'\x1b');send(b'\r');expect('Batch active')
  # Leaving the results keeps the batch running; quitting from the list is confirmed.
  send(b'B');expect('Running');send(b'q');expect('?: help')
- send(b'q');expect('Lot en cours');send(b'\r');expect('?: help')
+ send(b'q');expect('Running batch');send(b'\r');expect('?: help')
  send(b'B');expect('Running')
  send(b's');expect('Cancelled');send(b'q');expect('?: help');send(b'q')
  assert process.wait(timeout=5)==0

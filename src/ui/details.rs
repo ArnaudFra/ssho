@@ -51,14 +51,20 @@ pub(super) fn split(state: &mut State, viewport_width: u16, area: Rect) -> (Rect
 pub(super) fn narrow_hint(width: u16, search_focus: bool) -> &'static str {
     if width >= 65 {
         if search_focus {
-            "Details hidden (<110 columns) • Tab: table, then i: info • F4: disable"
+            crate::t!(
+                "Details hidden (<110 columns) • Tab: table, then i: info • F4: disable",
+                "Détails masqués (<110 colonnes) • Tab : tableau, puis i : fiche • F4 : désactiver"
+            )
         } else {
-            "Details hidden (<110 columns) • i: info • F4: disable"
+            crate::t!(
+                "Details hidden (<110 columns) • i: info • F4: disable",
+                "Détails masqués (<110 colonnes) • i : fiche • F4 : désactiver"
+            )
         }
     } else if search_focus {
-        "Tab: table • i: info"
+        crate::t!("Tab: table • i: info", "Tab : tableau • i : fiche")
     } else {
-        "i: info • F4: disable"
+        crate::t!("i: info • F4: disable", "i : fiche • F4 : désactiver")
     }
 }
 
@@ -75,13 +81,24 @@ pub(super) fn content(
         .map(|value| value.host(declared));
     let host = projected.as_ref().unwrap_or(declared);
     let resolution = match effective {
-        None => "Pending (showing declared values)".into(),
-        Some(Ok(_)) => "Resolved via ssh -G (effective values)".into(),
-        Some(Err(error)) => format!("Error: {error} (showing declared values)"),
+        None => crate::t!(
+            "Pending (showing declared values)",
+            "En attente (valeurs déclarées affichées)"
+        )
+        .into(),
+        Some(Ok(_)) => crate::t!(
+            "Resolved via ssh -G (effective values)",
+            "Résolue par ssh -G (valeurs effectives)"
+        )
+        .into(),
+        Some(Err(error)) => crate::tf!(
+            "Error: {error} (showing declared values)",
+            "Erreur : {error} (valeurs déclarées affichées)"
+        ),
     };
     let optional = |value: &str| {
         if value.is_empty() {
-            "Not set".to_string()
+            crate::t!("Not set", "Non défini").to_string()
         } else {
             value.to_string()
         }
@@ -93,34 +110,49 @@ pub(super) fn content(
     identities.extend(host.extra_identities.iter().cloned());
     let scope = diagnostic
         .map(|result| result.method.scope())
-        .unwrap_or("Not checked");
+        .unwrap_or(crate::t!("Not checked", "Non vérifié"));
     let diagnostic = diagnostic
         .map(|result| {
             let status = format!("{} • {}", result.method.label(), result.status.label());
-            let latency = format!("diagnostic {} ms", result.duration.as_millis());
+            let latency = crate::tf!(
+                "diagnostic {} ms",
+                "diagnostic {} ms",
+                result.duration.as_millis()
+            );
             result
                 .error
                 .as_ref()
-                .map(|error| format!("{status} ({latency})\nCause: {error}"))
+                .map(|error| {
+                    crate::tf!(
+                        "{status} ({latency})\nCause: {error}",
+                        "{status} ({latency})\nCause : {error}"
+                    )
+                })
                 .unwrap_or_else(|| format!("{status} ({latency})"))
         })
-        .unwrap_or_else(|| "? Unknown (not checked)".into());
+        .unwrap_or_else(|| crate::t!("? Unknown (not checked)", "? Inconnu (non vérifié)").into());
     // Grouped by what the value tells: who the host is, what OpenSSH resolves,
     // what the file declares, what was measured and what was attempted. An
     // attempt, an exit code 0, an availability state and an authentication are
     // different facts and keep their own lines.
     let summary = vec![
-        ("Host", host.name.clone()),
-        ("Hostname/IP", optional(&host.hostname)),
-        ("User", optional(&host.user)),
+        (label::host(), host.name.clone()),
+        (label::hostname(), optional(&host.hostname)),
+        (label::user(), optional(&host.user)),
         ("Port", optional(&host.port)),
-        ("Aliases", optional(&host.aliases.join(", "))),
-        ("Tags", optional(&host.display_tags())),
-        ("Personal note", optional(note)),
+        (
+            crate::t!("Aliases", "Alias"),
+            optional(&host.aliases.join(", ")),
+        ),
+        (label::tags(), optional(&host.display_tags())),
+        (label::note(), optional(note)),
     ];
     let resolved = vec![
         ("Configuration", resolution),
-        ("Identity File", optional(&identities.join("\n"))),
+        (
+            crate::t!("Identity File", "Fichier d'identité"),
+            optional(&identities.join("\n")),
+        ),
         ("ProxyJump", optional(&host.proxy_jump)),
         ("ProxyCommand", optional(&host.proxy_command)),
         ("RemoteCommand", optional(&host.remote_command)),
@@ -128,11 +160,11 @@ pub(super) fn content(
     ];
     let declaration = vec![
         (
-            "Declared source",
+            label::source(),
             format!("{}:{}", host.source_file.display(), host.line_number),
         ),
         (
-            "Declared target",
+            crate::t!("Declared target", "Cible déclarée"),
             format!(
                 "hostname={} user={} port={}",
                 optional(&declared.hostname),
@@ -140,42 +172,56 @@ pub(super) fn content(
                 optional(&declared.port)
             ),
         ),
-        ("Declared SSH Options", optional(&declared.options)),
+        (
+            crate::t!("Declared SSH Options", "Options SSH déclarées"),
+            optional(&declared.options),
+        ),
     ];
     let availability = vec![
-        ("Diagnostic", diagnostic),
-        ("Availability scope", scope.into()),
+        (crate::t!("Diagnostic", "Diagnostic"), diagnostic),
+        (
+            crate::t!("Availability scope", "Portée de la disponibilité"),
+            scope.into(),
+        ),
     ];
     let mut attempts = vec![];
     if let Some(history) = history {
         attempts.push((
-            "Last attempt",
-            format!(
+            crate::t!("Last attempt", "Dernière tentative"),
+            crate::tf!(
                 "{} ({} attempts)",
-                history.last_connect, history.connect_count
+                "{} ({} tentatives)",
+                history.last_connect,
+                history.connect_count
             ),
         ));
         if let Some(result) = &history.last_result {
             attempts.push((
-                "Process result",
+                crate::t!("Process result", "Résultat du processus"),
                 format!(
                     "{}: {}",
                     result.completed_at,
                     result
                         .exit_code
-                        .map(|code| format!("SSH exit {code}"))
+                        .map(|code| crate::tf!("SSH exit {code}", "SSH a fini avec le code {code}"))
                         .unwrap_or_else(|| result
                             .launch_error
                             .clone()
-                            .unwrap_or_else(|| "unknown".into()))
+                            .unwrap_or_else(|| crate::t!("unknown", "inconnu").into()))
                 ),
             ));
         }
         if let Some(time) = history.last_successful_completion {
-            attempts.push(("Last exit 0 completion", time.to_string()));
+            attempts.push((
+                crate::t!("Last exit 0 completion", "Dernière fin avec code 0"),
+                time.to_string(),
+            ));
         }
     } else {
-        attempts.push(("Last attempt", "aucune connexion enregistrée".into()));
+        attempts.push((
+            crate::t!("Last attempt", "Dernière tentative"),
+            crate::t!("no recorded connection", "aucune connexion enregistrée").into(),
+        ));
     }
     let title = |text: &str| {
         // Two spans: a title is never a continuation of the field above it.
@@ -190,11 +236,23 @@ pub(super) fn content(
         ])
     };
     [
-        ("Résumé", summary),
-        ("Configuration effective", resolved),
-        ("Déclaration et source", declaration),
-        ("Disponibilité mesurée", availability),
-        ("Historique des connexions", attempts),
+        (crate::t!("Summary", "Résumé"), summary),
+        (
+            crate::t!("Effective configuration", "Configuration effective"),
+            resolved,
+        ),
+        (
+            crate::t!("Declaration and source", "Déclaration et source"),
+            declaration,
+        ),
+        (
+            crate::t!("Measured availability", "Disponibilité mesurée"),
+            availability,
+        ),
+        (
+            crate::t!("Connection history", "Historique des connexions"),
+            attempts,
+        ),
     ]
     .into_iter()
     .flat_map(|(section, fields)| {
@@ -219,7 +277,37 @@ pub(super) fn content(
 }
 
 /// Named actions of the host sheet, in the order Tab walks them.
-pub(super) const SHEET_ACTIONS: [&str; 5] = ["Connexion", "Modifier", "Note", "Copier", "Fermer"];
+pub(super) fn sheet_actions() -> [&'static str; 5] {
+    [
+        crate::t!("Connect", "Connexion"),
+        crate::t!("Edit", "Modifier"),
+        "Note",
+        crate::t!("Copy", "Copier"),
+        crate::t!("Close", "Fermer"),
+    ]
+}
+
+/// Field labels of the sheet, shared with the search highlighting.
+pub(super) mod label {
+    pub(in crate::ui) fn host() -> &'static str {
+        crate::t!("Host", "Hôte")
+    }
+    pub(in crate::ui) fn hostname() -> &'static str {
+        crate::t!("Hostname/IP", "Adresse/IP")
+    }
+    pub(in crate::ui) fn user() -> &'static str {
+        crate::t!("User", "Utilisateur")
+    }
+    pub(in crate::ui) fn tags() -> &'static str {
+        "Tags"
+    }
+    pub(in crate::ui) fn note() -> &'static str {
+        crate::t!("Personal note", "Note personnelle")
+    }
+    pub(in crate::ui) fn source() -> &'static str {
+        crate::t!("Declared source", "Source déclarée")
+    }
+}
 
 /// Values worth copying from a host sheet, each under the name shown to choose it.
 pub(super) fn copyable(
@@ -232,20 +320,26 @@ pub(super) fn copyable(
     let host = projected.as_ref().unwrap_or(declared);
     let mut values = vec![
         ("Alias".to_owned(), declared.name.clone()),
-        ("Commande".to_owned(), format!("ssh {}", declared.name)),
+        (
+            crate::t!("Command", "Commande").to_owned(),
+            format!("ssh {}", declared.name),
+        ),
     ];
     if !host.hostname.is_empty() {
-        values.push(("Adresse".to_owned(), host.hostname.clone()));
+        values.push((
+            crate::t!("Address", "Adresse").to_owned(),
+            host.hostname.clone(),
+        ));
         if !host.user.is_empty() {
             values.push((
-                "Utilisateur@adresse".to_owned(),
+                crate::t!("User@address", "Utilisateur@adresse").to_owned(),
                 format!("{}@{}", host.user, host.hostname),
             ));
         }
     }
     if !declared.source_file.as_os_str().is_empty() {
         values.push((
-            "Fichier source".to_owned(),
+            crate::t!("Source file", "Fichier source").to_owned(),
             declared.source_file.display().to_string(),
         ));
     }
@@ -321,7 +415,7 @@ pub(super) fn render_rows(
 
 pub(super) fn draw(f: &mut Frame, m: &mut Model, area: Rect) {
     let border = Block::default()
-        .title("Details • F4: hide")
+        .title(crate::t!("Details • F4: hide", "Détails • F4 : masquer"))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::DarkGray));
@@ -348,14 +442,20 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model, area: Rect) {
             Some(groups::Row::Group { key, count, .. }) => {
                 render::group_content(key, *count, m.preferences.group_aliases)
             }
-            _ => vec![Line::from("No selected host")],
+            _ => vec![Line::from(crate::t!(
+                "No selected host",
+                "Aucun hôte sélectionné"
+            ))],
         });
     let lines = render::highlight_details(m, lines);
     m.details.page = usize::from(parts[0].height).max(1);
     m.details.max_scroll = render_rows(f, parts[0], lines, &mut m.details.scroll);
     f.render_widget(
-        Paragraph::new("Alt+↑/↓: scroll • Ctrl+PgUp/PgDn")
-            .style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(crate::t!(
+            "Alt+↑/↓: scroll • Ctrl+PgUp/PgDn",
+            "Alt+↑/↓ : défiler • Ctrl+PgUp/PgDn"
+        ))
+        .style(Style::default().fg(Color::DarkGray)),
         parts[1],
     );
 }

@@ -138,7 +138,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &Model, area: ratatui::layout::Rec
     m.confirm.draw(
         f,
         area,
-        "Arrêter ce tunnel ?",
+        crate::t!("Stop this tunnel?", "Arrêter ce tunnel ?"),
         vec![
             ratatui::text::Line::from(format!(
                 "#{} {} — {}",
@@ -151,12 +151,13 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &Model, area: ratatui::layout::Rec
                     .unwrap_or_default()
                     .join(" ")
             )),
-            ratatui::text::Line::from(
-                "Son processus SSH sera arrêté ; les autres tunnels continuent.",
-            ),
+            ratatui::text::Line::from(crate::t!(
+                "Its SSH process will be stopped; the other tunnels keep running.",
+                "Son processus SSH sera arrêté ; les autres tunnels continuent."
+            )),
         ],
-        "Revenir",
-        "Arrêter le tunnel",
+        crate::t!("Go back", "Revenir"),
+        crate::t!("Stop the tunnel", "Arrêter le tunnel"),
     );
 }
 fn draw_list(f: &mut ratatui::Frame, m: &Model, area: ratatui::layout::Rect) {
@@ -175,7 +176,7 @@ fn draw_list(f: &mut ratatui::Frame, m: &Model, area: ratatui::layout::Rect) {
         Constraint::Length(3),
     ])
     .split(area);
-    f.render_widget(Paragraph::new("Owned tunnels • Active = process running; forwarding readiness unverified\nEsc/q: return, tunnels keep running • s: stop selected (asks first)"), areas[0]);
+    f.render_widget(Paragraph::new(crate::t!("Owned tunnels • Active = process running; forwarding readiness unverified\nEsc/q: return, tunnels keep running • s: stop selected (asks first)", "Tunnels possédés • Actif = processus en cours ; disponibilité du transfert non vérifiée\nÉchap/q : retour, les tunnels continuent • s : arrêter la sélection (avec confirmation)")), areas[0]);
     let rows = m.tunnels.iter().map(|r| {
         Row::new(vec![
             r.id.to_string(),
@@ -183,13 +184,13 @@ fn draw_list(f: &mut ratatui::Frame, m: &Model, area: ratatui::layout::Rect) {
             r.snapshot
                 .profile
                 .clone()
-                .unwrap_or_else(|| "(draft)".into()),
+                .unwrap_or_else(|| crate::t!("(draft)", "(brouillon)").into()),
             r.snapshot.forward.ssh_args().unwrap_or_default().join(" "),
             match r.state {
-                State::Active => "Active",
-                State::Completed => "Completed",
-                State::Failed => "Error",
-                State::Stopped => "Stopped",
+                State::Active => crate::t!("Active", "Actif"),
+                State::Completed => crate::t!("Completed", "Terminé"),
+                State::Failed => crate::t!("Error", "Erreur"),
+                State::Stopped => crate::t!("Stopped", "Arrêté"),
             }
             .to_owned(),
         ])
@@ -206,15 +207,15 @@ fn draw_list(f: &mut ratatui::Frame, m: &Model, area: ratatui::layout::Rect) {
     )
     .header(Row::new([
         "ID",
-        "Host",
-        "Profile snapshot",
+        crate::t!("Host", "Hôte"),
+        crate::t!("Profile snapshot", "Profil au lancement"),
         "Ports",
-        "State",
+        crate::t!("State", "État"),
     ]))
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Owned tunnels"),
+            .title(crate::t!("Owned tunnels", "Tunnels possédés")),
     )
     .row_highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan));
     f.render_stateful_widget(
@@ -222,7 +223,7 @@ fn draw_list(f: &mut ratatui::Frame, m: &Model, area: ratatui::layout::Rect) {
         nav::bounded(areas[1], nav::TABLE_WIDTH),
         &mut TableState::default().with_selected(Some(selected)),
     );
-    let detail = m.tunnels.get(selected).map(|r| format!("Config at launch: {}\nExit: {}\n{}", r.snapshot.config.display(), r.exit_code.map_or_else(|| "pending".into(), |n| n.to_string()), r.diagnostic)).unwrap_or_else(|| "No owned tunnels. Choose Tunnel only (Ctrl+T) in a forwarding form, then Ctrl+L to start.".into());
+    let detail = m.tunnels.get(selected).map(|r| crate::tf!("Config at launch: {}\nExit: {}\n{}", "Configuration au lancement : {}\nCode de fin : {}\n{}", r.snapshot.config.display(), r.exit_code.map_or_else(|| crate::t!("pending", "en attente").into(), |n| n.to_string()), r.diagnostic)).unwrap_or_else(|| crate::t!("No owned tunnels. Choose Tunnel only (Ctrl+T) in a forwarding form, then Ctrl+L to start.", "Aucun tunnel possédé. Choisissez Tunnel seul (Ctrl+T) dans un formulaire de transfert, puis Ctrl+L pour démarrer.").into());
     f.render_widget(Paragraph::new(detail).wrap(Wrap { trim: false }), areas[2]);
     f.render_widget(
         Paragraph::new(m.error.as_str())

@@ -71,7 +71,7 @@ impl State {
         let mut state = Self {
             scope,
             query: Input {
-                placeholder: "nom ou mot-clé".into(),
+                placeholder: crate::t!("name or keyword", "nom ou mot-clé").into(),
                 limit: 64,
                 ..Input::default()
             },
@@ -92,9 +92,10 @@ impl State {
             .into_iter()
             .filter(|action| self.scope.offers(*action))
             .filter(|action| {
+                // Either language finds an action, whatever is displayed.
+                let (english, french) = action.labels();
                 let text = fold(&format!(
-                    "{} {} {}",
-                    action.label(),
+                    "{english} {french} {} {}",
                     action.category().label(),
                     action.keywords()
                 ));
@@ -203,7 +204,14 @@ impl Model {
     /// Current value of a toggle or a count, shown in the State column.
     fn action_state(&self, action: PaletteAction) -> String {
         use PaletteAction as A;
-        let on = |active: bool| if active { "activé" } else { "" }.to_owned();
+        let on = |active: bool| {
+            if active {
+                crate::t!("on", "activé")
+            } else {
+                ""
+            }
+            .to_owned()
+        };
         match action {
             A::FavoritesOnly => on(self.favorites_only),
             A::ToggleHidden => on(self.show_hidden),
@@ -212,7 +220,7 @@ impl Model {
             A::SortName => on(!self.recent),
             A::SortRecent => on(self.recent),
             A::Availability => self.preferences.availability_method.label().to_owned(),
-            A::GroupMode => groups::MODES
+            A::GroupMode => groups::modes()
                 .iter()
                 .find(|(mode, _)| *mode == self.preferences.group_mode)
                 .map_or(String::new(), |(_, label)| (*label).to_owned()),
@@ -230,14 +238,16 @@ impl Model {
                 if active == 0 {
                     String::new()
                 } else {
-                    format!("{active} actif(s)")
+                    crate::tf!("{active} active", "{active} actif(s)")
                 }
             }
             A::BatchOpen | A::BatchClear => match self.batch.marks.len() {
                 0 => String::new(),
-                marks => format!("{marks} cible(s)"),
+                marks => crate::tf!("{marks} target(s)", "{marks} cible(s)"),
             },
-            A::BatchResults if self.batch.manager.has_active() => "en cours".to_owned(),
+            A::BatchResults if self.batch.manager.has_active() => {
+                crate::t!("running", "en cours").to_owned()
+            }
             _ => String::new(),
         }
     }
@@ -273,9 +283,15 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model, area: Rect) {
     );
     f.render_widget(Clear, area);
     let title = match (&host, state.scope) {
-        (_, Scope::Draft) => "Actions — brouillon conservé".to_owned(),
-        (Some(host), _) => format!("Actions — {}", host.name),
-        (None, _) => "Actions — aucun hôte sélectionné".to_owned(),
+        (_, Scope::Draft) => {
+            crate::t!("Actions — draft kept", "Actions — brouillon conservé").to_owned()
+        }
+        (Some(host), _) => crate::tf!("Actions — {}", "Actions — {}", host.name),
+        (None, _) => crate::t!(
+            "Actions — no host selected",
+            "Actions — aucun hôte sélectionné"
+        )
+        .to_owned(),
     };
     let border = Block::default()
         .title(title)
@@ -298,7 +314,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model, area: Rect) {
     ])
     .split(inner);
     let prompt = if inner.width >= 50 {
-        "Rechercher une action : "
+        crate::t!("Search an action: ", "Rechercher une action : ")
     } else {
         "> "
     };
@@ -394,16 +410,23 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model, area: Rect) {
         .with_offset(offset);
     if entries.is_empty() {
         f.render_widget(
-            Paragraph::new("Aucune action ne correspond. Effacez la recherche pour tout voir.")
-                .style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(crate::t!(
+                "No action matches. Clear the search to see them all.",
+                "Aucune action ne correspond. Effacez la recherche pour tout voir."
+            ))
+            .style(Style::default().fg(Color::DarkGray)),
             parts[1],
         );
     } else {
         f.render_stateful_widget(
             Table::new(rows, widths)
                 .header(
-                    Row::new(["  Action", "Raccourci", "État"])
-                        .style(Style::default().fg(Color::DarkGray)),
+                    Row::new([
+                        "  Action",
+                        crate::t!("Shortcut", "Raccourci"),
+                        crate::t!("State", "État"),
+                    ])
+                    .style(Style::default().fg(Color::DarkGray)),
                 )
                 .highlight_symbol("▶")
                 .row_highlight_style(
@@ -419,9 +442,12 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model, area: Rect) {
     let explanation = match state.selected.filter(|action| entries.contains(action)) {
         Some(action) => match action.availability(&context) {
             Err(reason) if state.notice.is_some() => {
-                format!("Indisponible : {reason}. Rien n'a été lancé.")
+                crate::tf!(
+                    "Unavailable: {reason}. Nothing was run.",
+                    "Indisponible : {reason}. Rien n'a été lancé."
+                )
             }
-            Err(reason) => format!("Indisponible : {reason}."),
+            Err(reason) => crate::tf!("Unavailable: {reason}.", "Indisponible : {reason}."),
             Ok(()) => action.description().to_owned(),
         },
         None => String::new(),
@@ -432,9 +458,12 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model, area: Rect) {
     );
     f.render_widget(
         Paragraph::new(if inner.width >= 66 {
-            "↑↓ Choisir (boucle) • Entrée Lancer • Échap Retour • lettres : rechercher"
+            crate::t!(
+                "↑↓ Choose (wraps) • Enter Run • Esc Back • letters: search",
+                "↑↓ Choisir (boucle) • Entrée Lancer • Échap Retour • lettres : rechercher"
+            )
         } else {
-            "↑↓ • Entrée • Échap"
+            crate::t!("↑↓ • Enter • Esc", "↑↓ • Entrée • Échap")
         })
         .style(Style::default().fg(Color::DarkGray)),
         parts[3],

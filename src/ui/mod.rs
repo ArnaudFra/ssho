@@ -77,6 +77,10 @@ enum View {
     Availability {
         selected: usize,
     },
+    /// Interface language; each choice is named in its own language.
+    Language {
+        selected: usize,
+    },
     List,
     Keys(keys::Editor),
     Batch(batch::Editor),
@@ -149,7 +153,7 @@ impl View {
             ),
             // Entry 0 is "all files"; entry `n` is `files[n - 1]`.
             View::SourceFiles { files, .. } => Some(
-                std::iter::once("tous les fichiers".to_owned())
+                std::iter::once(crate::t!("all files", "tous les fichiers").to_owned())
                     .chain(files.iter().map(|path| path.display().to_string()))
                     .collect(),
             ),
@@ -183,6 +187,7 @@ impl View {
 enum Action {
     Columns(Vec<HostColumn>),
     Availability(AvailabilityMethod),
+    Language(crate::i18n::Language),
     None,
     OpenKeys(bool),
     RefreshKeys,
@@ -295,6 +300,8 @@ impl Model {
         history: BTreeMap<String, ConnectionInfo>,
         force_search: bool,
     ) -> Self {
+        // Texts kept in the model, such as placeholders, are built in its language.
+        crate::i18n::set(preferences.language);
         let search_focus = force_search || preferences.focus_search_on_start;
         let mut m = Self {
             keys: keys::State::default(),
@@ -308,7 +315,7 @@ impl Model {
             selected: 0,
             offset: 0,
             query: Input {
-                placeholder: "Search words, tag:, user:, file:, is:...".into(),
+                placeholder: search_placeholder().into(),
                 limit: 1024,
                 ..Input::default()
             },
@@ -630,15 +637,32 @@ impl Model {
         // A short confirmation in words; it leaves with the next key.
         self.hint = match action {
             Action::Save(None, host, target) => {
-                format!("✓ Added {} to {}", host.name, target.display())
+                crate::tf!(
+                    "✓ Added {} to {}",
+                    "✓ {} ajouté à {}",
+                    host.name,
+                    target.display()
+                )
             }
-            Action::Save(Some(_), host, _) => format!("✓ Saved {}", host.name),
+            Action::Save(Some(_), host, _) => {
+                crate::tf!("✓ Saved {}", "✓ {} enregistré", host.name)
+            }
             Action::SaveCopy(host, target) => {
-                format!("✓ Copied to {} in {}", host.name, target.display())
+                crate::tf!(
+                    "✓ Copied to {} in {}",
+                    "✓ Copié vers {} dans {}",
+                    host.name,
+                    target.display()
+                )
             }
-            Action::Delete(host) => format!("✓ Deleted {}", host.name),
+            Action::Delete(host) => crate::tf!("✓ Deleted {}", "✓ {} supprimé", host.name),
             Action::MoveTo(host, target) => {
-                format!("✓ Moved {} to {}", host.name, target.display())
+                crate::tf!(
+                    "✓ Moved {} to {}",
+                    "✓ {} déplacé vers {}",
+                    host.name,
+                    target.display()
+                )
             }
             _ => String::new(),
         };
@@ -653,14 +677,21 @@ impl Model {
         self.discard = false;
         self.error.clear();
         self.connection_result = match result {
-            Ok(code) => format!("SSH exit {code}: {name}"),
-            Err(error) => format!("SSH failed: {error:#} ({name})"),
+            Ok(code) => crate::tf!(
+                "SSH exit {code}: {name}",
+                "SSH a fini avec le code {code} : {name}"
+            ),
+            Err(error) => crate::tf!(
+                "SSH failed: {error:#} ({name})",
+                "Échec de SSH : {error:#} ({name})"
+            ),
         };
         match history {
             Ok(history) => self.history = history.connections,
-            Err(error) => self
-                .connection_result
-                .push_str(&format!(" • History: {error:#}")),
+            Err(error) => self.connection_result.push_str(&crate::tf!(
+                " • History: {error:#}",
+                " • Historique : {error:#}"
+            )),
         }
     }
     fn navigate(&mut self, delta: isize) {
@@ -803,6 +834,8 @@ impl Model {
         if matches!(k.kind, KeyEventKind::Release) {
             return Action::None;
         }
+        // Texts built while handling the key use the language of this model.
+        crate::i18n::set(self.preferences.language);
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         self.hint.clear();
         if !matches!(self.view, View::Active { .. }) {
@@ -934,6 +967,22 @@ impl Model {
                     select::Outcome::Stay => Action::None,
                 };
             }
+            View::Language { selected } => {
+                let texts: Vec<String> = crate::i18n::Language::ALL
+                    .iter()
+                    .map(|language| language.name().to_owned())
+                    .collect();
+                return match select::key(selected, &texts, None, k) {
+                    select::Outcome::Cancel => {
+                        self.back();
+                        Action::None
+                    }
+                    select::Outcome::Apply => {
+                        Action::Language(crate::i18n::Language::ALL[*selected])
+                    }
+                    select::Outcome::Stay => Action::None,
+                };
+            }
             View::GroupMode { .. } => return groups::key(self, k),
             View::Profiles(_) => return self.profile_key(k),
             View::Active { .. } => return self.active_key(k),
@@ -999,7 +1048,7 @@ impl Model {
                     return Action::Reload;
                 }
                 let host = h.clone();
-                let buttons = details::SHEET_ACTIONS.len();
+                let buttons = details::sheet_actions().len();
                 match k.code {
                     // Reading never edits: Enter only runs the action that Tab
                     // or the arrows put the focus on.
@@ -1015,9 +1064,11 @@ impl Model {
                     }
                     KeyCode::Enter => match self.sheet_focus {
                         None => {
-                            self.hint =
+                            self.hint = crate::t!(
+                                "Tab or ←/→: choose an action — Enter alone changes nothing",
                                 "Tab ou ←/→ : choisir une action — Entrée seule ne modifie rien"
-                                    .into();
+                            )
+                            .into();
                         }
                         Some(0) => return Action::Connect(host.name, None),
                         Some(1) => self.open_view(View::Host(Box::new(HostForm::edit(host)))),
@@ -1172,8 +1223,9 @@ impl Model {
             if self.quit_key(k) {
                 return Action::Quit;
             }
-            self.hint = format!(
-                "Esc ne quitte pas la liste — {} : quitter",
+            self.hint = crate::tf!(
+                "Esc does not quit the list — {}: quit",
+                "Échap ne quitte pas la liste — {} : quitter",
                 self.keymap().keys(PaletteAction::Quit).join(" / ")
             );
         } else if let Some(action) = self.keymap().action(&key_name(k)) {
@@ -1259,11 +1311,17 @@ impl Model {
         for conflict in self.keymap().conflicts {
             messages.push((
                 "Warning",
-                format!("Shortcut preference refused: {conflict}"),
+                crate::tf!(
+                    "Shortcut preference refused: {conflict}",
+                    "Préférence de raccourci refusée : {conflict}"
+                ),
             ));
         }
         for warning in &self.config_warnings {
-            messages.push(("Warning", format!("FileTags ignored: {warning}")));
+            messages.push((
+                "Warning",
+                crate::tf!("FileTags ignored: {warning}", "FileTags ignoré : {warning}"),
+            ));
         }
         if !self.connection_result.is_empty() {
             messages.push(("Info", self.connection_result.clone()));
@@ -1279,7 +1337,10 @@ impl Model {
             .filter(|record| record.state == runtime::tunnels::State::Active)
             .count();
         if tunnels > 0 {
-            jobs.push(format!("tunnels: {tunnels} active (F7: follow or stop)"));
+            jobs.push(crate::tf!(
+                "tunnels: {tunnels} active (F7: follow or stop)",
+                "tunnels : {tunnels} actif(s) (F7 : suivre ou arrêter)"
+            ));
         }
         if self.batch.manager.has_active() {
             use runtime::batch::State as Run;
@@ -1288,8 +1349,9 @@ impl Model {
                 .iter()
                 .filter(|record| !matches!(record.state, Run::Pending | Run::Running))
                 .count();
-            jobs.push(format!(
+            jobs.push(crate::tf!(
                 "batch: {done}/{} done ({} in the list: follow or cancel)",
+                "lot : {done}/{} terminés ({} dans la liste : suivre ou annuler)",
                 records.len(),
                 self.keymap().hint(PaletteAction::BatchOpen)
             ));
@@ -1301,7 +1363,10 @@ impl Model {
             .filter(|result| result.status == PingStatus::Connecting)
             .count();
         if probes > 0 {
-            jobs.push(format!("availability: {probes} probe(s) running"));
+            jobs.push(crate::tf!(
+                "availability: {probes} probe(s) running",
+                "disponibilité : {probes} sonde(s) en cours"
+            ));
         }
         jobs
     }
@@ -1448,9 +1513,20 @@ impl Model {
                 self.show_hidden = false;
                 self.filter(true);
             }
+            PaletteAction::Language => {
+                let selected = crate::i18n::Language::ALL
+                    .iter()
+                    .position(|language| *language == self.preferences.language)
+                    .unwrap_or(0);
+                self.open_view(View::Language { selected });
+            }
             PaletteAction::Messages => {
                 if self.messages().is_empty() {
-                    self.hint = "Messages — Aucun message à afficher".into();
+                    self.hint = crate::t!(
+                        "Messages — No message to show",
+                        "Messages — Aucun message à afficher"
+                    )
+                    .into();
                 } else {
                     self.open_view(View::Messages);
                 }
@@ -1487,7 +1563,10 @@ fn complete_saved_mutation(
     m.metadata = metadata.hosts().clone();
     m.complete_mutation(all, action);
     if let Err(error) = migration {
-        m.error = format!("SSH saved; metadata rename failed: {error:#}");
+        m.error = crate::tf!(
+            "SSH saved; metadata rename failed: {error:#}",
+            "SSH enregistré ; échec du renommage des métadonnées : {error:#}"
+        );
     }
 }
 /// Commit storage first; only successful writes reorder favorites or close the draft.
@@ -1677,7 +1756,7 @@ fn select_files(m: &mut Model, config: &Path, host: Option<Host>, seed: String) 
     if let Some(h) = &host {
         files.retain(|f| f != &h.source_file);
         if files.is_empty() {
-            anyhow::bail!("no includes found in SSH config file - move operation requires multiple config files");
+            anyhow::bail!(crate::t!("no includes found in SSH config file - move operation requires multiple config files", "aucun Include dans la configuration SSH - déplacer exige plusieurs fichiers de configuration"));
         }
     }
     if host.is_none() && files.len() <= 1 {
@@ -1704,7 +1783,11 @@ fn select_target(m: &mut Model, config: &Path) -> Result<()> {
     };
     let files = config::config_files(config)?;
     if files.len() <= 1 {
-        form.error = "Un seul fichier de configuration SSH : aucune autre destination".into();
+        form.error = crate::t!(
+            "A single SSH configuration file: no other destination",
+            "Un seul fichier de configuration SSH : aucune autre destination"
+        )
+        .into();
         return Ok(());
     }
     let selected = files
@@ -1728,12 +1811,14 @@ fn select_target(m: &mut Model, config: &Path) -> Result<()> {
 fn select_duplicate_files(m: &mut Model, config: &Path, mut source: Host) -> Result<()> {
     let effective = match m.effective.get(&source.name) {
         Some(Ok(effective)) => effective,
-        Some(Err(error)) => anyhow::bail!(
-            "Cannot duplicate: source ssh -G failed: {error}. F5 reloads; retry D afterwards."
-        ),
-        None => anyhow::bail!(
-            "Cannot duplicate yet: source ssh -G is pending. Retry D when resolution completes."
-        ),
+        Some(Err(error)) => anyhow::bail!(crate::tf!(
+            "Cannot duplicate: source ssh -G failed: {error}. F5 reloads; retry D afterwards.",
+            "Duplication impossible : ssh -G a échoué sur la source : {error}. F5 recharge ; réessayez D ensuite."
+        )),
+        None => anyhow::bail!(crate::t!(
+            "Cannot duplicate yet: source ssh -G is pending. Retry D when resolution completes.",
+            "Duplication impossible pour l'instant : ssh -G est en attente sur la source. Réessayez D une fois la résolution terminée."
+        )),
     };
     source.hostname.clone_from(&effective.hostname);
     source.user.clone_from(&effective.user);
@@ -1947,6 +2032,7 @@ pub fn run(
             }),
             Action::ToggleAliases
             | Action::Availability(_)
+            | Action::Language(_)
             | Action::GroupMode(_)
             | Action::Columns(_) => apply_preference_action(
                 &inspector,
@@ -2014,21 +2100,27 @@ pub fn run(
 fn time_ago(time: chrono::DateTime<Utc>) -> String {
     let seconds = (Utc::now() - time).num_seconds().max(1);
     let (n, unit) = if seconds < 60 {
-        (seconds, "second")
+        (seconds, crate::t!("second", "seconde"))
     } else if seconds < 3600 {
-        (seconds / 60, "minute")
+        (seconds / 60, crate::t!("minute", "minute"))
     } else if seconds < 86400 {
-        (seconds / 3600, "hour")
+        (seconds / 3600, crate::t!("hour", "heure"))
     } else if seconds < 604800 {
-        (seconds / 86400, "day")
+        (seconds / 86400, crate::t!("day", "jour"))
     } else if seconds < 2592000 {
-        (seconds / 604800, "week")
+        (seconds / 604800, crate::t!("week", "semaine"))
     } else if seconds < 31536000 {
-        (seconds / 2592000, "month")
+        (seconds / 2592000, crate::t!("month", "mois"))
     } else {
-        (seconds / 31536000, "year")
+        (seconds / 31536000, crate::t!("year", "an"))
     };
-    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+    // "mois" is already plural in French.
+    let plural = if n == 1 || unit.ends_with('s') {
+        ""
+    } else {
+        "s"
+    };
+    crate::tf!("{n} {unit}{plural} ago", "il y a {n} {unit}{plural}")
 }
 
 #[cfg(test)]
@@ -2037,6 +2129,24 @@ mod file_tags_tests;
 fn save_availability(m: &mut Model, root: &Path, method: AvailabilityMethod) -> Result<()> {
     let preferences = AppConfig::update(root, |config| config.availability_method = method)?;
     m.preferences = preferences;
+    m.error.clear();
+    m.back();
+    Ok(())
+}
+
+fn search_placeholder() -> &'static str {
+    crate::t!(
+        "Search words, tag:, user:, file:, is:...",
+        "Mots, tag:, user:, file:, is:..."
+    )
+}
+
+/// The language is a preference like the others: saved first, then adopted.
+fn save_language(m: &mut Model, root: &Path, language: crate::i18n::Language) -> Result<()> {
+    let preferences = AppConfig::update(root, |config| config.language = language)?;
+    m.preferences = preferences;
+    crate::i18n::set(m.preferences.language);
+    m.query.placeholder = search_placeholder().into();
     m.error.clear();
     m.back();
     Ok(())
@@ -2057,6 +2167,7 @@ fn apply_preference_action(
         Action::ToggleAliases => aliases::toggle(m, root),
         Action::GroupMode(mode) => groups::save(m, root, *mode),
         Action::Availability(method) => save_availability(m, root, *method),
+        Action::Language(language) => save_language(m, root, *language),
         _ => unreachable!("only preference adoption actions reach this dispatcher"),
     }?;
     // Alias/group saves also adopt the entire fresh config, including external

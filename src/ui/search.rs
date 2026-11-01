@@ -42,7 +42,11 @@ impl Query {
             }
         }
         if quoted {
-            return Err("Unclosed quote: add a closing double quote (\")".into());
+            return Err(crate::t!(
+                "Unclosed quote: add a closing double quote (\")",
+                "Guillemet non fermé : ajoutez un guillemet double fermant (\")"
+            )
+            .into());
         }
         if started {
             words.push((word, had_quote));
@@ -53,9 +57,11 @@ impl Query {
             let word = word.to_lowercase();
             if !had_quote && matches!(word.as_str(), "and" | "et") {
                 if terms.is_empty() || conjunction {
-                    return Err(
-                        "Misplaced conjunction AND/ET: put a search term on both sides".into(),
-                    );
+                    return Err(crate::t!(
+                        "Misplaced conjunction AND/ET: put a search term on both sides",
+                        "Conjonction AND/ET mal placée : mettez un terme de chaque côté"
+                    )
+                    .into());
                 }
                 conjunction = true;
                 continue;
@@ -70,21 +76,25 @@ impl Query {
             };
             if value.is_empty() {
                 return Err(
-                    "Missing search value: enter text after the field or inside quotes".into(),
+                    crate::t!("Missing search value: enter text after the field or inside quotes", "Valeur de recherche manquante : saisissez un texte après le champ ou entre guillemets").into(),
                 );
             }
             if field == Field::State
                 && !["online", "offline", "unknown", "connecting", "favorite"].contains(&value)
             {
                 return Err(
-                    "Invalid is: value; use online, offline, unknown, connecting or favorite"
+                    crate::t!("Invalid is: value; use online, offline, unknown, connecting or favorite", "Valeur de is: invalide ; utilisez online, offline, unknown, connecting ou favorite")
                         .into(),
                 );
             }
             terms.push((field, value.to_owned()));
         }
         if conjunction {
-            return Err("Trailing conjunction AND/ET: add a search term after it".into());
+            return Err(crate::t!(
+                "Trailing conjunction AND/ET: add a search term after it",
+                "Conjonction AND/ET en fin de recherche : ajoutez un terme après"
+            )
+            .into());
         }
         Ok(Self(terms))
     }

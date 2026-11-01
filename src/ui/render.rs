@@ -43,11 +43,18 @@ fn panel(area: Rect, width: u16, height: u16) -> Rect {
         h,
     )
 }
+
 pub(super) fn draw(f: &mut Frame, m: &mut Model) {
+    // Every text of the frame is drawn in the language of this model.
+    crate::i18n::set(m.preferences.language);
     let area = f.area();
     if area.width == 0 || area.height == 0 {
         return;
     }
+    draw_frame(f, m, area);
+}
+
+fn draw_frame(f: &mut Frame, m: &mut Model, area: Rect) {
     // Persistent diagnostics have their own rows; notices and exact-file scope coexist.
     let area = if !m.config_warnings.is_empty() {
         let count = m
@@ -63,11 +70,18 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
             .enumerate()
             .map(|(i, warning)| {
                 let more = if i + 1 == count && count < m.config_warnings.len() {
-                    format!(" (+{}; h for all)", m.config_warnings.len() - count)
+                    crate::tf!(
+                        " (+{}; ? for all)",
+                        " (+{} ; ? pour tout voir)",
+                        m.config_warnings.len() - count
+                    )
                 } else {
                     String::new()
                 };
-                Line::from(format!("FileTags warning{more}: {warning}"))
+                Line::from(crate::tf!(
+                    "FileTags warning{more}: {warning}",
+                    "Avertissement FileTags{more} : {warning}"
+                ))
             })
             .collect::<Vec<_>>();
         f.render_widget(
@@ -85,7 +99,7 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         let parts = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
         f.render_widget(
             Paragraph::new(ellipsize(
-                &format!("Jobs — {}", jobs.join(" • ")),
+                &crate::tf!("Jobs — {}", "Travaux — {}", jobs.join(" • ")),
                 usize::from(parts[1].width),
             ))
             .style(
@@ -109,33 +123,39 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         let batch = m.batch.manager.has_active();
         let mut lines = vec![];
         if tunnels > 0 {
-            lines.push(Line::from(format!(
+            lines.push(Line::from(crate::tf!(
+                "• {tunnels} active tunnel(s): they will be stopped.",
                 "• {tunnels} tunnel(s) actif(s) : ils seront arrêtés."
             )));
         }
         if batch {
-            lines.push(Line::from(
-                "• Lot en cours : il sera annulé ; un travail distant déjà détaché peut continuer.",
-            ));
+            lines.push(Line::from(crate::t!(
+                "• Running batch: it will be cancelled; remote work already detached may go on.",
+                "• Lot en cours : il sera annulé ; un travail distant déjà détaché peut continuer."
+            )));
         }
         if m.has_unsaved_context() {
-            lines.push(Line::from(
-                "• Modifications non enregistrées : elles seront perdues.",
-            ));
+            lines.push(Line::from(crate::t!(
+                "• Unsaved changes: they will be lost.",
+                "• Modifications non enregistrées : elles seront perdues."
+            )));
         }
         if lines.is_empty() {
-            lines.push(Line::from("Aucun travail en cours."));
+            lines.push(Line::from(crate::t!(
+                "No work in progress.",
+                "Aucun travail en cours."
+            )));
         }
         m.confirm.draw(
             f,
             area,
-            "Quitter ssho ?",
+            crate::t!("Quit ssho?", "Quitter ssho ?"),
             lines,
-            "Revenir",
+            crate::t!("Go back", "Revenir"),
             if tunnels > 0 || batch {
-                "Arrêter et quitter"
+                crate::t!("Stop and quit", "Arrêter et quitter")
             } else {
-                "Abandonner et quitter"
+                crate::t!("Discard and quit", "Abandonner et quitter")
             },
         );
         return;
@@ -144,10 +164,13 @@ pub(super) fn draw(f: &mut Frame, m: &mut Model) {
         m.confirm.draw(
             f,
             area,
-            "Modifications non enregistrées",
-            vec![Line::from("Abandonner les modifications de ce brouillon ?")],
-            "Continuer l'édition",
-            "Abandonner",
+            crate::t!("Unsaved changes", "Modifications non enregistrées"),
+            vec![Line::from(crate::t!(
+                "Discard the changes of this draft?",
+                "Abandonner les modifications de ce brouillon ?"
+            ))],
+            crate::t!("Keep editing", "Continuer l'édition"),
+            crate::t!("Discard", "Abandonner"),
         );
         return;
     }
@@ -188,6 +211,7 @@ fn draw_view(f: &mut Frame, m: &mut Model, area: Rect) {
         View::Aliases { .. } => alias_chooser(f, m, area),
         View::GroupMode { .. } => group_mode(f, m, area),
         View::Availability { .. } => availability(f, m, area),
+        View::Language { .. } => language(f, m, area),
     }
 }
 fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
@@ -196,21 +220,31 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         f.render_widget(Clear, area);
         let text = vec![
             Line::styled(
-                "DELETE SSH HOST",
+                crate::t!("DELETE SSH HOST", "SUPPRIMER L'HÔTE SSH"),
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
             Line::from(""),
-            Line::from(format!(
+            Line::from(crate::tf!(
                 "Are you sure you want to delete host '{}' ?",
+                "Voulez-vous vraiment supprimer l'hôte « {} » ?",
                 h.name
             )),
             Line::from(""),
             Line::styled(
-                "This action cannot be undone.",
+                crate::t!(
+                    "This action cannot be undone.",
+                    "Cette action est irréversible."
+                ),
                 Style::default().fg(Color::LightRed),
             ),
             Line::from(""),
-            Line::styled("Enter: confirm • Esc: cancel", Style::default().fg(GRAY)),
+            Line::styled(
+                crate::t!(
+                    "Enter: confirm • Esc: cancel",
+                    "Entrée : confirmer • Échap : annuler"
+                ),
+                Style::default().fg(GRAY),
+            ),
         ];
         f.render_widget(
             Paragraph::new(text)
@@ -290,14 +324,17 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
                 .label()
         })
         .unwrap_or(if m.selected_group().is_some() {
-            "Group • i: info • Enter: toggle"
+            crate::t!(
+                "Group • i: info • Enter: toggle",
+                "Groupe • i : fiche • Entrée : déplier"
+            )
         } else {
-            "No selection"
+            crate::t!("No selection", "Aucune sélection")
         });
     let title = if !m.hint.is_empty() {
         &m.hint
     } else if m.connection_result.is_empty() {
-        "SSHO • F4: details"
+        crate::t!("SSHO • F4: details", "SSHO • F4 : détails")
     } else {
         &m.connection_result
     };
@@ -311,14 +348,19 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
     let mut notices = vec![];
     if let Some(error) = search_error {
         notices.push(Line::styled(
-            format!("Search: {error}"),
+            crate::tf!("Search: {error}", "Recherche : {error}"),
             Style::default().fg(Color::LightRed),
         ));
     }
     if let Some(update) = &m.update {
         if update.available {
             notices.push(Line::styled(
-                format!("Update available: {} → {}", update.current, update.latest),
+                crate::tf!(
+                    "Update available: {} → {}",
+                    "Mise à jour disponible : {} → {}",
+                    update.current,
+                    update.latest
+                ),
                 Style::default().fg(Color::Green),
             ));
         }
@@ -329,7 +371,8 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
     if !keymap.conflicts.is_empty() {
         // The reasons are long: the help lists each refused preference in full.
         notices.push(Line::styled(
-            format!(
+            crate::tf!(
+                "Shortcuts: {} preference(s) refused — details in the help ({})",
                 "Raccourcis : {} préférence(s) refusée(s) — détail dans l'aide ({})",
                 keymap.conflicts.len(),
                 keymap.hint(PaletteAction::Help)
@@ -340,16 +383,16 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
     if notice_height < notice_count {
         let mut badges = vec![];
         if !keymap.conflicts.is_empty() {
-            badges.push("Raccourcis refusés");
+            badges.push(crate::t!("Shortcuts refused", "Raccourcis refusés"));
         }
         if m.update.as_ref().is_some_and(|u| u.available) {
-            badges.push("Update");
+            badges.push(crate::t!("Update", "Mise à jour"));
         }
         let suffix = format!(" • {}", badges.join(" • "));
         let mut spans = vec![];
         if let Some(error) = search_error {
             spans.push(Span::styled(
-                format!("Search: {error}"),
+                crate::tf!("Search: {error}", "Recherche : {error}"),
                 Style::default().fg(Color::LightRed),
             ));
         } else if !m.error.is_empty() {
@@ -359,7 +402,7 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
                     &if warning {
                         m.error.clone()
                     } else {
-                        format!("Error: {}", m.error)
+                        crate::tf!("Error: {}", "Erreur : {}", m.error)
                     },
                     (area.width as usize).saturating_sub(suffix.width()),
                 ),
@@ -381,10 +424,10 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         let prompt = if zone[0].width < 40 {
             "/ > "
         } else {
-            "Search: > "
+            crate::t!("Search: > ", "Recherche : > ")
         };
         // The focus is named, not only coloured.
-        let border = block("● Recherche", true).title_bottom(
+        let border = block(crate::t!("● Search", "● Recherche"), true).title_bottom(
             Line::from(format!(" {} ", host_count(m))).style(Style::default().fg(GRAY)),
         );
         let search_area = if zone[0].height >= 3 {
@@ -414,9 +457,9 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
     let border = if area.height < 12 {
         Block::default()
     } else if m.search_focus {
-        block("Hôtes", false)
+        block(crate::t!("Hosts", "Hôtes"), false)
     } else {
-        block("● Hôtes", true)
+        block(crate::t!("● Hosts", "● Hôtes"), true)
     };
     let inner = border.inner(table_area);
     let plan = columns::layout(&m.preferences.host_columns, inner.width.min(TABLE_WIDTH));
@@ -474,8 +517,11 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
                 };
                 let suffix = match marked {
                     0 => format!(" ({count})"),
-                    1 => format!(" ({count} • 1 cible)"),
-                    marked => format!(" ({count} • {marked} cibles)"),
+                    1 => crate::tf!(" ({count} • 1 target)", " ({count} • 1 cible)"),
+                    marked => crate::tf!(
+                        " ({count} • {marked} targets)",
+                        " ({count} • {marked} cibles)"
+                    ),
                 };
                 let available =
                     usize::from(widths[0]).saturating_sub(prefix.width() + suffix.width());
@@ -631,12 +677,18 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
         );
         f.render_widget(
             Paragraph::new(if m.all.is_empty() {
-                "No SSH hosts found. Press F2 to add a host."
+                crate::t!(
+                    "No SSH hosts found. Press F2 to add a host.",
+                    "Aucun hôte SSH. F2 pour en ajouter un."
+                )
             } else {
                 if m.favorites_only {
-                    "No favorite matches. F2: Favoris seuls to show all."
+                    crate::t!(
+                        "No favorite matches. F2: Favorites only to show all.",
+                        "Aucun favori ne correspond. F2 : Favoris seuls pour tout afficher."
+                    )
                 } else {
-                    "No matching hosts."
+                    crate::t!("No matching hosts.", "Aucun hôte ne correspond.")
                 }
             })
             .style(Style::default().fg(GRAY)),
@@ -671,9 +723,14 @@ fn list(f: &mut Frame, m: &mut Model, area: Rect) -> u16 {
 fn host_count(m: &Model) -> String {
     let (shown, total) = (m.matching.len(), m.all.len());
     if shown == total {
-        format!("{total} hôte{}", if total > 1 { "s" } else { "" })
+        crate::tf!(
+            "{total} host{}",
+            "{total} hôte{}",
+            if total > 1 { "s" } else { "" }
+        )
     } else {
-        format!(
+        crate::tf!(
+            "{shown} host{} of {total}",
             "{shown} hôte{} sur {total}",
             if shown > 1 { "s" } else { "" }
         )
@@ -697,10 +754,11 @@ fn filter_band(
         filters.push(m.query.value.clone());
     }
     if m.favorites_only {
-        filters.push("Favoris seuls".to_owned());
+        filters.push(crate::t!("Favorites only", "Favoris seuls").to_owned());
     }
     if m.show_hidden {
-        filters.push(format!(
+        filters.push(crate::tf!(
+            "Hidden shown ({})",
             "Masqués visibles ({})",
             keymap.hint(A::ToggleHidden)
         ));
@@ -708,39 +766,45 @@ fn filter_band(
     let file = m
         .source_filter
         .as_ref()
-        .map(|path| format!("Fichier : {}", path.display()));
+        .map(|path| crate::tf!("File: {}", "Fichier : {}", path.display()));
     if !m.batch.marks.is_empty() && compact {
-        filters.push(format!("Lot : {} cible(s)", m.batch.marks.len()));
+        filters.push(crate::tf!(
+            "Batch: {} target(s)",
+            "Lot : {} cible(s)",
+            m.batch.marks.len()
+        ));
     }
     if let (Some(path), true) = (&m.source_filter, compact) {
         // One row only: the file scope leads the criteria, with its clear key.
         filters.insert(
             0,
-            format!(
+            crate::tf!(
+                "File ({}/F2): {}",
                 "Fichier ({}/F2) : {}",
                 keymap.hint(A::ClearSourceFilter),
                 path.display()
             ),
         );
     }
-    let grouping = groups::MODES
+    let grouping = groups::modes()
         .iter()
         .find(|(mode, _)| *mode == m.preferences.group_mode && *mode != GroupMode::Flat)
-        .map(|(_, label)| format!("Groupes : {label}"));
+        .map(|(_, label)| crate::tf!("Groups: {label}", "Groupes : {label}"));
     let mut lines = vec![];
     let count = host_count(m);
     if with_query || !filters.is_empty() || grouping.is_some() {
         let mut left = if filters.is_empty() {
-            format!("{} Rechercher", keymap.hint(A::Search))
+            crate::tf!("{} Search", "{} Rechercher", keymap.hint(A::Search))
         } else {
-            format!("Filtres : {}", filters.join(" • "))
+            crate::tf!("Filters: {}", "Filtres : {}", filters.join(" • "))
         };
         if let Some(grouping) = &grouping {
             left.push_str(" • ");
             left.push_str(grouping);
         }
         if query {
-            let hint = format!(
+            let hint = crate::tf!(
+                "  ({}: edit • {}: clear)",
                 "  ({} : modifier • {} : effacer)",
                 keymap.hint(A::Search),
                 keymap.hint(A::ClearSearch)
@@ -776,15 +840,19 @@ fn filter_band(
             .filter(|&&index| m.batch.marked(&m.all[index]))
             .count();
         let outside = marks.saturating_sub(shown);
-        let mut text = format!(
-            "Lot : {marks} cible{} marquée{}",
-            if marks > 1 { "s" } else { "" },
-            if marks > 1 { "s" } else { "" }
+        let plural = if marks > 1 { "s" } else { "" };
+        let mut text = crate::tf!(
+            "Batch: {marks} marked target{plural}",
+            "Lot : {marks} cible{plural} marquée{plural}"
         );
         if outside > 0 {
-            text.push_str(&format!(", dont {outside} hors du filtre"));
+            text.push_str(&crate::tf!(
+                ", {outside} outside the filter",
+                ", dont {outside} hors du filtre"
+            ));
         }
-        let hint = format!(
+        let hint = crate::tf!(
+            " • {}: view / prepare • F2: clear all",
             " • {} : voir / préparer • F2 : tout retirer",
             keymap.hint(A::BatchOpen)
         );
@@ -799,7 +867,8 @@ fn filter_band(
         ));
     }
     if let (Some(file), false) = (file, compact) {
-        let hint = format!(
+        let hint = crate::tf!(
+            "  ({}/F2: all files)",
             "  ({}/F2 : tous les fichiers)",
             keymap.hint(A::ClearSourceFilter)
         );
@@ -807,7 +876,7 @@ fn filter_band(
             format!("{file}{hint}")
         } else if let Some(path) = &m.source_filter {
             // Keep the distinguishing tail of a long path.
-            let label = "Fichier : ";
+            let label = crate::t!("File: ", "Fichier : ");
             format!(
                 "{label}{}",
                 group_label(
@@ -830,14 +899,18 @@ fn message_line(m: &Model, keymap: &Keymap, width: u16) -> Line<'static> {
     let text = if warning {
         m.error.clone()
     } else {
-        format!("Error: {}", m.error)
+        crate::tf!("Error: {}", "Erreur : {}", m.error)
     };
     let style = Style::default().fg(if warning { Color::Yellow } else { Color::Red });
     let width = usize::from(width);
     if text.width() <= width {
         return Line::styled(text, style);
     }
-    let more = format!(" ({}: full text)", keymap.hint(PaletteAction::Messages));
+    let more = crate::tf!(
+        " ({}: full text)",
+        " ({} : texte complet)",
+        keymap.hint(PaletteAction::Messages)
+    );
     Line::styled(
         format!(
             "{}{more}",
@@ -850,7 +923,7 @@ fn message_line(m: &Model, keymap: &Keymap, width: u16) -> Line<'static> {
 /// Every current message, wrapped and scrollable, each with its level in words.
 fn messages(f: &mut Frame, m: &mut Model, area: Rect) {
     let area = nav::bounded(inset(area), nav::TABLE_WIDTH);
-    let border = block("Messages", true);
+    let border = block(crate::t!("Messages", "Messages"), true);
     let inner = border.inner(area);
     f.render_widget(border, area);
     let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
@@ -863,7 +936,14 @@ fn messages(f: &mut Frame, m: &mut Model, area: Rect) {
         };
         lines.push(Line::from(vec![
             Span::styled(
-                format!("[{level}] "),
+                format!(
+                    "[{}] ",
+                    match level {
+                        "Error" => crate::t!("Error", "Erreur"),
+                        "Warning" => crate::t!("Warning", "Avertissement"),
+                        _ => "Info",
+                    }
+                ),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
             Span::raw(""),
@@ -872,13 +952,16 @@ fn messages(f: &mut Frame, m: &mut Model, area: Rect) {
         lines.push(Line::from(""));
     }
     if lines.is_empty() {
-        lines.push(Line::from("No message."));
+        lines.push(Line::from(crate::t!("No message.", "Aucun message.")));
     }
     m.page = usize::from(parts[0].height).max(1);
     details::render_rows(f, parts[0], lines, &mut m.scroll);
     f.render_widget(
-        Paragraph::new("↑↓/PgUp/PgDn: scroll • Esc, q or Enter: back")
-            .style(Style::default().fg(GRAY)),
+        Paragraph::new(crate::t!(
+            "↑↓/PgUp/PgDn: scroll • Esc, q or Enter: back",
+            "↑↓/PgUp/PgDn : défiler • Échap, q ou Entrée : retour"
+        ))
+        .style(Style::default().fg(GRAY)),
         parts[1],
     );
 }
@@ -887,24 +970,24 @@ fn messages(f: &mut Frame, m: &mut Model, area: Rect) {
 fn screen_guide(view: Option<&View>) -> Vec<&'static str> {
     match view {
         Some(View::Info(_)) => vec![
-            "This screen: a host sheet. Read its sections; Tab or ←/→ picks a named action",
-            "(Connexion, Modifier, Note, Copier, Fermer) and Enter runs it. Enter alone does nothing.",
+            crate::t!("This screen: a host sheet. Read its sections; Tab or ←/→ picks a named action", "Cet écran : la fiche d'un hôte. Lisez ses sections ; Tab ou ←/→ choisit une action nommée"),
+            crate::t!("(Connect, Edit, Note, Copy, Close) and Enter runs it. Enter alone does nothing.", "(Connexion, Modifier, Note, Copier, Fermer) et Entrée la lance. Entrée seule ne fait rien."),
         ],
         Some(View::Host(_)) => vec![
-            "This screen: the host form. Tab/↑↓ walk fields, section headers and buttons;",
-            "Enter moves to the next field or activates; Ctrl+S previews, nothing is written before.",
+            crate::t!("This screen: the host form. Tab/↑↓ walk fields, section headers and buttons;", "Cet écran : le formulaire d'hôte. Tab/↑↓ parcourent champs, titres de section et boutons ;"),
+            crate::t!("Enter moves to the next field or activates; Ctrl+S previews, nothing is written before.", "Entrée passe au champ suivant ou active ; Ctrl+S prévisualise, rien n'est écrit avant."),
         ],
         Some(View::Forward(_)) => vec![
-            "This screen: a tunnel. Choose its type with ←/→, read the route in words,",
-            "then Tab to Launch or Save profile. Enter never saves or launches from a field.",
+            crate::t!("This screen: a tunnel. Choose its type with ←/→, read the route in words,", "Cet écran : un tunnel. Choisissez son type avec ←/→, lisez le trajet en toutes lettres,"),
+            crate::t!("then Tab to Launch or Save profile. Enter never saves or launches from a field.", "puis Tab jusqu'à Lancer ou Enregistrer le profil. Entrée n'enregistre ni ne lance depuis un champ."),
         ],
         Some(View::Note(_)) => vec![
-            "This screen: a personal note, kept in the ssho data and never in the SSH file.",
-            "Enter adds a line; Tab reaches Save and Cancel; Ctrl+S saves.",
+            crate::t!("This screen: a personal note, kept in the ssho data and never in the SSH file.", "Cet écran : une note personnelle, conservée dans les données de ssho, jamais dans le fichier SSH."),
+            crate::t!("Enter adds a line; Tab reaches Save and Cancel; Ctrl+S saves.", "Entrée ajoute une ligne ; Tab atteint Enregistrer et Annuler ; Ctrl+S enregistre."),
         ],
         _ => vec![
-            "This screen: the host list. Type / to search, ↑↓ to choose, Enter to connect.",
-            "F2 lists every action with its shortcut; Esc goes back one level and never quits.",
+            crate::t!("This screen: the host list. Type / to search, ↑↓ to choose, Enter to connect.", "Cet écran : la liste des hôtes. / pour chercher, ↑↓ pour choisir, Entrée pour se connecter."),
+            crate::t!("F2 lists every action with its shortcut; Esc goes back one level and never quits.", "F2 liste toutes les actions avec leur raccourci ; Échap revient d'un niveau et ne quitte jamais."),
         ],
     }
 }
@@ -942,12 +1025,20 @@ pub(super) fn highlight_details(m: &Model, lines: Vec<Line<'static>>) -> Vec<Lin
         .map(|mut line| {
             let has_label = line.spans.len() >= 2;
             if has_label {
-                field = match line.spans[0].content.as_ref() {
-                    "Host: " | "Hostname/IP: " | "Personal note: " => Some(search::Field::Any),
-                    "User: " => Some(search::Field::User),
-                    "Tags: " => Some(search::Field::Tag),
-                    "Declared source: " => Some(search::Field::File),
-                    _ => None,
+                // The labels are the ones the sheet writes, in its language.
+                let label = line.spans[0].content.as_ref();
+                let is = |name: &str| label.strip_suffix(": ") == Some(name);
+                use details::label as l;
+                field = if is(l::host()) || is(l::hostname()) || is(l::note()) {
+                    Some(search::Field::Any)
+                } else if is(l::user()) {
+                    Some(search::Field::User)
+                } else if is(l::tags()) {
+                    Some(search::Field::Tag)
+                } else if is(l::source()) {
+                    Some(search::Field::File)
+                } else {
+                    None
                 };
             }
             if let Some(field) = field {
@@ -974,7 +1065,7 @@ fn alias_label(host: &Host, grouped: bool, width: usize) -> String {
     // when that fits without shortening the alias used for the connection.
     let others = host.aliases.len().saturating_sub(1);
     let with_others = |label: String| {
-        let suffix = format!(" +{others} alias");
+        let suffix = crate::tf!(" +{others} alias", " +{others} alias");
         if grouped && others > 0 && label.width() + suffix.width() <= width {
             format!("{label}{suffix}")
         } else {
@@ -999,32 +1090,41 @@ fn alias_label(host: &Host, grouped: bool, width: usize) -> String {
 fn legend(m: &Model, width: u16) -> Option<Line<'static>> {
     let mut signs = vec![];
     if !m.batch.marks.is_empty() {
-        signs.push("[x] cible de lot");
+        signs.push(crate::t!("[x] batch target", "[x] cible de lot"));
     }
     if m.visible
         .iter()
         .any(|&index| m.is_favorite(&m.all[index].name))
     {
-        signs.push("* favori");
+        signs.push(crate::t!("* favorite", "* favori"));
     }
     if m.visible
         .iter()
         .any(|&index| !m.note(&m.all[index].name).is_empty())
     {
-        signs.push("≡ note personnelle");
+        signs.push(crate::t!("≡ personal note", "≡ note personnelle"));
     }
     if m.preferences.group_mode != GroupMode::Flat {
-        signs.push("▼ ▶ groupe ouvert / replié");
+        signs.push(crate::t!(
+            "▼ ▶ group open / collapsed",
+            "▼ ▶ groupe ouvert / replié"
+        ));
     }
     if m.preferences.group_aliases {
-        signs.push("a→b alias actif d'un bloc");
+        signs.push(crate::t!(
+            "a→b active alias of a block",
+            "a→b alias actif d'un bloc"
+        ));
     }
     if signs.is_empty() {
         return None;
     }
-    signs.push("+ en ligne  ! hors ligne  ~ en cours  ? inconnu");
+    signs.push(crate::t!(
+        "+ online  ! offline  ~ in progress  ? unknown",
+        "+ en ligne  ! hors ligne  ~ en cours  ? inconnu"
+    ));
     Some(Line::from(ellipsize(
-        &format!("Légende : {}", signs.join(" · ")),
+        &crate::tf!("Legend: {}", "Légende : {}", signs.join(" · ")),
         usize::from(width),
     )))
 }
@@ -1038,18 +1138,25 @@ fn browser_status(
 ) -> Vec<Line<'static>> {
     if m.preferences.group_mode != GroupMode::Flat {
         let hosts = if m.preferences.group_aliases {
-            format!(
+            crate::tf!(
                 "{} blocks • {}/{} aliases",
+                "{} blocs • {}/{} alias",
                 m.visible.len(),
                 m.matching.len(),
                 m.all.len()
             )
         } else {
-            format!("Hosts: {}/{}", m.visible.len(), m.all.len())
+            crate::tf!(
+                "Hosts: {}/{}",
+                "Hôtes : {}/{}",
+                m.visible.len(),
+                m.all.len()
+            )
         };
-        let groups = format!("{} groups", m.group_projection.group_count);
-        let rows = format!(
+        let groups = crate::tf!("{} groups", "{} groupes", m.group_projection.group_count);
+        let rows = crate::tf!(
             "Selected: {position}/{} • Rows: {first}-{last}",
+            "Sélection : {position}/{} • Lignes : {first}-{last}",
             m.rows.len()
         );
         let full = format!("{hosts} • {groups} • {rows}");
@@ -1062,8 +1169,17 @@ fn browser_status(
         }
         return if m.preferences.group_aliases {
             vec![
-                Line::from(format!("{} blocks • {groups}", m.visible.len())),
-                Line::from(format!("{}/{} aliases", m.matching.len(), m.all.len())),
+                Line::from(crate::tf!(
+                    "{} blocks • {groups}",
+                    "{} blocs • {groups}",
+                    m.visible.len()
+                )),
+                Line::from(crate::tf!(
+                    "{}/{} aliases",
+                    "{}/{} alias",
+                    m.matching.len(),
+                    m.all.len()
+                )),
             ]
         } else {
             vec![Line::from(hosts), Line::from(groups)]
@@ -1072,11 +1188,17 @@ fn browser_status(
     if !m.preferences.group_aliases {
         return list_status(width, m.visible.len(), m.all.len(), position, first, last);
     }
-    let blocks = format!("{} blocks", m.visible.len());
-    let aliases = format!("{}/{} aliases", m.matching.len(), m.all.len());
+    let blocks = crate::tf!("{} blocks", "{} blocs", m.visible.len());
+    let aliases = crate::tf!(
+        "{}/{} aliases",
+        "{}/{} alias",
+        m.matching.len(),
+        m.all.len()
+    );
     let counts = format!("{blocks} • {aliases}");
-    let full = format!(
+    let full = crate::tf!(
         "{counts} • Selected: {position}/{} • Rows: {first}-{last}",
+        "{counts} • Sélection : {position}/{} • Lignes : {first}-{last}",
         m.visible.len()
     );
     if full.width() <= usize::from(width) {
@@ -1099,7 +1221,10 @@ fn list_status(
     let counts = format!("{count}/{total}");
     let range = format!("{first}-{last}");
     let candidates = [
-        format!("Hosts: {counts} • Selected: {position}/{count} • Rows: {range}"),
+        crate::tf!(
+            "Hosts: {counts} • Selected: {position}/{count} • Rows: {range}",
+            "Hôtes : {counts} • Sélection : {position}/{count} • Lignes : {range}"
+        ),
         format!("{counts} | {position}/{count} | {range}"),
         format!("{counts}|{position}/{count}|{range}"),
         format!("{counts} @{position} {range}"),
@@ -1144,59 +1269,88 @@ fn list_footer(width: u16, search_focus: bool, keymap: &Keymap, group: bool) -> 
     use PaletteAction as A;
     let k = |action| keymap.hint(action);
     // Enter connects to a host but opens or closes a group header.
-    let enter = if group { "open/close group" } else { "connect" };
-    let lines = if width >= 105 {
-        if search_focus {
-            vec![format!(
-                "{}: actions • {}: reload • ↑/↓: select • {}: {enter} • Tab/Esc: table, filter kept",
-                k(A::Palette), k(A::Reload), k(A::Connect)
-            )]
-        } else {
-            vec![
-                format!(
-                    "{}: actions • {}: reload • ↑/↓: navigate • {}: {enter} • Tab: search • {}: info • {}: help • {}: quit",
-                    k(A::Palette), k(A::Reload), k(A::Connect), k(A::Info), k(A::Help), k(A::Quit)
-                ),
-                format!(
-                    "{}: favorite • {}: add • {}: edit • {}: del • {}: move • {}: tunnel • {}: test • {}/{}: file/all",
-                    k(A::Favorite), k(A::Add), k(A::Edit), k(A::Delete), k(A::Move),
-                    k(A::Tunnel), k(A::Test), k(A::SourceFilter), k(A::ClearSourceFilter)
-                ),
-            ]
-        }
-    } else if width >= 65 {
-        if search_focus {
-            vec![format!(
-                "{}: actions • ↑↓: select • {}: {enter} • Tab/Esc: table",
-                k(A::Palette),
-                k(A::Connect)
-            )]
-        } else {
-            vec![
-                format!(
-                    "{}: actions • ↑↓: select • {}: {enter} • Tab: search • {}: quit",
-                    k(A::Palette), k(A::Connect), k(A::Quit)
-                ),
-                format!(
-                    "{}/{}: file/all • {}/{}/{}/{}: manage • {}: tunnel • {}: test • {}: method • {}: help",
-                    k(A::SourceFilter), k(A::ClearSourceFilter), k(A::Add), k(A::Edit),
-                    k(A::Delete), k(A::Move), k(A::Tunnel), k(A::Test), k(A::Availability), k(A::Help)
-                ),
-            ]
-        }
+    let enter = if group {
+        crate::t!("open/close group", "déplier")
     } else {
-        vec![format!(
-            "{}: actions • ↑↓ • {}",
-            k(A::Palette),
-            k(A::Connect)
-        )]
+        crate::t!("connect", "connexion")
     };
-    let mut lines = lines;
+    let (palette, reload, connect) = (k(A::Palette), k(A::Reload), k(A::Connect));
+    let (info, help, quit) = (k(A::Info), k(A::Help), k(A::Quit));
+    let (favorite, add, edit, delete) = (k(A::Favorite), k(A::Add), k(A::Edit), k(A::Delete));
+    let (moving, tunnel, test) = (k(A::Move), k(A::Tunnel), k(A::Test));
+    let (file, all, method) = (
+        k(A::SourceFilter),
+        k(A::ClearSourceFilter),
+        k(A::Availability),
+    );
+    // French rows are worded to fit the same widths as the English ones.
+    let full = if search_focus {
+        vec![crate::tf!(
+            "{palette}: actions • {reload}: reload • ↑/↓: select • {connect}: {enter} • Tab/Esc: table, filter kept",
+            "{palette} : actions • {reload} : recharger • ↑/↓ : choisir • {connect} : {enter} • Tab/Échap : tableau, filtre conservé"
+        )]
+    } else {
+        vec![
+            crate::tf!(
+                "{palette}: actions • {reload}: reload • ↑/↓: navigate • {connect}: {enter} • Tab: search • {info}: info • {help}: help • {quit}: quit",
+                "{palette} : actions • {reload} : relire • ↑/↓ : choisir • {connect} : {enter} • Tab : chercher • {info} : fiche • {help} : aide • {quit} : quitter"
+            ),
+            crate::tf!(
+                "{favorite}: favorite • {add}: add • {edit}: edit • {delete}: del • {moving}: move • {tunnel}: tunnel • {test}: test • {file}/{all}: file/all",
+                "{favorite} : favori • {add} : ajouter • {edit} : modifier • {delete} : suppr. • {moving} : déplacer • {tunnel} : tunnel • {test} : tester • {file}/{all} : fichier/tous"
+            ),
+        ]
+    };
+    let medium = if search_focus {
+        vec![crate::tf!(
+            "{palette}: actions • ↑↓: select • {connect}: {enter} • Tab/Esc: table",
+            "{palette} : actions • ↑↓ : choisir • {connect} : {enter} • Tab/Échap : tableau"
+        )]
+    } else {
+        vec![
+            crate::tf!(
+                "{palette}: actions • ↑↓: select • {connect}: {enter} • Tab: search • {quit}: quit",
+                "{palette} : actions • ↑↓ : choisir • {connect} : {enter} • Tab : filtrer • {quit} : quitter"
+            ),
+            crate::tf!(
+                "{file}/{all}: file/all • {add}/{edit}/{delete}/{moving}: manage • {tunnel}: tunnel • {test}: test • {method}: method • {help}: help",
+                "{file}/{all} : fichier/tous • {add}/{edit}/{delete}/{moving} : gérer • {tunnel} : tunnel • {test} : tester • {help} : aide"
+            ),
+        ]
+    };
+    let compact = vec![crate::tf!(
+        "{palette}: actions • ↑↓ • {connect}",
+        "{palette} : actions • ↑↓ • {connect}"
+    )];
+    // The width picks the richest legend, then a legend whose rows would be cut
+    // gives way to the next one: a longer language never loses the end of a row.
+    let first = if width >= 105 {
+        0
+    } else if width >= 65 {
+        1
+    } else {
+        2
+    };
+    let fits = |line: &String| line.width() <= usize::from(width);
+    let mut lines = Vec::new();
+    for variant in [full, medium, compact].into_iter().skip(first) {
+        // A legend is kept when its first row fits; a later row that would be
+        // cut is left out rather than shown without its end.
+        let whole = variant.first().is_some_and(fits);
+        lines = variant;
+        if whole {
+            lines.retain(fits);
+            break;
+        }
+    }
     // The two-step prefix is announced wherever a row still has room for it.
-    if let (Some(prefix), Some(last)) = (keymap.prefix(), lines.last_mut()) {
-        let hint = format!(" • {prefix}: quick");
-        if width >= 65 && last.width() + hint.width() <= usize::from(width) {
-            last.push_str(&hint);
+    if let Some(prefix) = keymap.prefix() {
+        let hint = crate::tf!(" • {prefix}: quick", " • {prefix} : rapide");
+        let room = |line: &&mut String| line.width() + hint.width() <= usize::from(width);
+        if width >= 65 {
+            if let Some(line) = lines.iter_mut().rev().find(room) {
+                line.push_str(&hint);
+            }
         }
     }
     lines.into_iter().map(Line::from).collect()
@@ -1224,9 +1378,13 @@ fn quick_actions(f: &mut Frame, m: &Model, area: Rect) {
     let rows = actions::QUICK.len().div_ceil(columns);
     let area = panel(area, 76, rows as u16 + 5);
     f.render_widget(Clear, area);
-    let title = format!(
+    let title = crate::tf!(
+        "Quick actions — {}",
         "Actions rapides — {}",
-        host.as_ref().map_or("aucun hôte sélectionné", |h| &h.name)
+        host.as_ref().map_or(
+            crate::t!("no host selected", "aucun hôte sélectionné"),
+            |h| &h.name
+        )
     );
     let border = block(&title, true);
     let inner = border.inner(area);
@@ -1270,12 +1428,18 @@ fn quick_actions(f: &mut Frame, m: &Model, area: Rect) {
         f.render_widget(Paragraph::new(lines), *area);
     }
     f.render_widget(
-        Paragraph::new(notice.map_or(String::new(), |reason| format!("Indisponible : {reason}")))
-            .style(Style::default().fg(Color::Yellow)),
+        Paragraph::new(notice.map_or(String::new(), |reason| {
+            crate::tf!("Unavailable: {reason}", "Indisponible : {reason}")
+        }))
+        .style(Style::default().fg(Color::Yellow)),
         parts[1],
     );
     f.render_widget(
-        Paragraph::new("Lettre : lancer • Esc : annuler").style(Style::default().fg(GRAY)),
+        Paragraph::new(crate::t!(
+            "Letter: run • Esc: cancel",
+            "Lettre : lancer • Échap : annuler"
+        ))
+        .style(Style::default().fg(GRAY)),
         parts[2],
     );
 }
@@ -1401,11 +1565,15 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
     ])
     .split(area);
     let title = if let Some(original) = &form.original {
-        format!("Hôtes > Modifier {}", original.name)
+        crate::tf!("Hosts > Edit {}", "Hôtes > Modifier {}", original.name)
     } else if let Some(source) = form.copy_source() {
-        format!("Hôtes > Dupliquer {} — saisir un NOUVEAU nom", source.name)
+        crate::tf!(
+            "Hosts > Duplicate {} — enter a NEW name",
+            "Hôtes > Dupliquer {} — saisir un NOUVEAU nom",
+            source.name
+        )
     } else {
-        "Hôtes > Ajouter un hôte".to_owned()
+        crate::t!("Hosts > Add host", "Hôtes > Ajouter un hôte").to_owned()
     };
     f.render_widget(Paragraph::new(title).style(accent()), parts[0]);
 
@@ -1432,7 +1600,8 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
     if !form.errors.is_empty() {
         lines.push(Line::styled(
             ellipsize(
-                &format!(
+                &crate::tf!(
+                    "{} field(s) to fix — {}",
                     "{} champ(s) à corriger — {}",
                     form.errors.len(),
                     form.errors[0].message
@@ -1443,16 +1612,16 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
         ));
     }
     let labels = [
-        "Alias *",
-        "Adresse *",
-        "Utilisateur",
+        crate::t!("Alias *", "Alias *"),
+        crate::t!("Address *", "Adresse *"),
+        crate::t!("User", "Utilisateur"),
         "Port",
-        "Clé SSH",
+        crate::t!("SSH key", "Clé SSH"),
         "ProxyJump",
         "ProxyCommand",
-        "Options SSH",
+        crate::t!("SSH options", "Options SSH"),
         "Tags",
-        "Commande distante",
+        crate::t!("Remote command", "Commande distante"),
         "RequestTTY",
     ];
     for stop in form.stops() {
@@ -1462,13 +1631,13 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
         }
         match stop {
             Stop::Control(Control::File) => {
-                let button = nav::button("Changer", focused);
+                let button = nav::button(crate::t!("Change", "Changer"), focused);
                 // A path may use the whole row: its button follows it directly.
                 let room = usize::from(parts[1].width)
                     .saturating_sub(marker(focused).width() + 10 + button.width() + 1);
                 lines.push(Line::from(vec![
                     Span::styled(
-                        format!("{}Fichier : ", marker(focused)),
+                        crate::tf!("{}File: ", "{}Fichier : ", marker(focused)),
                         label_style(focused),
                     ),
                     Span::raw(format!(
@@ -1483,7 +1652,10 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
                 if field == FormField::Name(0) {
                     // An existing block is moved by its own action, not from here.
                     lines.push(Line::styled(
-                        ellipsize(&format!("  Fichier : {}", form.target.display()), width),
+                        ellipsize(
+                            &crate::tf!("  File: {}", "  Fichier : {}", form.target.display()),
+                            width,
+                        ),
                         Style::default().fg(GRAY),
                     ));
                     lines.push(Line::from(""));
@@ -1496,17 +1668,26 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
                         &form.inputs[i],
                         labels[i].to_owned(),
                         (i == 4).then(|| {
-                            nav::button("Choisir", current == Stop::Control(Control::KeyPicker))
+                            nav::button(
+                                crate::t!("Choose", "Choisir"),
+                                current == Stop::Control(Control::KeyPicker),
+                            )
                         }),
                     ),
-                    FormField::Name(0) if form.original.is_some() => {
-                        (&form.names[0], "Alias *".to_owned(), None)
-                    }
+                    FormField::Name(0) if form.original.is_some() => (
+                        &form.names[0],
+                        crate::t!("Alias *", "Alias *").to_owned(),
+                        None,
+                    ),
                     FormField::Name(i) => (
                         &form.names[i],
-                        format!("  Alias {}", i + 1 + usize::from(form.original.is_none())),
+                        crate::tf!(
+                            "  Alias {}",
+                            "  Alias {}",
+                            i + 1 + usize::from(form.original.is_none())
+                        ),
                         Some(nav::button(
-                            "Retirer",
+                            crate::t!("Remove", "Retirer"),
                             current == Stop::Control(Control::RemoveAlias(i)),
                         )),
                     ),
@@ -1561,7 +1742,10 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
                 if field == FormField::Input(4) {
                     for identity in form.extra_identities() {
                         lines.push(Line::styled(
-                            format!("  aussi : {identity} (lecture seule, conservée)"),
+                            crate::tf!(
+                                "  also: {identity} (read-only, kept)",
+                                "  aussi : {identity} (lecture seule, conservée)"
+                            ),
                             Style::default().fg(GRAY),
                         ));
                     }
@@ -1577,9 +1761,9 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
                         focus_y = lines
                             .iter()
                             .rposition(|line| {
-                                line.spans
-                                    .iter()
-                                    .any(|span| span.content.contains("Choisir"))
+                                line.spans.iter().any(|span| {
+                                    span.content.contains(crate::t!("Choose", "Choisir"))
+                                })
                             })
                             .unwrap_or(focus_y);
                     }
@@ -1589,9 +1773,14 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
                 let open = form.is_open(section);
                 let summary = match section {
                     Section::Aliases => {
-                        format!("Alias supplémentaires ({})", form.extra_aliases().len())
+                        crate::tf!(
+                            "Additional aliases ({})",
+                            "Alias supplémentaires ({})",
+                            form.extra_aliases().len()
+                        )
                     }
-                    Section::Advanced => format!(
+                    Section::Advanced => crate::tf!(
+                        "Advanced options ({} set)",
                         "Options avancées ({} renseignée(s))",
                         [5, 6, 7, 9, 10]
                             .iter()
@@ -1606,9 +1795,12 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
                             .collect::<Vec<_>>()
                             .join(" ");
                         if inherited.is_empty() {
-                            "Tags et note".to_owned()
+                            crate::t!("Tags and note", "Tags et note").to_owned()
                         } else {
-                            format!("Tags et note — hérités : {inherited}")
+                            crate::tf!(
+                                "Tags and note — inherited: {inherited}",
+                                "Tags et note — hérités : {inherited}"
+                            )
                         }
                     }
                 };
@@ -1627,11 +1819,11 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
             Stop::Control(Control::AddAlias) => {
                 lines.push(Line::from(vec![
                     Span::raw(format!("{}  ", marker(focused))),
-                    nav::button("+ Ajouter un alias", focused),
+                    nav::button(crate::t!("+ Add an alias", "+ Ajouter un alias"), focused),
                 ]));
                 lines.push(Line::styled(
                     ellipsize(
-                        "    Les alias partagent ce bloc ; favoris, notes et connexions visent un alias précis.",
+                        crate::t!("    Aliases share this block; favorites, notes and connections target one exact alias.", "    Les alias partagent ce bloc ; favoris, notes et connexions visent un alias précis."),
                         width,
                     ),
                     Style::default().fg(GRAY),
@@ -1639,11 +1831,15 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
             }
             Stop::Control(Control::Note) => {
                 let preview = match note.as_deref() {
-                    Some("") | None => "(vide)".to_owned(),
+                    Some("") | None => crate::t!("(empty)", "(vide)").to_owned(),
                     Some(text) => text.to_owned(),
                 };
-                let button = nav::button("Modifier", focused);
-                let head = format!("{}  {:<16}", marker(focused), "Note personnelle");
+                let button = nav::button(crate::t!("Edit", "Modifier"), focused);
+                let head = format!(
+                    "{}  {:<16}",
+                    marker(focused),
+                    crate::t!("Personal note", "Note personnelle")
+                );
                 let room = width.saturating_sub(head.width() + button.width() + 2);
                 lines.push(Line::from(vec![
                     Span::styled(head, label_style(focused)),
@@ -1661,9 +1857,15 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
                 }
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    nav::button("Prévisualiser les modifications", focused),
+                    nav::button(
+                        crate::t!("Preview the changes", "Prévisualiser les modifications"),
+                        focused,
+                    ),
                     Span::raw("   "),
-                    nav::button("Annuler", current == Stop::Control(Control::Cancel)),
+                    nav::button(
+                        crate::t!("Cancel", "Annuler"),
+                        current == Stop::Control(Control::Cancel),
+                    ),
                 ]));
             }
             Stop::Control(Control::Cancel) => {
@@ -1708,32 +1910,55 @@ fn host_form(f: &mut Frame, m: &mut Model, area: Rect) {
     let hint = match current {
         Stop::Field(field) => forms::HostForm::example(field),
         Stop::Control(Control::File) => {
-            "Entrée : choisir un autre fichier ; le brouillon est conservé"
+            crate::t!(
+                "Enter: choose another file; the draft is kept",
+                "Entrée : choisir un autre fichier ; le brouillon est conservé"
+            )
         }
         Stop::Control(Control::KeyPicker) => {
-            "Entrée ou F9 : choisir une clé existante ; seul ce champ est rempli"
+            crate::t!(
+                "Enter or F9: choose an existing key; only this field is filled",
+                "Entrée ou F9 : choisir une clé existante ; seul ce champ est rempli"
+            )
         }
-        Stop::Control(Control::Section(_)) => "Entrée ou Espace : déplier / replier",
-        Stop::Control(Control::AddAlias) => "Entrée : ajouter un alias à ce bloc (Alt+A)",
-        Stop::Control(Control::RemoveAlias(_)) => "Entrée : retirer cet alias du bloc (Alt+D)",
+        Stop::Control(Control::Section(_)) => crate::t!(
+            "Enter or Space: unfold / fold",
+            "Entrée ou Espace : déplier / replier"
+        ),
+        Stop::Control(Control::AddAlias) => crate::t!(
+            "Enter: add an alias to this block (Alt+A)",
+            "Entrée : ajouter un alias à ce bloc (Alt+A)"
+        ),
+        Stop::Control(Control::RemoveAlias(_)) => crate::t!(
+            "Enter: remove this alias from the block (Alt+D)",
+            "Entrée : retirer cet alias du bloc (Alt+D)"
+        ),
         Stop::Control(Control::Note) => {
-            "Entrée : éditer la note, conservée dans les données de ssho, hors du fichier SSH"
+            crate::t!(
+                "Enter: edit the note, kept in the ssho data, outside the SSH file",
+                "Entrée : éditer la note, conservée dans les données de ssho, hors du fichier SSH"
+            )
         }
         Stop::Control(Control::Preview) => {
-            "Entrée : afficher l'aperçu ; rien n'est écrit avant « Enregistrer »"
+            crate::t!(
+                "Enter: show the preview; nothing is written before \"Save\"",
+                "Entrée : afficher l'aperçu ; rien n'est écrit avant « Enregistrer »"
+            )
         }
-        Stop::Control(Control::Cancel) => "Entrée : fermer ce formulaire",
+        Stop::Control(Control::Cancel) => {
+            crate::t!("Enter: close this form", "Entrée : fermer ce formulaire")
+        }
     };
     let mut footer = vec![];
     if !form.error.is_empty() {
         footer.push(Line::styled(
-            format!("Error: {}", form.error),
+            crate::tf!("Error: {}", "Erreur : {}", form.error),
             Style::default().fg(Color::Red),
         ));
     }
     footer.push(Line::styled(hint, Style::default().fg(GRAY)));
     footer.push(Line::styled(
-        "Tab/↓ suivant • Maj+Tab/↑ précédent • Entrée : champ suivant / activer • Ctrl+S : prévisualiser • Échap : annuler • * requis",
+        crate::t!("Tab/↓ next • Shift+Tab/↑ previous • Enter: next field / activate • Ctrl+S: preview • Esc: cancel • * required", "Tab/↓ suivant • Maj+Tab/↑ précédent • Entrée : champ suivant / activer • Ctrl+S : prévisualiser • Échap : annuler • * requis"),
         Style::default().fg(GRAY),
     ));
     f.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), parts[2]);
@@ -1748,7 +1973,13 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     let border = if area.height < 5 || area.width < 4 {
         Block::default()
     } else {
-        block("Port Forwarding Setup", true)
+        block(
+            crate::t!(
+                "Port Forwarding Setup",
+                "Configuration du transfert de port"
+            ),
+            true,
+        )
     };
     let inner = border.inner(area);
     f.render_widget(border, area);
@@ -1765,16 +1996,17 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     ])
     .split(inner);
     f.render_widget(
-        Paragraph::new(format!(
+        Paragraph::new(crate::tf!(
             "Host: {} • {} • {} (Ctrl+T)",
+            "Hôte : {} • {} • {} (Ctrl+T)",
             form.host,
             form.mode.label(),
             if form.dirty() {
-                "Unsaved changes"
+                crate::t!("Unsaved changes", "Modifications non enregistrées")
             } else if form.original_name.is_some() {
-                "Profile saved"
+                crate::t!("Profile saved", "Profil enregistré")
             } else {
-                "Draft"
+                crate::t!("Draft", "Brouillon")
             }
         ))
         .style(accent()),
@@ -1783,7 +2015,11 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     let mut lines = vec![];
     let mut focus_y = field_lines(
         &mut lines,
-        "Profile name (required to save only):".into(),
+        crate::t!(
+            "Profile name (required to save only):",
+            "Nom du profil (requis pour enregistrer seulement) :"
+        )
+        .into(),
         &form.inputs[5],
         form.focus == 5,
         inner.width as usize,
@@ -1797,7 +2033,7 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
         focus_y = lines.len();
     }
     lines.push(Line::styled(
-        "Forward Type:",
+        crate::t!("Forward Type:", "Type de transfert :"),
         if form.focus == 0 {
             accent()
         } else {
@@ -1813,9 +2049,18 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     )));
     lines.push(Line::styled(
         match form.kind {
-            0 => "Local forwarding: ssh -L [bind_address:]local_port:remote_host:remote_port",
-            1 => "Remote forwarding: ssh -R [bind_address:]remote_port:local_host:local_port",
-            _ => "Dynamic forwarding (SOCKS proxy): ssh -D [bind_address:]port",
+            0 => crate::t!(
+                "Local forwarding: ssh -L [bind_address:]local_port:remote_host:remote_port",
+                "Transfert local : ssh -L [adresse:]port_local:hôte_distant:port_distant"
+            ),
+            1 => crate::t!(
+                "Remote forwarding: ssh -R [bind_address:]remote_port:local_host:local_port",
+                "Transfert distant : ssh -R [adresse:]port_distant:hôte_local:port_local"
+            ),
+            _ => crate::t!(
+                "Dynamic forwarding (SOCKS proxy): ssh -D [bind_address:]port",
+                "Transfert dynamique (proxy SOCKS) : ssh -D [adresse:]port"
+            ),
         },
         Style::default().fg(GRAY),
     ));
@@ -1828,24 +2073,48 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     let labels = match form.kind {
         0 => [
             "",
-            "Local Port (listens on this machine):",
-            "Remote Host (destination, seen from the server):",
-            "Remote Port (destination):",
-            "Bind Address (listening address, optional):",
+            crate::t!(
+                "Local Port (listens on this machine):",
+                "Port local (écoute sur ce poste) :"
+            ),
+            crate::t!(
+                "Remote Host (destination, seen from the server):",
+                "Hôte distant (destination, vue du serveur) :"
+            ),
+            crate::t!("Remote Port (destination):", "Port distant (destination) :"),
+            crate::t!(
+                "Bind Address (listening address, optional):",
+                "Adresse d'écoute (facultative) :"
+            ),
         ],
         1 => [
             "",
-            "Remote Port (listens on the SSH server):",
-            "Local Host (destination, seen from this machine):",
-            "Local Port (destination):",
-            "Bind Address (listening address, optional):",
+            crate::t!(
+                "Remote Port (listens on the SSH server):",
+                "Port distant (écoute sur le serveur SSH) :"
+            ),
+            crate::t!(
+                "Local Host (destination, seen from this machine):",
+                "Hôte local (destination, vue de ce poste) :"
+            ),
+            crate::t!("Local Port (destination):", "Port local (destination) :"),
+            crate::t!(
+                "Bind Address (listening address, optional):",
+                "Adresse d'écoute (facultative) :"
+            ),
         ],
         _ => [
             "",
-            "SOCKS Port (listens on this machine):",
+            crate::t!(
+                "SOCKS Port (listens on this machine):",
+                "Port SOCKS (écoute sur ce poste) :"
+            ),
             "",
             "",
-            "Bind Address (listening address, optional):",
+            crate::t!(
+                "Bind Address (listening address, optional):",
+                "Adresse d'écoute (facultative) :"
+            ),
         ],
     };
     for i in form.fields().into_iter().filter(|&i| (1..=4).contains(&i)) {
@@ -1868,7 +2137,7 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
         focus_y = lines.len();
     }
     lines.push(Line::styled(
-        "Launch mode:",
+        crate::t!("Launch mode:", "Mode de lancement :"),
         if form.focus == F::MODE {
             accent()
         } else {
@@ -1878,15 +2147,21 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     lines.push(Line::from(format!(
         "{}{}   {}",
         if form.focus == F::MODE { "> " } else { "  " },
-        choice("Shell session", form.mode == LaunchMode::Shell),
-        choice("Tunnel only", form.mode == LaunchMode::TunnelOnly),
+        choice(
+            crate::t!("Shell session", "Session shell"),
+            form.mode == LaunchMode::Shell
+        ),
+        choice(
+            crate::t!("Tunnel only", "Tunnel seul"),
+            form.mode == LaunchMode::TunnelOnly
+        ),
     )));
     lines.push(Line::styled(
         ellipsize(
             if form.mode == LaunchMode::Shell {
-                "Opens a shell with the forwarding; the tunnel ends when you leave that shell."
+                crate::t!("Opens a shell with the forwarding; the tunnel ends when you leave that shell.", "Ouvre un shell avec le transfert ; le tunnel s'arrête quand vous quittez ce shell.")
             } else {
-                "Runs in the background, owned by ssho: follow or stop it in F7; it stops when ssho quits."
+                crate::t!("Runs in the background, owned by ssho: follow or stop it in F7; it stops when ssho quits.", "Tourne en arrière-plan, possédé par ssho : suivi et arrêt dans F7 ; il s'arrête quand ssho quitte.")
             },
             usize::from(inner.width),
         ),
@@ -1898,11 +2173,14 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     }
     lines.push(Line::from(vec![
         Span::raw("  "),
-        nav::button("Launch", form.focus == F::LAUNCH),
+        nav::button(crate::t!("Launch", "Lancer"), form.focus == F::LAUNCH),
         Span::raw("  "),
-        nav::button("Save profile", form.focus == F::SAVE),
+        nav::button(
+            crate::t!("Save profile", "Enregistrer le profil"),
+            form.focus == F::SAVE,
+        ),
         Span::raw("  "),
-        nav::button("Cancel", form.focus == F::CANCEL),
+        nav::button(crate::t!("Cancel", "Annuler"), form.focus == F::CANCEL),
     ]));
     let typing = (1..=5).contains(&form.focus);
     scroll_focus(
@@ -1930,16 +2208,22 @@ fn forward_form(f: &mut Frame, m: &mut Model, area: Rect) {
     let mut footer = vec![];
     if !form.error.is_empty() {
         footer.push(Line::styled(
-            format!("Error: {}", form.error),
+            crate::tf!("Error: {}", "Erreur : {}", form.error),
             Style::default().fg(Color::Red),
         ));
     }
     footer.push(Line::styled(
-        "Tab/↓: next field • Shift+Tab/↑: previous field • ←/→: type, mode or button",
+        crate::t!(
+            "Tab/↓: next field • Shift+Tab/↑: previous field • ←/→: type, mode or button",
+            "Tab/↓ : champ suivant • Maj+Tab/↑ : précédent • ←/→ : type, mode ou bouton"
+        ),
         Style::default().fg(GRAY),
     ));
     footer.push(Line::styled(
-        "Ctrl+S: save profile • Ctrl+L: launch • Ctrl+T: mode • Esc: cancel",
+        crate::t!(
+            "Ctrl+S: save profile • Ctrl+L: launch • Ctrl+T: mode • Esc: cancel",
+            "Ctrl+S : enregistrer le profil • Ctrl+L : lancer • Ctrl+T : mode • Échap : annuler"
+        ),
         Style::default().fg(GRAY),
     ));
     f.render_widget(Paragraph::new(footer), parts[2]);
@@ -1955,11 +2239,15 @@ fn source_files(f: &mut Frame, m: &Model, area: Rect) {
     };
     let labels = select::path_labels(files, area.width);
     let all = select::Item {
-        label: "Tous les fichiers".into(),
+        label: crate::t!("All files", "Tous les fichiers").into(),
         aside: String::new(),
         detail: vec![
-            "Aucun filtre par fichier.".into(),
-            format!("{} hôte(s) dans la configuration", m.all.len()),
+            crate::t!("No filter by file.", "Aucun filtre par fichier.").into(),
+            crate::tf!(
+                "{} host(s) in the configuration",
+                "{} hôte(s) dans la configuration",
+                m.all.len()
+            ),
         ],
         current: m.source_filter.is_none(),
         search: String::new(),
@@ -1977,14 +2265,21 @@ fn source_files(f: &mut Frame, m: &Model, area: Rect) {
         f,
         inset(area),
         select::Spec {
-            title: "Filtrer par fichier source".into(),
-            subject: "Limiter la liste aux hôtes déclarés dans un fichier".into(),
+            title: crate::t!("Filter by source file", "Filtrer par fichier source").into(),
+            subject: crate::t!(
+                "Limit the list to the hosts declared in one file",
+                "Limiter la liste aux hôtes déclarés dans un fichier"
+            )
+            .into(),
             items,
             selected: *selected,
             error: "",
-            apply: "appliquer",
+            apply: crate::t!("apply", "appliquer"),
             query: Some(&m.selector_query),
-            empty: "Aucun fichier de configuration SSH.",
+            empty: crate::t!(
+                "No SSH configuration file.",
+                "Aucun fichier de configuration SSH."
+            ),
         },
     );
 }
@@ -2010,8 +2305,8 @@ fn alias_chooser(f: &mut Frame, m: &Model, area: Rect) {
                     effective.map_or(host.hostname.as_str(), |e| &e.hostname)
                 ),
                 detail: vec![
-                    format!("Fichier : {}", host.source_file.display()),
-                    "Connexion, favori et note visent cet alias précis ; le bloc SSH est partagé."
+                    crate::tf!("File: {}", "Fichier : {}", host.source_file.display()),
+                    crate::t!("Connection, favorite and note target this exact alias; the SSH block is shared.", "Connexion, favori et note visent cet alias précis ; le bloc SSH est partagé.")
                         .into(),
                 ],
                 current: active.as_deref() == Some(host.name.as_str()),
@@ -2023,14 +2318,22 @@ fn alias_chooser(f: &mut Frame, m: &Model, area: Rect) {
         f,
         inset(area),
         select::Spec {
-            title: "Choisir un alias — cible exacte de connexion".into(),
-            subject: format!("Bloc de {primary} : {} alias", hosts.len()),
+            title: crate::t!(
+                "Choose an alias — exact connection target",
+                "Choisir un alias — cible exacte de connexion"
+            )
+            .into(),
+            subject: crate::tf!(
+                "Block of {primary}: {} aliases",
+                "Bloc de {primary} : {} alias",
+                hosts.len()
+            ),
             items,
             selected: *selected,
             error: "",
-            apply: "choisir",
+            apply: crate::t!("choose", "choisir"),
             query: Some(&m.selector_query),
-            empty: "Ce bloc n'a aucun alias.",
+            empty: crate::t!("This block has no alias.", "Ce bloc n'a aucun alias."),
         },
     );
 }
@@ -2054,23 +2357,51 @@ fn files(f: &mut Frame, m: &mut Model, area: Rect) {
     };
     let (title, subject) = if *retarget {
         (
-            "Changer le fichier de destination".to_owned(),
-            "Le brouillon est conservé ; seul son fichier cible change".to_owned(),
+            crate::t!(
+                "Change the destination file",
+                "Changer le fichier de destination"
+            )
+            .to_owned(),
+            crate::t!(
+                "The draft is kept; only its target file changes",
+                "Le brouillon est conservé ; seul son fichier cible change"
+            )
+            .to_owned(),
         )
     } else if let Some(host) = host {
         (
-            format!("Hôtes > Déplacer {} — fichier de destination", host.name),
-            format!("Source : {}", host.source_file.display()),
+            crate::tf!(
+                "Hosts > Move {} — destination file",
+                "Hôtes > Déplacer {} — fichier de destination",
+                host.name
+            ),
+            crate::tf!("Source: {}", "Source : {}", host.source_file.display()),
         )
     } else if let Some(source) = duplicate.as_deref() {
         (
-            format!("Hôtes > Dupliquer {} — fichier de destination", source.name),
-            "Le fichier de l'original est aussi une destination possible".to_owned(),
+            crate::tf!(
+                "Hosts > Duplicate {} — destination file",
+                "Hôtes > Dupliquer {} — fichier de destination",
+                source.name
+            ),
+            crate::t!(
+                "The file of the original is a possible destination too",
+                "Le fichier de l'original est aussi une destination possible"
+            )
+            .to_owned(),
         )
     } else {
         (
-            "Hôtes > Ajouter un hôte — fichier de destination".to_owned(),
-            "Fichier SSH dans lequel le nouveau bloc sera écrit".to_owned(),
+            crate::t!(
+                "Hosts > Add host — destination file",
+                "Hôtes > Ajouter un hôte — fichier de destination"
+            )
+            .to_owned(),
+            crate::t!(
+                "SSH file in which the new block will be written",
+                "Fichier SSH dans lequel le nouveau bloc sera écrit"
+            )
+            .to_owned(),
         )
     };
     let labels = select::path_labels(files, area.width);
@@ -2094,9 +2425,12 @@ fn files(f: &mut Frame, m: &mut Model, area: Rect) {
             items,
             selected: *selected,
             error: &m.error,
-            apply: "choisir",
+            apply: crate::t!("choose", "choisir"),
             query: Some(&m.selector_query),
-            empty: "Aucun fichier de configuration SSH.",
+            empty: crate::t!(
+                "No SSH configuration file.",
+                "Aucun fichier de configuration SSH."
+            ),
         },
     );
 }
@@ -2105,7 +2439,11 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
         return;
     };
     let area = panel(area, 96, 34);
-    let title = format!("SSH Host Information: {}", h.name);
+    let title = crate::tf!(
+        "SSH Host Information: {}",
+        "Fiche de l'hôte SSH : {}",
+        h.name
+    );
     let border = block(&title, true);
     let inner = border.inner(area);
     f.render_widget(border, area);
@@ -2115,11 +2453,17 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
         // terminal ignored the clipboard request.
         vec![
             Line::styled(
-                format!("Copie demandée au terminal (OSC 52) : {label}"),
+                crate::tf!(
+                    "Copy requested from the terminal (OSC 52): {label}",
+                    "Copie demandée au terminal (OSC 52) : {label}"
+                ),
                 Style::default().fg(Color::Green),
             ),
             Line::styled(
-                "Si le collage reste vide, sélectionnez la valeur ci-dessous :",
+                crate::t!(
+                    "If pasting gives nothing, select the value below:",
+                    "Si le collage reste vide, sélectionnez la valeur ci-dessous :"
+                ),
                 Style::default().fg(GRAY),
             ),
             Line::from(value.clone()),
@@ -2150,7 +2494,7 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     m.page = usize::from(parts[0].height).max(1);
     details::render_rows(f, parts[0], lines, &mut m.scroll);
     let mut buttons = vec![];
-    for (index, label) in details::SHEET_ACTIONS.into_iter().enumerate() {
+    for (index, label) in details::sheet_actions().into_iter().enumerate() {
         buttons.push(nav::button(label, m.sheet_focus == Some(index)));
         buttons.push(Span::raw(" "));
     }
@@ -2158,7 +2502,7 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
         Paragraph::new(vec![
             Line::from(buttons),
             Line::styled(
-                "↑↓/PgUp/PgDn défiler • Tab/←→ : actions • F5 : recharger • F2 : autres actions • Échap : retour",
+                crate::t!("↑↓/PgUp/PgDn: scroll • Tab/←→: actions • F5: reload • F2: other actions • Esc: back", "↑↓/PgUp/PgDn défiler • Tab/←→ : actions • F5 : recharger • F2 : autres actions • Échap : retour"),
                 Style::default().fg(GRAY),
             ),
         ]),
@@ -2167,7 +2511,7 @@ fn info(f: &mut Frame, m: &mut Model, area: Rect) {
     f.render_widget(Paragraph::new(notice).wrap(Wrap { trim: false }), parts[2]);
     if !m.error.is_empty() {
         f.render_widget(
-            Paragraph::new(format!("Error: {}", m.error))
+            Paragraph::new(crate::tf!("Error: {}", "Erreur : {}", m.error))
                 .style(Style::default().fg(Color::Red))
                 .wrap(Wrap { trim: false }),
             parts[3],
@@ -2198,20 +2542,25 @@ fn copy_value(f: &mut Frame, m: &Model, area: Rect) {
         f,
         inset(area),
         select::Spec {
-            title: format!("Copier une valeur — {host}"),
-            subject: "Une seule valeur est copiée ; rien n'est exporté".into(),
+            title: crate::tf!("Copy a value — {host}", "Copier une valeur — {host}"),
+            subject: crate::t!(
+                "A single value is copied; nothing is exported",
+                "Une seule valeur est copiée ; rien n'est exporté"
+            )
+            .into(),
             items,
             selected: *selected,
             error: "",
-            apply: "copier",
+            apply: crate::t!("copy", "copier"),
             query: None,
-            empty: "Aucune valeur à copier.",
+            empty: crate::t!("No value to copy.", "Aucune valeur à copier."),
         },
     );
 }
 fn help(f: &mut Frame, m: &mut Model, area: Rect) {
-    let area = panel(area, 96, 44);
-    let border = block("SSHO - Commands", true);
+    // Wide enough for the longest line of either language in each column.
+    let area = panel(area, 126, 48);
+    let border = block(crate::t!("SSHO - Commands", "SSHO - Commandes"), true);
     let inner = border.inner(area);
     f.render_widget(border, area);
     let parts = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
@@ -2226,7 +2575,7 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
                 if action.category() == *category {
                     let keys = keymap.keys(action);
                     let keys = if keys.is_empty() {
-                        "F2 only".to_owned()
+                        crate::t!("F2 only", "F2 seul").to_owned()
                     } else {
                         keys.join(", ")
                     };
@@ -2241,50 +2590,125 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     let mut left = section(&[C::Connection, C::Host, C::Organization]);
     left.extend(
         [
-            "Search",
-            "Words/phrases and fields combine with AND/ET",
+            crate::t!("Search", "Recherche"),
+            crate::t!(
+                "Words/phrases and fields combine with AND/ET",
+                "Mots, phrases et champs se combinent par AND/ET"
+            ),
             "tag:work AND user:deploy",
             "tag:work ET is:online",
             "file:\"Team Hosts\" is:favorite",
-            "Tab/Shift+Tab switch search / table",
-            "Esc    leave search, filter kept / back one level",
-            "Backspace (table) or Ctrl+U (input) clears the search",
+            crate::t!(
+                "Tab/Shift+Tab switch search / table",
+                "Tab/Maj+Tab : recherche / tableau"
+            ),
+            crate::t!(
+                "Esc    leave search, filter kept / back one level",
+                "Échap  quitter la saisie, filtre conservé / retour"
+            ),
+            crate::t!(
+                "Backspace (table) or Ctrl+U (input) clears the search",
+                "Retour arrière (tableau) ou Ctrl+U (saisie) : effacer"
+            ),
         ]
         .map(String::from),
     );
     let mut right = section(&[C::Tools, C::Application]);
     if let Some(prefix) = keymap.prefix() {
         right.pop();
-        right.push(format!("{prefix:<9} Actions rapides (puis une lettre)"));
+        right.push(crate::tf!(
+            "{prefix:<9} Quick actions (then a letter)",
+            "{prefix:<9} Actions rapides (puis une lettre)"
+        ));
         right.push(String::new());
     }
     right.extend(
         [
-            "Signes de la liste",
-            "[x] cible de lot  * favori  ≡ note  ▼ ▶ groupe",
-            "+ en ligne  ! hors ligne  ~ en cours  ? inconnu",
-            "a→b alias actif d'un bloc  +N alias : autres alias du bloc",
+            crate::t!("Signs of the list", "Signes de la liste"),
+            crate::t!(
+                "[x] batch target  * favorite  ≡ note  ▼ ▶ group",
+                "[x] cible de lot  * favori  ≡ note  ▼ ▶ groupe"
+            ),
+            crate::t!(
+                "+ online  ! offline  ~ in progress  ? unknown",
+                "+ en ligne  ! hors ligne  ~ en cours  ? inconnu"
+            ),
+            crate::t!(
+                "a→b active alias of a block  +N alias: other aliases",
+                "a→b alias actif d'un bloc  +N alias : autres alias du bloc"
+            ),
             "",
-            "Navigation",
-            "↑↓     select (Ctrl+P/N in search)",
-            "Group Enter/Space: expand/collapse; ←/→ parent/open",
-            "SSH exit returns here with its result",
-            "Alt+↑↓ scroll details (Ctrl+PgUp/PgDn; width >=110)",
+            crate::t!("Navigation", "Navigation"),
+            crate::t!(
+                "↑↓     select (Ctrl+P/N in search)",
+                "↑↓     choisir (Ctrl+P/N dans la recherche)"
+            ),
+            crate::t!(
+                "Group Enter/Space: expand/collapse; ←/→ parent/open",
+                "Groupe Entrée/Espace : déplier ; ←/→ parent/ouvrir"
+            ),
+            crate::t!(
+                "SSH exit returns here with its result",
+                "La fin de SSH revient ici avec son résultat"
+            ),
+            crate::t!(
+                "Alt+↑↓ scroll details (Ctrl+PgUp/PgDn; width >=110)",
+                "Alt+↑↓ défiler les détails (Ctrl+PgUp/PgDn ; largeur >=110)"
+            ),
             "",
-            "Forms and reviews",
-            "Ctrl+S preview/save • Ctrl+L launch tunnel/batch review",
-            "Host form: Tab/↑↓ fields, sections, buttons; F9 keys",
-            "Enter: next field or activate; never submits a field",
-            "Alt+A/D add/remove an additional alias",
-            "Ctrl+T forwarding: shell session / tunnel only",
-            "Ctrl+A/E start/end of input",
-            "Review: Enter confirms, Esc returns",
-            "Modified draft: Tab chooses, Enter confirms, Esc resumes",
-            "Esc/Ctrl+C: back one level; quitting is asked from the list",
-            "Columns: Space toggle, Shift+↑↓ order, r reset",
-            "Batch results: s cancels the batch",
-            "Keys: F4 full details/error; ↑↓ PgUp/Dn Home/End scroll",
-            "ICMP local: no bastion / SSH auth",
+            crate::t!("Forms and reviews", "Formulaires et aperçus"),
+            crate::t!(
+                "Ctrl+S preview/save • Ctrl+L launch tunnel/batch review",
+                "Ctrl+S aperçu/enregistrer • Ctrl+L lancer tunnel / vérifier lot"
+            ),
+            crate::t!(
+                "Host form: Tab/↑↓ fields, sections, buttons; F9 keys",
+                "Formulaire d'hôte : Tab/↑↓ champs, sections, boutons ; F9 clés"
+            ),
+            crate::t!(
+                "Enter: next field or activate; never submits a field",
+                "Entrée : champ suivant ou activer ; ne soumet jamais"
+            ),
+            crate::t!(
+                "Alt+A/D add/remove an additional alias",
+                "Alt+A/D ajouter/retirer un alias supplémentaire"
+            ),
+            crate::t!(
+                "Ctrl+T forwarding: shell session / tunnel only",
+                "Ctrl+T transfert : session shell / tunnel seul"
+            ),
+            crate::t!(
+                "Ctrl+A/E start/end of input",
+                "Ctrl+A/E début/fin de saisie"
+            ),
+            crate::t!(
+                "Review: Tab to the button, Ctrl+S confirms, Esc returns",
+                "Aperçu : Tab jusqu'au bouton, Ctrl+S confirme, Échap revient"
+            ),
+            crate::t!(
+                "Modified draft: Tab chooses, Enter confirms, Esc resumes",
+                "Brouillon modifié : Tab choisit, Entrée valide, Échap reprend"
+            ),
+            crate::t!(
+                "Esc/Ctrl+C: back one level; quitting is asked from the list",
+                "Échap/Ctrl+C : retour d'un niveau ; quitter se demande à la liste"
+            ),
+            crate::t!(
+                "Columns: Space toggle, Shift+↑↓ order, r reset",
+                "Colonnes : Espace cocher, Maj+↑↓ ordre, r réinitialiser"
+            ),
+            crate::t!(
+                "Batch results: s cancels the batch",
+                "Résultats d'un lot : s annule le lot"
+            ),
+            crate::t!(
+                "Keys: F4 full details/error; ↑↓ PgUp/Dn Home/End scroll",
+                "Clés : F4 détails/erreur ; ↑↓ PgUp/Dn Début/Fin défiler"
+            ),
+            crate::t!(
+                "ICMP local: no bastion / SSH auth",
+                "ICMP local : ni bastion ni authentification SSH"
+            ),
         ]
         .map(String::from),
     );
@@ -2302,7 +2726,11 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
             })
             .collect();
         if found.is_empty() {
-            vec!["No line of the help matches.".to_owned()]
+            vec![crate::t!(
+                "No line of the help matches.",
+                "Aucune ligne de l'aide ne correspond."
+            )
+            .to_owned()]
         } else {
             found
         }
@@ -2330,15 +2758,22 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     if let Some(path) = &m.source_filter {
         text.insert(
             0,
-            format!(
+            crate::tf!(
                 "File: {} • {}/F2: clear",
+                "Fichier : {} • {}/F2 : effacer",
                 path.display(),
                 keymap.hint(PaletteAction::ClearSourceFilter)
             ),
         );
     }
     if !keymap.conflicts.is_empty() {
-        text.push("Raccourcis refusés (key_bindings de config.json) :".into());
+        text.push(
+            crate::t!(
+                "Shortcuts refused (key_bindings in config.json):",
+                "Raccourcis refusés (key_bindings de config.json) :"
+            )
+            .into(),
+        );
         text.extend(
             details::wrapped(
                 keymap
@@ -2353,7 +2788,13 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
         );
     }
     if !m.config_warnings.is_empty() {
-        text.push("Configuration warnings (FileTags ignored):".into());
+        text.push(
+            crate::t!(
+                "Configuration warnings (FileTags ignored):",
+                "Avertissements de configuration (FileTags ignorés) :"
+            )
+            .into(),
+        );
         text.extend(
             details::wrapped(
                 m.config_warnings
@@ -2375,14 +2816,16 @@ fn help(f: &mut Frame, m: &mut Model, area: Rect) {
     );
     f.render_widget(
         Paragraph::new(if m.help_search || !m.selector_query.value.is_empty() {
-            format!(
+            crate::tf!(
                 "Search: {}{} • Enter: keep • Esc: clear",
+                "Recherche : {}{} • Entrée : garder • Échap : effacer",
                 m.selector_query.value,
                 if m.help_search { "_" } else { "" }
             )
         } else {
-            format!(
+            crate::tf!(
                 "/: search • ↑↓/PgUp/PgDn: scroll • Esc, {}, q or Enter: close",
+                "/ : rechercher • ↑↓/PgUp/PgDn : défiler • Échap, {}, q ou Entrée : fermer",
                 keymap.hint(PaletteAction::Help)
             )
         })
@@ -2396,7 +2839,7 @@ fn note_editor(f: &mut Frame, m: &mut Model, area: Rect) {
         return;
     };
     let area = nav::bounded(inset(area), nav::TABLE_WIDTH);
-    let border = block("Personal note", true);
+    let border = block(crate::t!("Personal note", "Note personnelle"), true);
     let inner = border.inner(area);
     f.render_widget(border, area);
     // Whose note this is, and where it lives: application data, not the SSH file.
@@ -2412,19 +2855,25 @@ fn note_editor(f: &mut Frame, m: &mut Model, area: Rect) {
         .map(|root| root.join("metadata.json").display().to_string())
         .unwrap_or_else(|| "metadata.json".into());
     let mut header = vec![Line::from(vec![
-        Span::styled(format!("Host: {}", editor.host), accent()),
+        Span::styled(crate::tf!("Host: {}", "Hôte : {}", editor.host), accent()),
         Span::raw("  "),
         if editor.dirty() {
-            Span::styled("● Modifiée", Style::default().fg(Color::Yellow))
+            Span::styled(
+                crate::t!("● Modified", "● Modifiée"),
+                Style::default().fg(Color::Yellow),
+            )
         } else {
-            Span::styled("Enregistrée", Style::default().fg(GRAY))
+            Span::styled(crate::t!("Saved", "Enregistrée"), Style::default().fg(GRAY))
         },
     ])];
     if inner.height >= 10 {
         if let Some(source) = source {
             header.push(Line::styled(
                 ellipsize(
-                    &format!("Fichier SSH de l'hôte : {source}"),
+                    &crate::tf!(
+                        "SSH file of the host: {source}",
+                        "Fichier SSH de l'hôte : {source}"
+                    ),
                     usize::from(inner.width),
                 ),
                 Style::default().fg(GRAY),
@@ -2432,14 +2881,17 @@ fn note_editor(f: &mut Frame, m: &mut Model, area: Rect) {
         }
         header.push(Line::styled(
             ellipsize(
-                &format!("Donnée de ssho : {data}"),
+                &crate::tf!("ssho data: {data}", "Donnée de ssho : {data}"),
                 usize::from(inner.width),
             ),
             Style::default().fg(GRAY),
         ));
         header.push(Line::styled(
             ellipsize(
-                "Jamais écrite dans le fichier SSH ; à ne pas confondre avec un tag.",
+                crate::t!(
+                    "Never written to the SSH file; not to be confused with a tag.",
+                    "Jamais écrite dans le fichier SSH ; à ne pas confondre avec un tag."
+                ),
                 usize::from(inner.width),
             ),
             Style::default().fg(GRAY),
@@ -2490,19 +2942,19 @@ fn note_editor(f: &mut Frame, m: &mut Model, area: Rect) {
     let mut footer = vec![];
     if !editor.error.is_empty() {
         footer.push(Line::styled(
-            format!("Error: {}", editor.error),
+            crate::tf!("Error: {}", "Erreur : {}", editor.error),
             Style::default().fg(Color::Red),
         ));
     }
     if footer_height > 1 {
         footer.push(Line::from(vec![
-            nav::button("Enregistrer", editor.button == Some(0)),
+            nav::button(crate::t!("Save", "Enregistrer"), editor.button == Some(0)),
             Span::raw("  "),
-            nav::button("Annuler", editor.button == Some(1)),
+            nav::button(crate::t!("Cancel", "Annuler"), editor.button == Some(1)),
         ]));
     }
     footer.push(Line::styled(
-        "Enter: newline • Tab: buttons • Ctrl+S: save • Esc/Ctrl+C: cancel",
+        crate::t!("Enter: newline • Tab: buttons • Ctrl+S: save • Esc/Ctrl+C: cancel", "Entrée : nouvelle ligne • Tab : boutons • Ctrl+S : enregistrer • Échap/Ctrl+C : annuler"),
         Style::default().fg(GRAY),
     ));
     f.render_widget(Paragraph::new(footer).wrap(Wrap { trim: false }), parts[2]);
@@ -2520,22 +2972,32 @@ fn profile_list(f: &mut Frame, m: &Model, area: Rect) {
     ])
     .split(area);
     f.render_widget(
-        Paragraph::new(format!("Host: {}", list.host)).block(block("Tunnel profiles", true)),
+        Paragraph::new(crate::tf!("Host: {}", "Hôte : {}", list.host)).block(block(
+            crate::t!("Tunnel profiles", "Profils de tunnels"),
+            true,
+        )),
         parts[0],
     );
     if let Some(name) = &list.delete {
         f.render_widget(
-            Paragraph::new(format!(
-                "Delete profile '{name}'?\nEnter: confirm • Esc: cancel"
+            Paragraph::new(crate::tf!(
+                "Delete profile '{name}'?\nEnter: confirm • Esc: cancel",
+                "Supprimer le profil « {name} » ?\nEntrée : confirmer • Échap : annuler"
             ))
-            .block(block("Delete tunnel profile", true)),
+            .block(block(
+                crate::t!("Delete tunnel profile", "Supprimer un profil de tunnel"),
+                true,
+            )),
             parts[1],
         );
     } else {
         let profiles = m.tunnel_profiles.get(&list.host);
         if profiles.is_none_or(BTreeMap::is_empty) {
             f.render_widget(
-                Paragraph::new("No profiles. Press a to create one; f resumes last forwarding."),
+                Paragraph::new(crate::t!(
+                    "No profiles. Press a to create one; f resumes last forwarding.",
+                    "Aucun profil. a pour en créer un ; f reprend le dernier transfert."
+                )),
                 parts[1],
             );
         } else {
@@ -2567,7 +3029,15 @@ fn profile_list(f: &mut Frame, m: &Model, area: Rect) {
                         Constraint::Min(0),
                     ],
                 )
-                .header(Row::new(["Name", "Type", "Mode", "Forwarding"]).style(accent()))
+                .header(
+                    Row::new([
+                        crate::t!("Name", "Nom"),
+                        "Type",
+                        crate::t!("Mode", "Mode"),
+                        crate::t!("Forwarding", "Transfert"),
+                    ])
+                    .style(accent()),
+                )
                 .highlight_symbol("▶ ")
                 .row_highlight_style(
                     Style::default()
@@ -2594,12 +3064,12 @@ fn profile_list(f: &mut Frame, m: &Model, area: Rect) {
         })
         .unwrap_or_default();
     let focused = if empty {
-        profiles::ACTIONS.len() - 1
+        profiles::actions().len() - 1
     } else {
         list.button
     };
     let mut buttons = vec![];
-    for (index, label) in profiles::ACTIONS.into_iter().enumerate() {
+    for (index, label) in profiles::actions().into_iter().enumerate() {
         buttons.push(nav::button(label, index == focused));
         buttons.push(Span::raw(" "));
     }
@@ -2615,7 +3085,7 @@ fn profile_list(f: &mut Frame, m: &Model, area: Rect) {
             },
             Line::from(buttons),
             Line::styled(
-                "↑↓: profile • ←/→: action • Enter: run it • f: last forwarding draft • Esc: back",
+                crate::t!("↑↓: profile • ←/→: action • Enter: run it • f: last forwarding draft • Esc: back", "↑↓ : profil • ←/→ : action • Entrée : la lancer • f : dernier transfert • Échap : retour"),
                 Style::default().fg(GRAY),
             ),
         ]),
@@ -2646,16 +3116,16 @@ fn group_mode(f: &mut Frame, m: &Model, area: Rect) {
     let View::GroupMode { selected } = &m.view else {
         return;
     };
-    let items = groups::MODES
+    let items = groups::modes()
         .iter()
         .map(|(mode, label)| select::Item {
             label: (*label).to_owned(),
             aside: String::new(),
             detail: vec![match mode {
-                GroupMode::Flat => "Tous les hôtes dans une seule liste triée.",
-                GroupMode::Files => "Un groupe repliable par fichier de configuration.",
+                GroupMode::Flat => crate::t!("Every host in a single sorted list.", "Tous les hôtes dans une seule liste triée."),
+                GroupMode::Files => crate::t!("One collapsible group per configuration file.", "Un groupe repliable par fichier de configuration."),
                 GroupMode::FileTags => {
-                    "Par fichier, puis par tag principal : premier tag propre, sinon premier tag hérité, sinon « Sans tag »."
+                    crate::t!("By file, then by main tag: first own tag, else first inherited tag, else \"No tag\".", "Par fichier, puis par tag principal : premier tag propre, sinon premier tag hérité, sinon « Sans tag ».")
                 }
             }
             .to_owned()],
@@ -2667,12 +3137,20 @@ fn group_mode(f: &mut Frame, m: &Model, area: Rect) {
         f,
         inset(area),
         select::Spec {
-            title: "Groupes — présentation de la liste".into(),
-            subject: "Préférence enregistrée ; les replis restent ceux de la session".into(),
+            title: crate::t!(
+                "Groups — presentation of the list",
+                "Groupes — présentation de la liste"
+            )
+            .into(),
+            subject: crate::t!(
+                "Saved preference; collapsed groups stay those of the session",
+                "Préférence enregistrée ; les replis restent ceux de la session"
+            )
+            .into(),
             items,
             selected: *selected,
             error: &m.error,
-            apply: "enregistrer",
+            apply: crate::t!("save", "enregistrer"),
             query: None,
             empty: "",
         },
@@ -2682,26 +3160,32 @@ fn group_mode(f: &mut Frame, m: &Model, area: Rect) {
 pub(super) fn group_content(key: &groups::Key, count: usize, aliases: bool) -> Vec<Line<'static>> {
     let (path, tag) = match key {
         groups::Key::File(path) => (path, None),
-        groups::Key::Tag(path, tag) => (path, Some(tag.as_deref().unwrap_or("Sans tag"))),
+        groups::Key::Tag(path, tag) => (
+            path,
+            Some(tag.as_deref().unwrap_or(crate::t!("No tag", "Sans tag"))),
+        ),
     };
     let mut lines = vec![
-        Line::from("Source:"),
+        Line::from(crate::t!("Source:", "Source :")),
         Line::from(path.display().to_string()),
     ];
     if let Some(tag) = tag {
-        lines.push(Line::from(format!("Primary tag: {tag}")));
+        lines.push(Line::from(crate::tf!(
+            "Primary tag: {tag}",
+            "Tag principal : {tag}"
+        )));
     }
     // Why these hosts are together, in the terms of the grouping mode.
     lines.push(Line::from(match tag {
-        None => "Critère : hôtes déclarés dans ce fichier de configuration.",
+        None => crate::t!("Criterion: hosts declared in this configuration file.", "Critère : hôtes déclarés dans ce fichier de configuration."),
         Some(_) => {
-            "Critère : hôtes de ce fichier dont le tag principal est celui-ci (premier tag propre, sinon premier tag hérité, sinon « Sans tag »)."
+            crate::t!("Criterion: hosts of this file whose main tag is this one (first own tag, else first inherited tag, else \"No tag\").", "Critère : hôtes de ce fichier dont le tag principal est celui-ci (premier tag propre, sinon premier tag hérité, sinon « Sans tag »).")
         }
     }));
     lines.extend([
-        Line::from(format!("{count} matching {}", if aliases { "blocks" } else { "hosts" })),
-        Line::from("In list: Enter/Space toggles group; Left closes or selects parent; Right opens or selects child."),
-        Line::from("Select a host for SSH and host actions."),
+        Line::from(crate::tf!("{count} matching {}", "{count} {} correspondant(s)", if aliases { crate::t!("blocks", "blocs") } else { crate::t!("hosts", "hôtes") })),
+        Line::from(crate::t!("In list: Enter/Space toggles group; Left closes or selects parent; Right opens or selects child.", "Dans la liste : Entrée/Espace déplie le groupe ; Gauche replie ou va au parent ; Droite ouvre ou va à l'enfant.")),
+        Line::from(crate::t!("Select a host for SSH and host actions.", "Sélectionnez un hôte pour SSH et les actions d'hôte.")),
     ]);
     lines
 }
@@ -2716,10 +3200,19 @@ fn group_info(f: &mut Frame, m: &mut Model, area: Rect) {
         Constraint::Length(1),
     ])
     .split(inset(area));
-    f.render_widget(Paragraph::new("Group info").style(accent()), parts[0]);
+    f.render_widget(
+        Paragraph::new(crate::t!("Group info", "Fiche de groupe")).style(accent()),
+        parts[0],
+    );
     m.page = usize::from(parts[1].height).max(1);
     details::render_rows(f, parts[1], lines, &mut m.scroll);
-    f.render_widget(Paragraph::new("↑↓: scroll • Esc: back"), parts[2]);
+    f.render_widget(
+        Paragraph::new(crate::t!(
+            "↑↓: scroll • Esc: back",
+            "↑↓ : défiler • Échap : retour"
+        )),
+        parts[2],
+    );
 }
 
 fn availability(f: &mut Frame, m: &Model, area: Rect) {
@@ -2733,12 +3226,12 @@ fn availability(f: &mut Frame, m: &Model, area: Rect) {
             aside: String::new(),
             detail: match method {
                 AvailabilityMethod::Ssh => vec![
-                    "Vérifie qu'un serveur SSH répond : poignée de main directe, ou contrôle via le proxy configuré.".to_owned(),
-                    "Ne prouve pas l'authentification.".to_owned(),
+                    crate::t!("Checks that an SSH server answers: direct handshake, or a check through the configured proxy.", "Vérifie qu'un serveur SSH répond : poignée de main directe, ou contrôle via le proxy configuré.").to_owned(),
+                    crate::t!("It does not prove authentication.", "Ne prouve pas l'authentification.").to_owned(),
                 ],
                 AvailabilityMethod::Icmp => vec![
-                    "Ping depuis ce poste : disponibilité réseau seulement, sans bastion ni authentification SSH.".to_owned(),
-                    "État « inconnu » si la commande ping manque ou est refusée.".to_owned(),
+                    crate::t!("Ping from this machine: network availability only, without bastion or SSH authentication.", "Ping depuis ce poste : disponibilité réseau seulement, sans bastion ni authentification SSH.").to_owned(),
+                    crate::t!("\"Unknown\" state when the ping command is missing or refused.", "État « inconnu » si la commande ping manque ou est refusée.").to_owned(),
                 ],
             },
             current: method == m.preferences.availability_method,
@@ -2749,12 +3242,57 @@ fn availability(f: &mut Frame, m: &Model, area: Rect) {
         f,
         inset(area),
         select::Spec {
-            title: "Méthode de disponibilité".into(),
-            subject: "Ce que mesure l'état affiché dans la liste".into(),
+            title: crate::t!("Availability method", "Méthode de disponibilité").into(),
+            subject: crate::t!(
+                "What the state shown in the list measures",
+                "Ce que mesure l'état affiché dans la liste"
+            )
+            .into(),
             items,
             selected,
             error: &m.error,
-            apply: "enregistrer",
+            apply: crate::t!("save", "enregistrer"),
+            query: None,
+            empty: "",
+        },
+    );
+}
+
+/// Each language is named in itself, and the screen says what it is in both,
+/// so the way back is readable whatever is currently displayed.
+fn language(f: &mut Frame, m: &Model, area: Rect) {
+    let View::Language { selected } = m.view else {
+        return;
+    };
+    let items = crate::i18n::Language::ALL
+        .into_iter()
+        .map(|language| select::Item {
+            label: language.name().to_owned(),
+            aside: String::new(),
+            detail: vec![match language {
+                crate::i18n::Language::En => "The whole interface is displayed in English.",
+                crate::i18n::Language::Fr => "Toute l'interface est affichée en français.",
+            }
+            .to_owned()],
+            current: language == m.preferences.language,
+            search: String::new(),
+        })
+        .collect();
+    select::draw(
+        f,
+        inset(area),
+        select::Spec {
+            // Both languages on purpose: the screen must be readable from either.
+            title: "Language / Langue de l'interface".into(),
+            subject: crate::t!(
+                "Saved in config.json (\"language\"); applied immediately",
+                "Enregistrée dans config.json (« language ») ; appliquée aussitôt"
+            )
+            .into(),
+            items,
+            selected,
+            error: &m.error,
+            apply: crate::t!("save", "enregistrer"),
             query: None,
             empty: "",
         },
@@ -2768,7 +3306,7 @@ fn columns_selector(f: &mut Frame, m: &Model, area: Rect, table_width: u16) {
     let area = panel(area, 76, 20);
     f.render_widget(Clear, area);
     let border = if area.height >= 10 {
-        block("Columns", true)
+        block(crate::t!("Columns", "Colonnes"), true)
     } else {
         Block::default()
     };
@@ -2795,10 +3333,10 @@ fn columns_selector(f: &mut Frame, m: &Model, area: Rect, table_width: u16) {
     let target = m
         .selected_host()
         .map(|h| h.name)
-        .unwrap_or_else(|| "group / no host".into());
+        .unwrap_or_else(|| crate::t!("group / no host", "groupe / aucun hôte").into());
     f.render_widget(
         Paragraph::new(ellipsize(
-            &format!("Columns • {target}"),
+            &crate::tf!("Columns • {target}", "Colonnes • {target}"),
             parts[0].width as usize,
         ))
         .style(accent()),
@@ -2810,13 +3348,13 @@ fn columns_selector(f: &mut Frame, m: &Model, area: Rect, table_width: u16) {
         let active = editor.draft.contains(column);
         let hidden = active && !plan.iter().any(|(visible, _)| visible == column);
         let state = if *column == HostColumn::Name {
-            "fixed"
+            crate::t!("fixed", "fixe")
         } else if hidden {
-            "hidden: width"
+            crate::t!("hidden: width", "masquée : largeur")
         } else if active {
-            "shown"
+            crate::t!("shown", "affichée")
         } else {
-            "off"
+            crate::t!("off", "désactivée")
         };
         Row::new([format!(
             "{} {} ({state})",
@@ -2855,22 +3393,34 @@ fn columns_selector(f: &mut Frame, m: &Model, area: Rect, table_width: u16) {
         .filter(|column| !visible.contains(column))
         .collect();
     let mut buttons = vec![];
-    for (index, label) in columns::ACTIONS.into_iter().enumerate() {
+    for (index, label) in columns::actions().into_iter().enumerate() {
         buttons.push(nav::button(label, editor.button == Some(index)));
         buttons.push(Span::raw(" "));
     }
     f.render_widget(
         Paragraph::new(vec![
             Line::from(ellipsize(
-                &format!("Shown at this width: {}", names(visible)),
+                &crate::tf!(
+                    "Shown at this width: {}",
+                    "Affichées à cette largeur : {}",
+                    names(visible)
+                ),
                 usize::from(parts[3].width),
             )),
             Line::styled(
                 ellipsize(
                     &if waiting.is_empty() {
-                        "Every active column fits.".to_owned()
+                        crate::t!(
+                            "Every active column fits.",
+                            "Toutes les colonnes actives tiennent."
+                        )
+                        .to_owned()
                     } else {
-                        format!("Active but short of room: {}", names(waiting))
+                        crate::tf!(
+                            "Active but short of room: {}",
+                            "Actives mais sans place : {}",
+                            names(waiting)
+                        )
                     },
                     usize::from(parts[3].width),
                 ),
@@ -2882,7 +3432,7 @@ fn columns_selector(f: &mut Frame, m: &Model, area: Rect, table_width: u16) {
     );
     f.render_widget(
         Paragraph::new(
-            "↑↓ select • Space toggle • Tab: actions\nShift+↑↓ move • r reset\nEnter save • Esc cancel",
+            crate::t!("↑↓ select • Space toggle • Tab: actions\nShift+↑↓ move • r reset\nEnter save • Esc cancel", "↑↓ choisir • Espace cocher • Tab : actions\nMaj+↑↓ déplacer • r réinitialiser\nEntrée enregistrer • Échap annuler"),
         ),
         parts[4],
     );

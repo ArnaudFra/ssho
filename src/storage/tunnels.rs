@@ -12,8 +12,8 @@ pub enum LaunchMode {
 impl LaunchMode {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Shell => "Shell session",
-            Self::TunnelOnly => "Tunnel only",
+            Self::Shell => crate::t!("Shell session", "Session shell"),
+            Self::TunnelOnly => crate::t!("Tunnel only", "Tunnel seul"),
         }
     }
 }

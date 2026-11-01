@@ -24,12 +24,13 @@ impl Review {
 }
 /// Operation, block, files and what happens to personal data.
 fn summarize(action: &Action) -> (&'static str, Vec<String>) {
-    let data = "Favorite, note and tunnel profiles are ssho data: this write does not change them.";
+    let data =
+        crate::t!("Favorite, note and tunnel profiles are ssho data: this write does not change them.", "Favori, note et profils de tunnels sont des données de ssho : cette écriture ne les modifie pas.");
     match action {
         Action::Save(Some(original), host, _) => {
             let mut lines = vec![
-                format!("Operation: EDIT host '{}'", original.name),
-                format!("File: {}", original.source_file.display()),
+                crate::tf!("Operation: EDIT host '{}'", "Opération : MODIFIER l'hôte « {} »", original.name),
+                crate::tf!("File: {}", "Fichier : {}", original.source_file.display()),
             ];
             let before = if original.aliases.is_empty() {
                 vec![original.name.clone()]
@@ -44,51 +45,49 @@ fn summarize(action: &Action) -> (&'static str, Vec<String>) {
             lines.push(if before == after {
                 data.to_owned()
             } else {
-                format!(
-                    "Aliases: {} → {}. Favorite, note and tunnel profiles follow a renamed alias.",
+                crate::tf!("Aliases: {} → {}. Favorite, note and tunnel profiles follow a renamed alias.", "Alias : {} → {}. Favori, note et profils de tunnels suivent un alias renommé.",
                     before.join(" "),
                     after.join(" ")
                 )
             });
-            ("Save", lines)
+            (crate::t!("Save", "Enregistrer"), lines)
         }
         Action::Save(None, host, target) => (
-            "Save",
+            crate::t!("Save", "Enregistrer"),
             vec![
-                format!("Operation: ADD host '{}'", host.name),
-                format!("File: {}", target.display()),
-                "A new host starts without favorite or note.".to_owned(),
+                crate::tf!("Operation: ADD host '{}'", "Opération : AJOUTER l'hôte « {} »", host.name),
+                crate::tf!("File: {}", "Fichier : {}", target.display()),
+                crate::t!("A new host starts without favorite or note.", "Un nouvel hôte démarre sans favori ni note.").to_owned(),
             ],
         ),
         Action::SaveCopy(host, target) => (
-            "Copy",
+            crate::t!("Copy", "Copier"),
             vec![
-                format!("Operation: COPY to new host '{}'", host.name),
-                format!("File: {}", target.display()),
-                "The original is unchanged; its favorite and note are not copied.".to_owned(),
+                crate::tf!("Operation: COPY to new host '{}'", "Opération : COPIER vers le nouvel hôte « {} »", host.name),
+                crate::tf!("File: {}", "Fichier : {}", target.display()),
+                crate::t!("The original is unchanged; its favorite and note are not copied.", "L'original est inchangé ; son favori et sa note ne sont pas copiés.").to_owned(),
             ],
         ),
         Action::Delete(host) => (
-            "Delete",
+            crate::t!("Delete", "Supprimer"),
             vec![
-                format!("Operation: DELETE host '{}'", host.name),
-                format!("File: {}", host.source_file.display()),
-                "Its favorite, note and tunnel profiles stay in the ssho data.".to_owned(),
+                crate::tf!("Operation: DELETE host '{}'", "Opération : SUPPRIMER l'hôte « {} »", host.name),
+                crate::tf!("File: {}", "Fichier : {}", host.source_file.display()),
+                crate::t!("Its favorite, note and tunnel profiles stay in the ssho data.", "Son favori, sa note et ses profils de tunnels restent dans les données de ssho.").to_owned(),
             ],
         ),
         Action::MoveTo(host, target) => (
-            "Move",
+            crate::t!("Move", "Déplacer"),
             vec![
-                format!("Operation: MOVE host '{}'", host.name),
-                format!(
-                    "From: {} → To: {}",
+                crate::tf!("Operation: MOVE host '{}'", "Opération : DÉPLACER l'hôte « {} »", host.name),
+                crate::tf!("From: {} → To: {}", "De : {} → Vers : {}",
                     host.source_file.display(),
                     target.display()
                 ),
                 data.to_owned(),
             ],
         ),
-        _ => ("Restore", vec![]),
+        _ => (crate::t!("Restore", "Restaurer"), vec![]),
     }
 }
 pub(super) fn open(m: &mut Model, action: Action, root: &Path) -> Result<()> {
@@ -99,17 +98,27 @@ pub(super) fn open(m: &mut Model, action: Action, root: &Path) -> Result<()> {
     let (plan, title) = match &action {
         Action::Save(Some(original), host, _) => (
             preview::prepare_update(original, host)?,
-            "Review SSH changes",
+            crate::t!("Review SSH changes", "Aperçu des modifications SSH"),
         ),
-        Action::Save(None, host, target) => {
-            (preview::prepare_add(host, target)?, "Review SSH changes")
-        }
+        Action::Save(None, host, target) => (
+            preview::prepare_add(host, target)?,
+            crate::t!("Review SSH changes", "Aperçu des modifications SSH"),
+        ),
         Action::SaveCopy(host, target) => (
             preview::prepare_copy(host, target, root)?,
-            "Review SSH copy",
+            crate::t!("Review SSH copy", "Aperçu de la copie SSH"),
         ),
-        Action::Delete(host) => (preview::prepare_delete(host)?, "DELETE SSH HOST — review"),
-        Action::MoveTo(host, target) => (preview::prepare_move(host, target)?, "Review SSH move"),
+        Action::Delete(host) => (
+            preview::prepare_delete(host)?,
+            crate::t!(
+                "DELETE SSH HOST — review",
+                "SUPPRESSION D'UN HÔTE SSH — aperçu"
+            ),
+        ),
+        Action::MoveTo(host, target) => (
+            preview::prepare_move(host, target)?,
+            crate::t!("Review SSH move", "Aperçu du déplacement SSH"),
+        ),
         _ => anyhow::bail!("action does not modify SSH configuration"),
     };
     show(m, action, plan, title.into());
@@ -120,8 +129,8 @@ fn show(m: &mut Model, action: Action, plan: PreparedChange, title: String) {
     let (verb, mut summary) = summarize(&action);
     if summary.is_empty() {
         summary = vec![
-            format!("Operation: RESTORE a backup — {title}"),
-            "The current file is backed up first; notes, favorites and profiles are not restored."
+            crate::tf!("Operation: RESTORE a backup — {title}", "Opération : RESTAURER une sauvegarde — {title}"),
+            crate::t!("The current file is backed up first; notes, favorites and profiles are not restored.", "Le fichier actuel est d'abord sauvegardé ; notes, favoris et profils ne sont pas restaurés.")
                 .to_owned(),
         ];
     }
@@ -162,7 +171,7 @@ pub(super) fn open_backups(m: &mut Model, app: &Path) -> Result<()> {
                     | View::Changes(_)
                     | View::Files { .. }
             )),
-        "Return to the host list before restoring backups; your editor is unchanged"
+        crate::t!("Return to the host list before restoring backups; your editor is unchanged", "Revenez à la liste des hôtes avant de restaurer une sauvegarde ; votre éditeur est inchangé")
     );
     let entries = config::backups::list(app)?;
     m.error.clear();
@@ -176,11 +185,18 @@ pub(super) fn open_restore(m: &mut Model, index: usize) -> Result<()> {
     let View::Backups { entries, .. } = &m.view else {
         anyhow::bail!("backup list is not open");
     };
-    let backup = entries
-        .get(index)
-        .ok_or_else(|| anyhow::anyhow!("no backup selected"))?;
+    let backup = entries.get(index).ok_or_else(|| {
+        anyhow::anyhow!(crate::t!(
+            "no backup selected",
+            "aucune sauvegarde sélectionnée"
+        ))
+    })?;
     let plan = config::backups::prepare_restore(backup)?;
-    let title = format!("Review restoration — {}", backup.description);
+    let title = crate::tf!(
+        "Review restoration — {}",
+        "Aperçu de la restauration — {}",
+        backup.description
+    );
     show(m, Action::RestoreBackup(index), plan, title);
     Ok(())
 }
@@ -316,7 +332,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                 parts[0],
             );
             buttons = Some((review.verb, review.focus, review.notice));
-            "Tab: choose • Enter: confirm the choice • Ctrl+S: confirm exact changes • Esc: return unchanged • ↑↓/PgUp/PgDn: scroll"
+            crate::t!("Tab: choose • Enter: confirm the choice • Ctrl+S: confirm exact changes • Esc: return unchanged • ↑↓/PgUp/PgDn: scroll", "Tab : choisir • Entrée : valider le choix • Ctrl+S : confirmer ces modifications • Échap : revenir sans rien changer • ↑↓/PgUp/PgDn : défiler")
         }
         View::Backups { entries, selected } => {
             // Entries wrap to variable heights; anchor the selected destination
@@ -327,9 +343,15 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                 .collect();
             let shown = select::visible(&texts, &m.selector_query.value);
             let lines: Vec<_> = if entries.is_empty() {
-                vec![Line::from("No backups yet")]
+                vec![Line::from(crate::t!(
+                    "No backups yet",
+                    "Aucune sauvegarde pour l'instant"
+                ))]
             } else if shown.is_empty() {
-                vec![Line::from("No backup matches the search")]
+                vec![Line::from(crate::t!(
+                    "No backup matches the search",
+                    "Aucune sauvegarde ne correspond à la recherche"
+                ))]
             } else {
                 entries
                     .iter()
@@ -355,10 +377,15 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                 Paragraph::new(lines)
                     .block(Block::default().borders(Borders::ALL).title(
                         if m.selector_query.value.is_empty() {
-                            "Backups — explicit recorded destinations — type to search".to_owned()
+                            crate::t!(
+                                "Backups — explicit recorded destinations — type to search",
+                                "Sauvegardes — destinations enregistrées — taper pour chercher"
+                            )
+                            .to_owned()
                         } else {
-                            format!(
+                            crate::tf!(
                                 "Backups — search: {} ({} of {})",
+                                "Sauvegardes — recherche : {} ({} sur {})",
                                 m.selector_query.value,
                                 shown.len(),
                                 entries.len()
@@ -368,7 +395,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                     .wrap(Wrap { trim: false }),
                 parts[0],
             );
-            "Enter: preview restoration • type: search by date or file • Esc/F8: return • unknown provenance: restore disabled"
+            crate::t!("Enter: preview restoration • type: search by date or file • Esc/F8: return • unknown provenance: restore disabled", "Entrée : aperçu de la restauration • taper : chercher par date ou fichier • Échap/F8 : retour • provenance inconnue : restauration désactivée")
         }
         _ => return,
     };
@@ -377,12 +404,15 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
         lines.push(Line::from(vec![
             nav::button(verb, focus == Review::CONFIRM),
             ratatui::text::Span::raw("  "),
-            nav::button("Back", focus == Review::BACK),
+            nav::button(crate::t!("Back", "Retour"), focus == Review::BACK),
             ratatui::text::Span::raw(if focus == 0 {
                 if notice {
-                    "  Nothing written: Tab reaches the buttons, Ctrl+S confirms."
+                    crate::t!(
+                        "  Nothing written: Tab reaches the buttons, Ctrl+S confirms.",
+                        "  Rien d'écrit : Tab atteint les boutons, Ctrl+S confirme."
+                    )
                 } else {
-                    "  (reading the diff)"
+                    crate::t!("  (reading the diff)", "  (lecture du diff)")
                 }
             } else {
                 ""

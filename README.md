@@ -64,6 +64,7 @@ Exemple de préférences, dans `ssho/config.json` :
   "ssh_command": ["ssh"],
   "group_aliases": false,
   "group_mode": "flat",
+  "language": "en",
   "key_bindings": {
     "quit_keys": ["q", "ctrl+c"],
     "disable_esc_quit": false,
@@ -155,6 +156,14 @@ En JSON, `tags` contient l’union sans préfixes graphiques. Lorsqu’un hôte 
 
 ## Navigation au clavier
 
+### Langue de l'interface
+
+**Langue.** L'interface existe en anglais et en français. L'anglais est la langue par défaut ; elle se change dans l'application par F2 → **Language** (en français : **Langue de l'interface**), action que la recherche de la palette trouve dans les deux langues (`language`, `langue`). Le sélecteur porte un titre lisible dans les deux langues, marque la langue en cours par `✓`, enregistre le choix dans `ssho/config.json` (`"language": "en"` ou `"fr"`) et l'applique aussitôt, sans redémarrage. Une valeur absente, `null` ou inconnue donne l'anglais et ne bloque jamais le lancement. Les noms de touches suivent la langue (Enter / Entrée, Esc / Échap, Space / Espace). Restent en anglais dans les deux langues : les termes et directives OpenSSH (`ProxyJump`, `RequestTTY`, `Local (-L)`…), la syntaxe de recherche (`tag:`, `is:online`, `AND`), l'aide en ligne de commande (`ssho --help`) et le détail technique des erreurs renvoyées par le système ou par OpenSSH.
+
+Ce guide cite les libellés tantôt en français, tantôt en anglais selon les sections ; l'application, elle, n'affiche qu'une langue à la fois. Les correspondances sont directes (Filtres / Filters, Enregistrer / Save, Lancer / Launch, Revenir / Go back…).
+
+**Largeurs.** La légende de la liste choisit sa version selon la largeur, puis renonce à une ligne qui serait coupée plutôt que de l'afficher sans sa fin : une langue plus longue ne perd jamais la fin d'une ligne. En français, le rappel de la séquence rapide (`Ctrl+G : rapide`) apparaît quand une ligne a la place pour lui (par exemple à 100 ou à 140 colonnes, pas à 120) ; l'aide et F2 l'indiquent toujours. L'aide occupe jusqu'à 126 colonnes.
+
 ### Rechercher, filtrer, naviguer
 
 L'accueil distingue trois états, et un seul élément a le focus (son cadre porte un `●` en plus de la couleur) :
@@ -175,7 +184,7 @@ Le formulaire d'hôte tient sur **une page**, sans onglets, et son titre nomme l
 - **L'essentiel d'abord** : Alias, Adresse, Utilisateur, Port, Clé SSH (avec **Choisir**, équivalent de F9). Trois sections dépliables suivent : **Alias supplémentaires**, **Options avancées** (ProxyJump, ProxyCommand, options SSH, commande distante, RequestTTY) et **Tags et note**. Elles sont fermées pour un ajout ; à l'édition ou à la copie, une section qui contient déjà des valeurs est ouverte, et son titre indique ce qu'elle contient.
 - **Un seul ordre de parcours** : Tab et ↓ avancent, Maj+Tab et ↑ reculent, à travers les champs, les titres de section et les boutons, en boucle. Tab ne déplie jamais une section ; Entrée ou Espace sur son titre la déplie ou la replie.
 - **Entrée ne soumet plus** : dans un champ elle passe au champ suivant, et après le dernier elle place le focus sur **Prévisualiser les modifications**. Seul ce bouton, ou Ctrl+S depuis n'importe où, ouvre l'aperçu ; l'écriture demande ensuite la confirmation de l'aperçu. *Auparavant Entrée sur le dernier champ de l'onglet Avancé lançait l'enregistrement.*
-- **Un champ vide n'écrit rien, et le dit** au lieu d'afficher un exemple grisé ressemblant à une valeur : « requis », « laissé à OpenSSH », « 22 — défaut OpenSSH, non écrit ». L'exemple du champ actif s'affiche sous le formulaire (« ex. : … »). *Changement : un nouvel hôte créé sans utilisateur n'écrit plus `User <utilisateur local>` ; OpenSSH utilise alors de lui-même le nom local, ou la valeur d'un bloc `Host *`. Ce que vous saisissez est ce qui est écrit.*
+- **Un champ vide n'écrit rien, et le dit** au lieu d'afficher un exemple grisé ressemblant à une valeur : « requis », « selon OpenSSH », « 22 — défaut OpenSSH, non écrit ». L'exemple du champ actif s'affiche sous le formulaire (« ex. : … »). *Changement : un nouvel hôte créé sans utilisateur n'écrit plus `User <utilisateur local>` ; OpenSSH utilise alors de lui-même le nom local, ou la valeur d'un bloc `Host *`. Ce que vous saisissez est ce qui est écrit.*
 - **Alias supplémentaires** : commandes visibles **+ Ajouter un alias** et **Retirer** (Alt+A et Alt+D restent des accélérateurs). Un nouvel hôte peut désormais déclarer plusieurs alias dès sa création. Ils partagent le même bloc ; favoris, notes et connexions visent un alias précis.
 - **Note personnelle** : à l'édition, la section Tags et note donne accès à la note, conservée dans les données de `ssho` et non dans le fichier SSH ; son éditeur revient au brouillon.
 - **Erreurs** : un résumé en tête, le message sous le champ concerné, le focus sur ce champ, et seule la section de la première erreur est dépliée. Les autres valeurs sont conservées.
@@ -490,7 +499,8 @@ python3 tests/pty_smoke.py target/release/ssho --aliases-only
 # Groupes, sécurité des en-têtes, recherche, préférences et petit terminal
 python3 tests/pty_smoke.py target/release/ssho --groups-only
 
-# Parcours ergonomiques UX (clavier, focus, retour) dans un dossier de fixture neuf
+# Parcours ergonomiques UX (clavier, focus, retour) dans un dossier de fixture neuf.
+# Ce script lit l'interface en français ; les autres scripts PTY la lisent en anglais.
 python3 tests/pty_ux.py target/release/ssho "$(mktemp -d)/ux"
 
 # Comparaison facultative avec un exécutable SSHM

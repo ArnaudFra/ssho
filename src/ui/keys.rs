@@ -48,11 +48,11 @@ pub(super) enum Command {
 impl Command {
     fn label(self) -> &'static str {
         match self {
-            Self::Use => "Use this key",
-            Self::Create => "Create key",
-            Self::Agent => "Add to agent",
-            Self::Attach => "Associate with this host",
-            Self::Deploy => "Deploy public key",
+            Self::Use => crate::t!("Use this key", "Utiliser cette clé"),
+            Self::Create => crate::t!("Create key", "Créer une clé"),
+            Self::Agent => crate::t!("Add to agent", "Ajouter à l'agent"),
+            Self::Attach => crate::t!("Associate with this host", "Associer à cet hôte"),
+            Self::Deploy => crate::t!("Deploy public key", "Déployer la clé publique"),
         }
     }
     /// Deploying is the only action that reaches the server.
@@ -109,7 +109,11 @@ pub(super) fn refresh(m: &mut Model) {
     if let Some(home) = std::env::var_os("HOME") {
         m.keys.refresh(PathBuf::from(home), m.all.clone());
     } else {
-        m.error = "HOME unavailable; cannot inventory ~/.ssh".into();
+        m.error = crate::t!(
+            "HOME unavailable; cannot inventory ~/.ssh",
+            "HOME indisponible ; impossible d'inventorier ~/.ssh"
+        )
+        .into();
     }
 }
 pub(super) fn input(editor: &mut Editor) -> Option<&mut Input> {
@@ -168,7 +172,7 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
     let previous_selection = editor.selected;
     match &mut editor.mode {
         // Fields, then two buttons: Enter in a field moves on, and only the
-        // "Continue in terminal" button hands over to ssh-keygen.
+        // crate::t!("Continue in terminal", "Continuer dans le terminal") button hands over to ssh-keygen.
         Mode::Generate { focus, .. } => match k.code {
             KeyCode::Tab | KeyCode::Down => *focus = (*focus + 1) % 4,
             KeyCode::BackTab | KeyCode::Up => *focus = (*focus + 3) % 4,
@@ -280,17 +284,25 @@ pub(super) fn key(m: &mut Model, k: KeyEvent) -> Action {
                             };
                         } else {
                             m.error =
-                                "No reviewed public fingerprint; refresh or fix the public file"
+                                crate::t!("No reviewed public fingerprint; refresh or fix the public file", "Aucune empreinte publique vérifiée ; rafraîchissez ou corrigez le fichier public")
                                     .into();
                         }
                     } else {
-                        m.error = "Open Keys with an exact host alias selected to deploy".into();
+                        m.error = crate::t!(
+                            "Open Keys with an exact host alias selected to deploy",
+                            "Ouvrez Clés avec un alias d'hôte exact sélectionné pour déployer"
+                        )
+                        .into();
                     }
                 }
                 KeyCode::Enter if editor.picker => {
                     if let Some(entry) = m.keys.entries.get(editor.selected) {
                         if !entry.private.is_absolute() {
-                            m.error = "Unresolved identity cannot fill the draft".into();
+                            m.error = crate::t!(
+                                "Unresolved identity cannot fill the draft",
+                                "Une identité non résolue ne peut pas remplir le brouillon"
+                            )
+                            .into();
                             return Action::None;
                         }
                         let value = entry.private.to_string_lossy().into_owned();
@@ -315,16 +327,22 @@ pub(super) fn attach(m: &mut Model, root: &Path) -> Result<()> {
     let View::Keys(editor) = &m.view else {
         anyhow::bail!("key assistant is closed")
     };
-    let host = editor
-        .target
-        .as_ref()
-        .context("Open Keys with an exact host alias selected to attach")?;
+    let host = editor.target.as_ref().context(crate::t!(
+        "Open Keys with an exact host alias selected to attach",
+        "Ouvrez Clés avec un alias d'hôte exact sélectionné pour associer"
+    ))?;
     let entry = m
         .keys
         .entries
         .get(editor.selected)
-        .context("select a key")?;
-    anyhow::ensure!(entry.private.is_absolute(), "identity path is unresolved");
+        .context(crate::t!("select a key", "sélectionnez une clé"))?;
+    anyhow::ensure!(
+        entry.private.is_absolute(),
+        crate::t!(
+            "identity path is unresolved",
+            "le chemin de l'identité n'est pas résolu"
+        )
+    );
     let next = runtime::keys::attach(host, &entry.private);
     let action = Action::Save(Some(host.clone()), Box::new(next), host.source_file.clone());
     changes::open(m, action, root)
@@ -351,15 +369,18 @@ pub(super) fn native(m: &mut Model, action: &Action, root: &Path) -> Result<()> 
             if let View::Keys(editor) = &mut m.view {
                 editor.preferred = Some(generated);
                 editor.selected = usize::MAX;
-                editor.notice = "Generated key awaiting inventory; F5 refresh / F4 details".into();
+                editor.notice = crate::t!(
+                    "Generated key awaiting inventory; F5 refresh / F4 details",
+                    "Clé générée en attente d'inventaire ; F5 rafraîchir / F4 détails"
+                )
+                .into();
             }
         }
         Action::AddKey => {
-            let entry = m
-                .keys
-                .entries
-                .get(editor.selected)
-                .context("select a private key")?;
+            let entry = m.keys.entries.get(editor.selected).context(crate::t!(
+                "select a private key",
+                "sélectionnez une clé privée"
+            ))?;
             runtime::keys::agent_add(&entry.private)?;
         }
         Action::DeployKey => {
@@ -369,7 +390,10 @@ pub(super) fn native(m: &mut Model, action: &Action, root: &Path) -> Result<()> 
                 alias,
             } = &editor.mode
             else {
-                anyhow::bail!("deployment has not been reviewed")
+                anyhow::bail!(crate::t!(
+                    "deployment has not been reviewed",
+                    "le déploiement n'a pas été vérifié"
+                ))
             };
             // Exact declared alias, frozen in review, remains present before launch.
             config::find_host(root, alias)?;
@@ -381,28 +405,44 @@ pub(super) fn native(m: &mut Model, action: &Action, root: &Path) -> Result<()> 
     if let View::Keys(editor) = &mut m.view {
         editor.mode = Mode::List;
     }
-    m.error = "Native key operation completed".into();
+    m.error = crate::t!(
+        "Native key operation completed",
+        "Opération native sur la clé terminée"
+    )
+    .into();
     refresh(m);
     Ok(())
 }
 fn selected_details(entry: Option<&Entry>) -> String {
     entry
         .map(|entry| {
-            format!(
+            crate::tf!(
                 "Private: {}\nFingerprint: {}\nUses: {}\nDiagnostic: {}",
+                "Privée : {}\nEmpreinte : {}\nUsages : {}\nDiagnostic : {}",
                 entry.private.display(),
                 entry
                     .public
                     .as_ref()
                     .map(|p| p.fingerprint.as_str())
-                    .unwrap_or("unavailable"),
+                    .unwrap_or(crate::t!("unavailable", "indisponible")),
                 entry.usages.join(", "),
                 entry.diagnostic
             )
         })
-        .unwrap_or_else(|| "No selected key; use ↑/↓ to choose.".into())
+        .unwrap_or_else(|| {
+            crate::t!(
+                "No selected key; use ↑/↓ to choose.",
+                "Aucune clé sélectionnée ; ↑/↓ pour choisir."
+            )
+            .into()
+        })
 }
-const LIST_HELP: &str = "↑/↓ PgUp/PgDn Home/End: select key • ←/→: named action • Enter: run it\nLocal — n: create key • a: add to agent • t: associate with this host (review; keep other identities)\nRemote server — d: deploy public key (review public key + exact alias)\nF5: refresh • F4: full details/error • Esc: back";
+fn list_help() -> &'static str {
+    crate::t!(
+        "↑/↓ PgUp/PgDn Home/End: select key • ←/→: named action • Enter: run it\nLocal — n: create key • a: add to agent • t: associate with this host (review; keep other identities)\nRemote server — d: deploy public key (review public key + exact alias)\nF5: refresh • F4: full details/error • Esc: back",
+        "↑/↓ PgUp/PgDn Début/Fin : choisir une clé • ←/→ : action nommée • Entrée : la lancer\nLocal — n : créer une clé • a : ajouter à l'agent • t : associer à cet hôte (aperçu ; les autres identités sont conservées)\nServeur distant — d : déployer la clé publique (revue de la clé publique et de l'alias exact)\nF5 : rafraîchir • F4 : détails/erreur complets • Échap : retour"
+    )
+}
 
 pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout::Rect) {
     use ratatui::{
@@ -422,12 +462,18 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
             Constraint::Length(1),
         ])
         .split(area);
-        f.render_widget(Paragraph::new("Keys: full details / error"), parts[0]);
+        f.render_widget(
+            Paragraph::new(crate::t!(
+                "Keys: full details / error",
+                "Clés : détails / erreur complets"
+            )),
+            parts[0],
+        );
         m.page = parts[1].height.max(1) as usize;
         let mode = match &editor.mode {
-            Mode::Generate { path, comment, .. } => format!("Generation path: {}\nComment: {}\nTab: next field • Enter: generate in native terminal", path.value, comment.value),
-            Mode::Deploy { public, private, alias } => format!("Reviewed public: {}\nPrivate: {}\nFingerprint: {}\nExact alias: {alias}\nRoot: {}", public.path.display(), private.display(), public.fingerprint, m.batch.root.display()),
-            Mode::List => LIST_HELP.into(),
+            Mode::Generate { path, comment, .. } => crate::tf!("Generation path: {}\nComment: {}\nTab: next field • the Continue in terminal button generates", "Chemin de génération : {}\nCommentaire : {}\nTab : champ suivant • le bouton Continuer dans le terminal génère", path.value, comment.value),
+            Mode::Deploy { public, private, alias } => crate::tf!("Reviewed public: {}\nPrivate: {}\nFingerprint: {}\nExact alias: {alias}\nRoot: {}", "Publique vérifiée : {}\nPrivée : {}\nEmpreinte : {}\nAlias exact : {alias}\nRacine : {}", public.path.display(), private.display(), public.fingerprint, m.batch.root.display()),
+            Mode::List => list_help().into(),
         };
         let text = format!(
             "{}\n{}\n{}\n{mode}",
@@ -443,7 +489,13 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                 .collect(),
             &mut editor.details_scroll,
         );
-        f.render_widget(Paragraph::new("↑↓ PgUp/Dn Home/End • Esc"), parts[2]);
+        f.render_widget(
+            Paragraph::new(crate::t!(
+                "↑↓ PgUp/Dn Home/End • Esc",
+                "↑↓ PgUp/Dn Début/Fin • Échap"
+            )),
+            parts[2],
+        );
         return;
     }
     let compact = area.height < 12 || area.width < 60;
@@ -457,25 +509,24 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
         .target
         .as_ref()
         .map(|h| h.name.as_str())
-        .unwrap_or("none");
+        .unwrap_or(crate::t!("none", "aucune"));
     f.render_widget(
-        Paragraph::new(format!(
-            "Keys — {} • target: {target}\n{} • {}",
+        Paragraph::new(crate::tf!("Keys — {} • target: {target}\n{} • {}", "Clés — {} • cible : {target}\n{} • {}",
             if editor.picker {
-                "IdentityFile picker"
+                crate::t!("IdentityFile picker", "Sélecteur d'IdentityFile")
             } else {
-                "OpenSSH assistant"
+                crate::t!("OpenSSH assistant", "Assistant OpenSSH")
             },
             // What this screen is for, so a draft is never taken for a deployment.
             if editor.picker {
-                "Choose a key for this draft: only its IdentityFile is filled, nothing is deployed"
+                crate::t!("Choose a key for this draft: only its IdentityFile is filled, nothing is deployed", "Choisir une clé pour ce brouillon : seul son IdentityFile est rempli, rien n'est déployé")
             } else {
-                "Manage keys: public files only, declared usages"
+                crate::t!("Manage keys: public files only, declared usages", "Gérer les clés : fichiers publics seulement, usages déclarés")
             },
             if m.keys.scanner.busy() {
-                "Scanning (bounded)…"
+                crate::t!("Scanning (bounded)…", "Analyse (bornée)…")
             } else {
-                "F5 refresh"
+                crate::t!("F5 refresh", "F5 rafraîchir")
             }
         )),
         parts[0],
@@ -514,8 +565,9 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                                 .map(|p| p.fingerprint.clone())
                                 .unwrap_or_else(|| entry.diagnostic.clone()),
                         ));
-                        lines.push(Line::from(format!(
+                        lines.push(Line::from(crate::tf!(
                             "Uses: {} • {}",
+                            "Usages : {} • {}",
                             entry.usages.join(", "),
                             entry.diagnostic
                         )));
@@ -531,9 +583,12 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
             );
             actions_line = Some(editor.button);
             if compact {
-                "↑↓ select • F4 details/error"
+                crate::t!(
+                    "↑↓ select • F4 details/error",
+                    "↑↓ choisir • F4 détails/erreur"
+                )
             } else {
-                "↑↓ select key • ←/→: action • Enter: run it • F4 details/error • F5 refresh • Esc back"
+                crate::t!("↑↓ select key • ←/→: action • Enter: run it • F4 details/error • F5 refresh • Esc back", "↑↓ choisir une clé • ←/→ : action • Entrée : la lancer • F4 détails/erreur • F5 rafraîchir • Échap retour")
             }
         }
         Mode::Generate {
@@ -547,10 +602,18 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                 Constraint::Min(0),
             ])
             .split(parts[1]);
-            for (index, (label, input)) in
-                [("Absolute private key path", path), ("Comment", comment)]
-                    .into_iter()
-                    .enumerate()
+            for (index, (label, input)) in [
+                (
+                    crate::t!(
+                        "Absolute private key path",
+                        "Chemin absolu de la clé privée"
+                    ),
+                    path,
+                ),
+                (crate::t!("Comment", "Commentaire"), comment),
+            ]
+            .into_iter()
+            .enumerate()
             {
                 // At heights below the supported eight rows, render the active field first.
                 let row = if parts[1].height < 4 {
@@ -575,22 +638,25 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
             }
             f.render_widget(
                 Paragraph::new(vec![
-                    Line::from("Ed25519. ssh-keygen then asks for the passphrase in the terminal, and ssho comes back here."),
-                    Line::from("Existing private/.pub paths are never overwritten."),
+                    Line::from(crate::t!("Ed25519. ssh-keygen then asks for the passphrase in the terminal, and ssho comes back here.", "Ed25519. ssh-keygen demande ensuite la phrase secrète dans le terminal, puis ssho revient ici.")),
+                    Line::from(crate::t!("Existing private/.pub paths are never overwritten.", "Les chemins privé/.pub existants ne sont jamais écrasés.")),
                     Line::from(""),
                     Line::from(vec![
-                        nav::button("Continue in terminal", *focus == 2),
+                        nav::button(crate::t!("Continue in terminal", "Continuer dans le terminal"), *focus == 2),
                         ratatui::text::Span::raw("  "),
-                        nav::button("Back", *focus == 3),
+                        nav::button(crate::t!("Back", "Retour"), *focus == 3),
                     ]),
                 ])
                 .wrap(Wrap { trim: false }),
                 rows[2],
             );
             if compact {
-                "Tab field • F4 details/error"
+                crate::t!(
+                    "Tab field • F4 details/error",
+                    "Tab champ • F4 détails/erreur"
+                )
             } else {
-                "Tab next field • Enter: next field, or the focused button • Esc back\nF4 full details/error"
+                crate::t!("Tab next field • Enter: next field, or the focused button • Esc back\nF4 full details/error", "Tab champ suivant • Entrée : champ suivant, ou le bouton actif • Échap retour\nF4 détails/erreur complets")
             }
         }
         Mode::Deploy {
@@ -599,7 +665,7 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
             alias,
         } => {
             m.page = parts[1].height.max(1) as usize;
-            let text = format!("Confirm deployment — acts on the remote server\nExact alias: {alias}\nFingerprint: {}\nPublic: {}\nPrivate sibling for duplicate check: {}\nRoot config: {}\nNative ssh-copy-id; password and host-key prompts stay native.\nPublic snapshot revalidated before launch; duplicate checking retained.", public.fingerprint, public.path.display(), private.display(), m.batch.root.display());
+            let text = crate::tf!("Confirm deployment — acts on the remote server\nExact alias: {alias}\nFingerprint: {}\nPublic: {}\nPrivate sibling for duplicate check: {}\nRoot config: {}\nNative ssh-copy-id; password and host-key prompts stay native.\nPublic snapshot revalidated before launch; duplicate checking retained.", "Confirmer le déploiement — agit sur le serveur distant\nAlias exact : {alias}\nEmpreinte : {}\nPublique : {}\nPrivée associée pour le contrôle de doublon : {}\nConfiguration racine : {}\nssh-copy-id natif ; mot de passe et clé d'hôte sont demandés nativement.\nClé publique revalidée avant le lancement ; contrôle de doublon conservé.", public.fingerprint, public.path.display(), private.display(), m.batch.root.display());
             deploy_line = Some((editor.button, alias.clone()));
             details::render_rows(
                 f,
@@ -610,9 +676,12 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
                 &mut m.scroll,
             );
             if compact {
-                "↑↓ scroll • F4 details/error"
+                crate::t!(
+                    "↑↓ scroll • F4 details/error",
+                    "↑↓ défiler • F4 détails/erreur"
+                )
             } else {
-                "↑/↓ PgUp/PgDn scroll • Tab/←→: choose • Enter: confirm the choice • Esc cancel"
+                crate::t!("↑/↓ PgUp/PgDn scroll • Tab/←→: choose • Enter: confirm the choice • Esc cancel", "↑/↓ PgUp/PgDn défiler • Tab/←→ : choisir • Entrée : valider le choix • Échap annuler")
             }
         }
     };
@@ -622,9 +691,15 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
         &m.error
     } else {
         match editor.mode {
-            Mode::List => "F5 refresh • Esc back",
-            Mode::Generate { .. } => "Continue in terminal generates • Esc back",
-            Mode::Deploy { .. } => "Only the Deploy button deploys • Esc cancel",
+            Mode::List => crate::t!("F5 refresh • Esc back", "F5 rafraîchir • Échap retour"),
+            Mode::Generate { .. } => crate::t!(
+                "Continue in terminal generates • Esc back",
+                "Continuer dans le terminal génère • Échap retour"
+            ),
+            Mode::Deploy { .. } => crate::t!(
+                "Only the Deploy button deploys • Esc cancel",
+                "Seul le bouton Déployer déploie • Échap annuler"
+            ),
         }
     };
     // Local actions and the one that reaches the server are told apart by name.
@@ -632,10 +707,13 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
     if let (Some(focused), false) = (actions_line, compact) {
         let commands = actions(editor.picker);
         let focused = focused.min(commands.len() - 1);
-        let mut spans = vec![ratatui::text::Span::raw("Local: ")];
+        let mut spans = vec![ratatui::text::Span::raw(crate::t!("Local: ", "Local : "))];
         for (index, command) in commands.iter().enumerate() {
             if command.remote() {
-                spans.push(ratatui::text::Span::raw("• Remote server: "));
+                spans.push(ratatui::text::Span::raw(crate::t!(
+                    "• Remote server: ",
+                    "• Serveur distant : "
+                )));
             }
             spans.push(nav::button(command.label(), index == focused));
             spans.push(ratatui::text::Span::raw(" "));
@@ -644,9 +722,12 @@ pub(super) fn draw(f: &mut ratatui::Frame, m: &mut Model, area: ratatui::layout:
     }
     if let (Some((focused, alias)), false) = (&deploy_line, compact) {
         lines.push(Line::from(vec![
-            nav::button("Back", *focused == 0),
+            nav::button(crate::t!("Back", "Retour"), *focused == 0),
             ratatui::text::Span::raw("  "),
-            nav::button(&format!("Deploy to {alias}"), *focused == 1),
+            nav::button(
+                &crate::tf!("Deploy to {alias}", "Déployer sur {alias}"),
+                *focused == 1,
+            ),
         ]));
     }
     // A clipped status always has a visible F4 route to its complete wrapped text.
@@ -680,8 +761,9 @@ pub(super) fn replace_entries(m: &mut Model, entries: Vec<Entry>) {
                 editor.selected = index;
             } else {
                 editor.selected = usize::MAX;
-                editor.notice = format!(
+                editor.notice = crate::tf!(
                     "Selected key disappeared: {}. Use ↑/↓ to choose a key.",
+                    "La clé sélectionnée a disparu : {}. ↑/↓ pour choisir une clé.",
                     previous.display()
                 );
             }

@@ -82,11 +82,11 @@ def resize(w,h):
  fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',h,w,0,0));os.kill(process.pid,signal.SIGWINCH);drain()
 try:
  expect('alpha');send(b'K');expect('K');assert not (ROOT/'native.jsonl').exists()
- send(b'\x15');send(b'\x1b');send(b'e');expect('Hôtes > Modifier')
+ send(b'\x15');send(b'\x1b');send(b'e');expect('Hosts > Edit')
  # F9 picker from an edited name; cancel preserves caret and parent draft.
  send(b'Z');send(b'\x1b[20~');expect('IdentityFile picker');expect('SHA256:fixture');send(b'\x1b');expect('alphaZ')
  send(b'\x1b[20~');expect('IdentityFile picker');send(b'\r');expect('alphaZ')
- send(b'\x1b');expect('Abandonner les modifications');send(b'\t\r');expect('alpha')
+ send(b'\x1b');expect('Discard the changes');send(b'\t\r');expect('alpha')
  send(b'K');expect('OpenSSH assistant');expect('SHA256:fixture');expect('alpha, secondary')
  for w,h in [(32,12),(32,8),(28,8)]:
   resize(w,h);expect('id_fixture');send(b'\x1b[B');expect('id_second');send(b'\x1b[A')

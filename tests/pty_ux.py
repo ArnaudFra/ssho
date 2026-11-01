@@ -28,7 +28,10 @@ APP.mkdir(parents=True, exist_ok=True)
 CONFIG = ROOT / '.ssh/config'
 CONFIG.write_text('Host alpha\n HostName 127.0.0.1\n User declared\n\nHost beta\n HostName 127.0.0.2\n')
 ORIGINAL_CONFIG = CONFIG.read_bytes()
-BASE = {'ping_on_start': False, 'check_for_updates': False, 'focus_search_on_start': False}
+# These journeys read the French interface; the other PTY scripts read English,
+# the default language.
+BASE = {'ping_on_start': False, 'check_for_updates': False, 'focus_search_on_start': False,
+        'language': 'fr'}
 ssh = ROOT / 'bin/ssh'
 ssh.write_text('#!' + sys.executable + '\n' + r'''
 import json, os, sys
@@ -127,9 +130,10 @@ class Session:
 def scenario_shortcuts():
     # Default profile: the prefix opens a panel that stays until a choice or Esc.
     preferences()
-    s = Session('shortcuts-default')
-    s.expect('Ctrl+G: quick')
-    s.expect('?: help')
+    # The French legend is longer: its reminder needs more than 120 columns.
+    s = Session('shortcuts-default', width=140)
+    s.expect('Ctrl+G : rapide')
+    s.expect('? : aide')
     s.send(CTRL_G)
     s.expect('Actions rapides — alpha')
     s.expect('d Dupliquer')
@@ -139,22 +143,22 @@ def scenario_shortcuts():
     s.send(ESC)
     s.absent('Actions rapides')
     s.send(CTRL_G + b'i')             # sequence letter runs its named action
-    s.expect('SSH Host Information: alpha')
+    s.expect("Fiche de l'hôte SSH : alpha")
     s.send(ESC)
     s.send(CTRL_G + b'?')
-    s.expect('Commands')
+    s.expect('Commandes')
     s.expect('Ctrl+G    Actions rapides')
     s.send(b'?')                      # the key that opens the help closes it
-    s.absent('Commands')
+    s.absent('Commandes')
     s.send(F1)
-    s.expect('Commands')
+    s.expect('Commandes')
     s.send(F1)
     # From the search input the prefix keeps query and focus; letters stay text.
     s.send(b'/alp' + CTRL_G)
     s.expect('Actions rapides — alpha')
     s.send(ESC)                       # alone: ESC followed by a byte would be Alt+key
     s.send(b'ha?')
-    s.expect('Search: > alpha?')
+    s.expect('Recherche : > alpha?')
     assert not connections()
     s.send(CTRL_C)
     s.close()
@@ -163,9 +167,9 @@ def scenario_shortcuts():
     # a conflicting preference is refused and explained, never applied silently.
     preferences(prefix_key='', shortcuts={'host.edit': ['E'], 'host.note': ['d']})
     s = Session('shortcuts-custom')
-    s.expect('E: edit')
+    s.expect('E : modifier')
     s.expect('Raccourcis : 1 préférence(s) refusée(s)')
-    s.absent('quick')
+    s.absent('rapide')
     s.send(CTRL_G)
     s.absent('Actions rapides')
     s.send(b'e')                      # released historical key
@@ -180,7 +184,7 @@ def scenario_shortcuts():
     assert 'Modifier' in row and ' E ' in row, row
     s.send(ESC)
     s.send(b'd')                      # `d` keeps its historical meaning
-    s.expect('DELETE SSH HOST — review')
+    s.expect('SUPPRESSION D\'UN HÔTE SSH — aperçu')
     s.send(ESC)
     s.send(b'?' + DOWN * 45)
     s.expect('d sert déjà à « Supprimer »')
@@ -196,22 +200,22 @@ def scenario_shortcuts():
 def scenario_navigation():
     preferences()
     s = Session('navigation')
-    s.expect('?: help')
+    s.expect('? : aide')
     # Esc walks back one level at a time and never closes the list.
     s.send(b'i')
-    s.expect('SSH Host Information: alpha')
+    s.expect("Fiche de l'hôte SSH : alpha")
     s.send(b'e')
     s.expect('Hôtes > Modifier')
     s.send(b'\x1b[18~')              # F7 over an untouched form
-    s.expect('Owned tunnels')
-    for screen in ['Hôtes > Modifier', 'SSH Host Information: alpha', '?: help']:
+    s.expect('Tunnels possédés')
+    for screen in ['Hôtes > Modifier', "Fiche de l'hôte SSH : alpha", '? : aide']:
         s.send(ESC)
         s.expect(screen)
     s.send(ESC)
-    s.expect('Esc ne quitte pas la liste — q / Ctrl+C : quitter')
+    s.expect('Échap ne quitte pas la liste — q / Ctrl+C : quitter')
     s.alive()
     # Ctrl+C follows Esc inside a secondary screen.
-    for opener, title in [(b'?', 'Commands'), (F2, 'Raccourci'), (b'\x1b[18~', 'Owned tunnels')]:
+    for opener, title in [(b'?', 'Commandes'), (F2, 'Raccourci'), (b'\x1b[18~', 'Tunnels possédés')]:
         s.send(opener)
         s.expect(title)
         s.send(CTRL_C)
@@ -231,7 +235,7 @@ def scenario_navigation():
     s.send(b'\t')
     s.expect('[▶ Abandonner ]')
     s.send(b'\r')
-    s.expect('?: help')
+    s.expect('? : aide')
     s.absent('alpha-draft')
     # Simple selectors wrap at both ends.
     s.send(b'g')
@@ -254,13 +258,13 @@ def scenario_navigation():
 def scenario_palette():
     preferences()
     s = Session('palette', width=80, height=24)
-    s.expect('F2: actions')
+    s.expect('F2 : actions')
     s.send(F2)
     s.expect('Actions — alpha')
     for column in ['Rechercher une action :', 'Action', 'Raccourci', 'État', 'Connexion']:
         s.expect(column)
     selected = lambda: next(line for line in s.drain(.2).splitlines() if '▶' in line)
-    assert 'Se connecter' in selected() and ' Enter ' in selected(), selected()
+    assert 'Se connecter' in selected() and ' Entrée ' in selected(), selected()
     s.send(UP)                        # first -> last
     assert 'Quitter' in selected(), selected()
     s.send(DOWN)                      # last -> first, category title back in view
@@ -288,11 +292,11 @@ def scenario_palette():
     s.alive()
     s.send(ESC)
     s.absent('Rechercher une action')
-    s.expect('F2: actions')
+    s.expect('F2 : actions')
     # Enter runs only the selected, available action.
     s.send(F2)
     s.send(b'aide\r')
-    s.expect('Commands')
+    s.expect('Commandes')
     s.send(ESC)
     # Contextual palette over a modified draft: the draft is found again.
     s.send(b'e')
@@ -307,7 +311,7 @@ def scenario_palette():
     s.expect('alpha-draft')
     s.send(ESC)
     s.send(b'\t\r')
-    s.expect('F2: actions')
+    s.expect('F2 : actions')
     assert CONFIG.read_bytes() == ORIGINAL_CONFIG and not connections()
     s.send(CTRL_C)
     s.close()
@@ -322,16 +326,16 @@ def scenario_search():
     s = Session('search', width=100, height=30)
     # Editing: a real input, named as the focused element, with a caret.
     s.expect('● Recherche')
-    s.expect('Search: > ')
+    s.expect('Recherche : > ')
     s.absent('● Hôtes')
     s.send(b'alp')
-    s.expect('Search: > alp')
+    s.expect('Recherche : > alp')
     s.expect('1 hôte sur 2')
     assert b'\x1b[?25h' in s.raw, 'the search input shows the native caret'
     # Tab gives the focus to the table: no inactive input box is left behind.
     s.send(b'\x1b[D\t')
     s.expect('● Hôtes')
-    s.absent('Search: > ')
+    s.absent('Recherche : > ')
     s.absent('● Recherche')
     s.expect('Filtres : alp')
     s.expect('( / : modifier • Backspace : effacer )')
@@ -339,9 +343,9 @@ def scenario_search():
     s.absent('beta')
     # Back to the search: text and cursor are found again.
     s.send(b'/X')
-    s.expect('Search: > alXp')
+    s.expect('Recherche : > alXp')
     s.send(b'\x7f')                   # Backspace edits inside the input
-    s.expect('Search: > alp')
+    s.expect('Recherche : > alp')
     # Esc leaves the edit and keeps the filter applied and visible.
     s.send(ESC)
     s.expect('Filtres : alp')
@@ -383,7 +387,7 @@ def scenario_host_form():
     main_before = CONFIG.read_bytes()
     try:
         s = Session('host_form', width=100, height=30)
-        s.expect('?: help')
+        s.expect('? : aide')
         s.send(b'a')
         s.expect('Hôtes > Ajouter un hôte — fichier de destination')
         s.send(b'\r')
@@ -401,7 +405,7 @@ def scenario_host_form():
         # Enter after the last field focuses the main action; nothing is submitted.
         s.send(b'\r')
         s.expect('[▶ Prévisualiser les modifications ]')
-        s.absent('confirm exact changes')
+        s.absent('confirmer ces modifications')
         # Change the target file from the draft and come back to the same draft.
         s.send(b'\t\t')
         s.expect('[▶ Changer ]')
@@ -416,18 +420,18 @@ def scenario_host_form():
         s.expect('web.example')
         # Ctrl+S previews from anywhere; writing needs the explicit confirmation.
         s.send(b'\x13')
-        s.expect('confirm exact changes')
-        s.expect("Operation: ADD host 'web-01'")
-        s.expect('File: ' + str(work))
+        s.expect('confirmer ces modifications')
+        s.expect("Opération : AJOUTER l'hôte « web-01 »")
+        s.expect('Fichier : ' + str(work))
         assert 'web-01' not in work.read_text()
         s.send(b'\r')                    # Enter while reading the diff writes nothing
-        s.expect('Nothing written: Tab reaches the buttons')
+        s.expect("Rien d'écrit : Tab atteint les boutons")
         assert 'web-01' not in work.read_text()
         s.send(b'\t')
-        s.expect('[▶ Save ]')
+        s.expect('[▶ Enregistrer ]')
         s.send(b'\r')
         s.expect('web-01')
-        s.expect('?: help')
+        s.expect('? : aide')
         assert 'Host web-01' in work.read_text() and 'web.example' in work.read_text()
         assert CONFIG.read_bytes() == main_before, 'only the chosen file is written'
         # Edit names its mode; Ctrl+K edits text instead of switching tabs.
@@ -447,7 +451,7 @@ def scenario_host_form():
         s.send(ESC)
         s.expect("[▶ Continuer l'édition ]")
         s.send(b'\t\r')
-        s.expect('?: help')
+        s.expect('? : aide')
         assert 'web-02' not in work.read_text()
         assert not connections()
         s.send(CTRL_C)
@@ -502,7 +506,7 @@ def scenario_selectors():
         s.expect('4 hôtes')
         # Narrow terminal: shortest distinguishing tails, full path in the detail.
         n = Session('selectors-narrow', width=48, height=24)
-        n.expect('F2: actions')
+        n.expect('F2 : actions')
         n.send(b'c')
         n.send(DOWN + DOWN)
         n.expect('…/a/hosts')
@@ -546,7 +550,7 @@ def scenario_list_marks():
         s.expect('Légende : * favori · ▼ ▶ groupe ouvert / replié')
         # On a group header Enter toggles, and host shortcuts explain themselves.
         s.send(b'\x1b[H')
-        s.expect('Enter: open/close group')
+        s.expect('Entrée : déplier')
         s.send(b'x')
         s.expect("Lot : marquer l'alias — Sélectionnez un hôte, pas un groupe")
         s.absent('Lot : 1 cible')
@@ -555,7 +559,7 @@ def scenario_list_marks():
         s.absent('Hôtes > Modifier')
         # Marking a host creates the target zone; the favorite keeps its own sign.
         s.send(b'\x1b[F')                # End: last host
-        s.expect('Enter: connect')
+        s.expect('Entrée : connexion')
         s.send(b'x')
         s.expect('Lot : 1 cible marquée • B : voir / préparer • F2 : tout retirer')
         s.expect('(2 • 1 cible)')
@@ -576,7 +580,7 @@ def scenario_list_marks():
         s.expect('(2 • 1 cible)')
         assert not any('[x]' in line and '│' in line for line in s.drain(.3).splitlines())
         s.send(b'B')
-        s.expect('1 targets')
+        s.expect('1 cibles')
         s.send(ESC)
         assert not connections() and CONFIG.read_bytes() == ORIGINAL_CONFIG
         s.send(CTRL_C)
@@ -592,9 +596,9 @@ def scenario_list_marks():
 def scenario_host_sheet():
     preferences()
     s = Session('host_sheet', width=110, height=40)
-    s.expect('?: help')
+    s.expect('? : aide')
     s.send(b'i')
-    s.expect('SSH Host Information: alpha')
+    s.expect("Fiche de l'hôte SSH : alpha")
     for section in ['── Résumé', '── Configuration effective', '── Déclaration et source',
                     '── Disponibilité mesurée', '── Historique des connexions']:
         s.expect(section)
@@ -608,7 +612,7 @@ def scenario_host_sheet():
     s.send(b'\r')
     s.expect('Hôtes > Modifier alpha')
     s.send(ESC)
-    s.expect('SSH Host Information: alpha')
+    s.expect("Fiche de l'hôte SSH : alpha")
     # Copy is explicit: one named value, a clipboard request, a selectable fallback.
     s.send(b'\t\t')
     s.expect('[▶ Copier ]')
@@ -621,7 +625,7 @@ def scenario_host_sheet():
     assert b'\x1b]52;c;c3NoIGFscGhh\x07' in s.raw[mark:], 'OSC 52 request for "ssh alpha"'
     assert any(line.strip('│ ') == 'ssh alpha' for line in s.drain(.2).splitlines())
     s.send(ESC)
-    s.expect('?: help')
+    s.expect('? : aide')
     assert not connections() and CONFIG.read_bytes() == ORIGINAL_CONFIG
     s.send(CTRL_C)
     s.close()
@@ -634,9 +638,9 @@ def scenario_notes():
     metadata = APP / 'metadata.json'
     try:
         s = Session('notes', width=110, height=30)
-        s.expect('?: help')
+        s.expect('? : aide')
         s.send(b'N')
-        s.expect('Personal note')
+        s.expect('Note personnelle')
         s.expect('Enregistrée')
         s.expect("Fichier SSH de l'hôte : " + str(CONFIG))
         s.expect(str(metadata))
@@ -653,7 +657,7 @@ def scenario_notes():
         s.send(b'\r')
         s.expect('ligne 2')
         s.send(b'\x13')                  # Ctrl+S saves from the text
-        s.expect('?: help')
+        s.expect('? : aide')
         note = json.loads(metadata.read_text())['configs'][str(CONFIG.resolve())]['hosts']['alpha']['note']
         assert note == 'Bastion requis\nligne 2', note
         assert CONFIG.read_bytes() == ORIGINAL_CONFIG, 'a note never touches the SSH file'
@@ -672,41 +676,41 @@ def scenario_tunnels():
     profiles = APP / 'tunnel_profiles.json'
     try:
         s = Session('tunnels', width=110, height=40)
-        s.expect('?: help')
+        s.expect('? : aide')
         s.send(b'f')
-        s.expect('Port Forwarding Setup')
+        s.expect('Configuration du transfert de port')
         s.expect('(•) Local (-L)   ( ) Remote (-R)   ( ) Dynamic (-D)')
-        s.expect('Listen on this machine, port ? → reach localhost:? from the SSH server')
+        s.expect('Écouter sur ce poste, port ? → joindre localhost:? depuis le serveur SSH')
         s.send(b'\t5433\t\x15db.internal\t5432')
-        s.expect('Listen on this machine, port 5433 → reach db.internal:5432 from the SSH server')
+        s.expect('Écouter sur ce poste, port 5433 → joindre db.internal:5432 depuis le serveur SSH')
         # Enter repeated stays on the last field: it neither saves nor launches.
         s.send(b'\r' * 8)
-        s.expect('Port Forwarding Setup')
+        s.expect('Configuration du transfert de port')
         assert not connections()
         s.send(b'\t')                   # bind address -> mode
-        s.expect('> (•) Shell session   ( ) Tunnel only')
+        s.expect('> (•) Session shell   ( ) Tunnel seul')
         s.send(b'\t')
-        s.expect('[▶ Launch ]  [  Save profile ]  [  Cancel ]')
+        s.expect('[▶ Lancer ]  [  Enregistrer le profil ]  [  Annuler ]')
         # Saving needs a name; the error says so and nothing is launched.
         s.send(b'\x1b[C\r')
-        s.expect('Profile name (required to save only):')
+        s.expect('Nom du profil (requis pour enregistrer seulement) :')
         assert not connections() and not profiles.exists()
         s.send(b'db\x13')                # name it, Ctrl+S
-        s.expect('Profile saved')
+        s.expect('Profil enregistré')
         assert not connections(), 'saving never launches'
         s.send(ESC)
-        s.expect('?: help')
+        s.expect('? : aide')
         # The profile list shows the route in words and names its actions.
         s.send(b'\x1b[17~')              # F6
-        s.expect('Tunnel profiles')
-        s.expect('Listen on this machine, port 5433 → reach db.internal:5432 from the SSH server')
-        s.expect('[▶ Open ] [  Launch ] [  Duplicate ] [  Delete ] [  New ]')
+        s.expect('Profils de tunnels')
+        s.expect('Écouter sur ce poste, port 5433 → joindre db.internal:5432 depuis le serveur SSH')
+        s.expect('[▶ Ouvrir ] [  Lancer ] [  Dupliquer ] [  Supprimer ] [  Nouveau ]')
         s.send(b'\x1b[C\x1b[C\r')       # Duplicate
         s.expect('db-copy')
-        s.expect('Unsaved changes')
+        s.expect('Modifications non enregistrées')
         s.send(ESC)
         s.send(b'\t\r')
-        s.expect('Tunnel profiles')
+        s.expect('Profils de tunnels')
         s.send(ESC)
         assert CONFIG.read_bytes() == ORIGINAL_CONFIG
         s.send(CTRL_C)
@@ -722,29 +726,29 @@ def scenario_tunnels():
 def scenario_batch():
     preferences()
     s = Session('batch', width=110, height=30)
-    s.expect('?: help')
+    s.expect('? : aide')
     # No target yet: a page explains it and names the two ways out.
     s.send(b'B')
-    s.expect('Batch: 0 targets • [Targets] → Command → Review → Results')
-    s.expect('the filter is never turned into targets on its own')
-    s.expect('[▶ Back to the list ]')
+    s.expect('Lot : 0 cibles • [Cibles] → Commande → Vérification → Résultats')
+    s.expect("le filtre n'est jamais transformé en cibles de lui-même")
+    s.expect('[▶ Retour à la liste ]')
     s.send(b'uptime')                 # no command can be typed without a target
     s.send(b'\t')
-    s.expect('[▶ Add the 2 host(s) shown by the filter ]')
+    s.expect('[▶ Ajouter les 2 hôte(s) affichés par le filtre ]')
     s.send(b'\r')
-    s.expect('Batch: 2 targets • Targets ✓ → [Command] → Review → Results')
+    s.expect('Lot : 2 cibles • Cibles ✓ → [Commande] → Vérification → Résultats')
     s.absent('uptime')
     s.send(b'hostname')
     # Enter walks the inputs and stops on Review: nothing is launched.
     s.send(b'\r\r\r')
-    s.expect('[▶ Review ]')
+    s.expect('[▶ Vérification ]')
     assert not connections()
     s.send(b'\r')
-    s.expect('Confirm batch: 2 targets • Targets ✓ → Command ✓ → [Review] → Results')
-    s.expect('Command: hostname')
-    s.expect('[▶ Back to edit ]  [  Launch on 2 target(s) ]')
+    s.expect('Confirmer le lot : 2 cibles • Cibles ✓ → Commande ✓ → [Vérification] → Résultats')
+    s.expect('Commande : hostname')
+    s.expect("[▶ Retour à l'édition ]  [  Lancer sur 2 cible(s) ]")
     s.send(b'\r')                    # the focused choice goes back to the edit step
-    s.expect('[Command]')
+    s.expect('[Commande]')
     assert not connections()
     s.send(ESC)
     s.expect('Lot : 2 cibles marquées')
@@ -761,38 +765,38 @@ def scenario_batch():
 def scenario_help():
     preferences()
     s = Session('help', width=100, height=30)
-    s.expect('?: help')
+    s.expect('? : aide')
     # Help: what the screen is for, then a search over its lines.
     s.send(b'?')
-    s.expect('This screen: the host list.')
+    s.expect('Cet écran : la liste des hôtes.')
     s.send(b'/dupliquer')
-    s.expect('Search: dupliquer_')
+    s.expect('Recherche : dupliquer_')
     s.expect('D         Dupliquer')
     s.absent('Se connecter')
     s.send(b'q')                      # a closing letter is text while searching
-    s.expect('No line of the help matches.')
+    s.expect('Aucune ligne de l\'aide ne correspond.')
     s.send(ESC)
     s.expect('Se connecter')
     s.send(ESC)
-    s.expect('?: help')
+    s.expect('? : aide')
     # A write is confirmed in words, until the next key.
     s.send(b'\x1b[F')                 # last host
     s.send(b'd')
-    s.expect("Operation: DELETE host 'beta'")
+    s.expect("Opération : SUPPRIMER l'hôte « beta »")
     s.send(b'\x13')                   # Ctrl+S: explicit confirmation
-    s.expect('✓ Deleted beta')
+    s.expect('✓ beta supprimé')
     s.send(DOWN)
-    s.absent('✓ Deleted')
+    s.absent('supprimé')
     assert b'Host beta' not in CONFIG.read_bytes()
     # A failing reload gives an error that is readable in full.
     CONFIG.write_bytes(ORIGINAL_CONFIG)
     CONFIG.chmod(0)
     try:
         s.send(b'\x1b[15~')           # F5
-        s.expect('Error:')
+        s.expect('Erreur :')
         s.send(b'!')
         s.expect('Messages')
-        s.expect('[Error]')
+        s.expect('[Erreur]')
         s.send(ESC)
     finally:
         CONFIG.chmod(0o600)
@@ -806,8 +810,52 @@ def scenario_help():
           'readable in full, terminal restored')
 
 
+def scenario_language():
+    # Without a "language" preference the interface is in English.
+    plain = {key: value for key, value in BASE.items() if key != 'language'}
+    (APP / 'config.json').write_text(json.dumps(plain))
+    s = Session('language', width=100, height=30)
+    s.expect('F2: actions')
+    s.expect('/ Search')
+    # The language is a named action, found in either language, changed in the application.
+    s.send(F2)
+    s.send(b'langue')
+    s.expect('Language')
+    s.send(b'\r')
+    s.expect("Language / Langue de l'interface")
+    s.expect('English')
+    s.expect('Français')
+    s.send(ESC)                       # cancelling changes nothing
+    s.expect('F2: actions')
+    assert 'language' not in json.loads((APP / 'config.json').read_text())
+    s.send(F2)
+    s.send(b'language')
+    s.send(b'\r')
+    s.expect("Language / Langue de l'interface")
+    s.send(DOWN)
+    s.send(b'\r')
+    s.expect('F2 : actions')          # applied at once
+    s.expect('/ Rechercher')
+    s.absent('Enter: connect')
+    assert json.loads((APP / 'config.json').read_text())['language'] == 'fr'
+    s.send(CTRL_C)
+    s.close()
+    # The choice is kept: the next start is in French.
+    s = Session('language-restart', width=100, height=30)
+    s.expect('F2 : actions')
+    s.send(F2)
+    s.expect('Rechercher une action :')
+    s.send(ESC)
+    s.send(CTRL_C)
+    s.close()
+    assert not connections()
+    print('PTY PASS [language]: English by default, language changed from the palette in either '
+          'language, cancel keeps it, saved and applied at once, kept at restart, terminal restored')
+
+
 SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,
-             'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes, 'tunnels': scenario_tunnels, 'batch': scenario_batch, 'help': scenario_help}
+             'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes, 'tunnels': scenario_tunnels, 'batch': scenario_batch, 'help': scenario_help,
+             'language': scenario_language}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

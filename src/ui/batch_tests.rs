@@ -137,7 +137,7 @@ fn batch_running_quit_is_confirmed_and_pending_cancel_has_no_history() {
     m.ask_quit();
     let text = screen(&mut m, 100, 20);
     assert!(
-        text.contains("Lot en cours") && text.contains("Arrêter et quitter"),
+        text.contains("Running batch") && text.contains("Stop and quit"),
         "{text}"
     );
     assert_eq!(
@@ -256,8 +256,8 @@ fn active_batch_quit_also_warns_about_suspended_dirty_form() {
     assert!(!m.quit_tunnels);
     m.ask_quit();
     let text = screen(&mut m, 100, 20);
-    assert!(text.contains("Lot en cours"), "{text}");
-    assert!(text.contains("Modifications non enregistrées"), "{text}");
+    assert!(text.contains("Running batch"), "{text}");
+    assert!(text.contains("Unsaved changes"), "{text}");
     m.batch.manager.cancel();
 }
 

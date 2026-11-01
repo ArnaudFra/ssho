@@ -32,10 +32,10 @@ pub enum PingStatus {
 impl PingStatus {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Unknown => "? Unknown",
-            Self::Connecting => "~ Connecting",
-            Self::Online => "+ Online",
-            Self::Offline => "! Offline",
+            Self::Unknown => crate::t!("? Unknown", "? Inconnu"),
+            Self::Connecting => crate::t!("~ Connecting", "~ En cours"),
+            Self::Online => crate::t!("+ Online", "+ En ligne"),
+            Self::Offline => crate::t!("! Offline", "! Hors ligne"),
         }
     }
 }

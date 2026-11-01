@@ -11,7 +11,15 @@ pub(super) struct List {
     pub button: usize,
 }
 /// Named actions on the selected profile, then the one that needs none.
-pub(super) const ACTIONS: [&str; 5] = ["Open", "Launch", "Duplicate", "Delete", "New"];
+pub(super) fn actions() -> [&'static str; 5] {
+    [
+        crate::t!("Open", "Ouvrir"),
+        crate::t!("Launch", "Lancer"),
+        crate::t!("Duplicate", "Dupliquer"),
+        crate::t!("Delete", "Supprimer"),
+        crate::t!("New", "Nouveau"),
+    ]
+}
 impl List {
     pub fn new(host: String) -> Self {
         Self {
@@ -42,7 +50,7 @@ impl Model {
         let selected = profiles.and_then(|p| p.iter().nth(list.selected));
         // Without any profile only "New" can act.
         if len == 0 {
-            list.button = ACTIONS.len() - 1;
+            list.button = actions().len() - 1;
         }
         // Enter runs the focused action: each one is also a direct key.
         let k = match (k.code, list.button) {
@@ -56,10 +64,10 @@ impl Model {
         match k.code {
             _ if nav::cancels(k) => self.back(),
             KeyCode::Right | KeyCode::Tab => {
-                list.button = nav::wrap(list.button, ACTIONS.len(), 1);
+                list.button = nav::wrap(list.button, actions().len(), 1);
             }
             KeyCode::Left | KeyCode::BackTab => {
-                list.button = nav::wrap(list.button, ACTIONS.len(), -1);
+                list.button = nav::wrap(list.button, actions().len(), -1);
             }
             KeyCode::Char('D') => {
                 if let Some((name, forward)) = selected {
@@ -215,8 +223,9 @@ pub(super) fn complete_saved(
         if !m.error.is_empty() {
             m.error.push_str(" • ");
         }
-        m.error.push_str(&format!(
-            "SSH saved; tunnel profile rename failed: {error:#}"
+        m.error.push_str(&crate::tf!(
+            "SSH saved; tunnel profile rename failed: {error:#}",
+            "SSH enregistré ; échec du renommage du profil de tunnel : {error:#}"
         ));
     }
 }

@@ -100,7 +100,7 @@ try:
     assert not any('-G' not in json.loads(line) for line in (ROOT / 'ssh.jsonl').read_text().splitlines())
     send(b'\x15'); send(b'\x1b')  # Ctrl+U clears the text, Esc returns to the table
     send(b'\x1b[F')  # Last row: concrete primary alias, after its file header.
-    send(b'\x1bOR'); expect('Choisir un alias')
+    send(b'\x1bOR'); expect('Choose an alias')
     send(b'\x1b[B'); send(b'\r'); expect('native-secondary'); expect('4321')
     send(b'v'); expect('Columns'); expect('secondary')
     send(b'\x1b[B'); send(b'\x1b[1;2B')  # User moves after Port.
@@ -123,7 +123,7 @@ try:
     # Cancel/reset doesn't publish, and F2 finds the action by its name.
     send(b'v'); send(b'r'); send(b'\x1b')
     assert json.loads((app / 'config.json').read_text()) == saved
-    send(b'\x1bOQ'); expect('Actions'); send(b'colonnes'); send(b'\r'); expect('Columns')
+    send(b'\x1bOQ'); expect('Actions'); send(b'columns'); send(b'\r'); expect('Columns')
     send(b'\x1b'); send(b'\r'); expect('37'); expect('native-secondary')
     calls = [json.loads(line) for line in (ROOT / 'ssh.jsonl').read_text().splitlines()]
     connections = [args for args in calls if '-G' not in args]
