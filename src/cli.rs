@@ -482,7 +482,7 @@ pub fn run(args: &[String]) -> Result<i32> {
             Ok(0)
         }
         command => {
-            paths.initialize()?;
+            let migrated = paths.initialize()?;
             let initial = match command {
                 Command::Add(seed) => InitialView::Add(seed),
                 Command::Edit(name) => InitialView::Edit(name),
@@ -510,6 +510,7 @@ pub fn run(args: &[String]) -> Result<i32> {
                     path,
                     invocation.search,
                     invocation.no_update_check,
+                    migrated,
                     InitialView::Add(String::new()),
                 )?;
                 if code != 0 {
@@ -524,6 +525,7 @@ pub fn run(args: &[String]) -> Result<i32> {
                     path,
                     invocation.search,
                     invocation.no_update_check,
+                    migrated,
                     InitialView::List,
                 )
             } else {
@@ -532,6 +534,7 @@ pub fn run(args: &[String]) -> Result<i32> {
                     path,
                     invocation.search,
                     invocation.no_update_check,
+                    migrated,
                     initial,
                 )
             }

@@ -2644,3 +2644,385 @@ fn a_list_too_small_to_be_used_says_so_and_forms_keep_their_caret() {
     m.key(key(KeyCode::Esc));
     assert!(matches!(m.view, View::List));
 }
+
+fn preferences_of(m: &Model) -> &prefs::Editor {
+    let View::Preferences(editor) = &m.view else {
+        panic!("the preferences screen is open")
+    };
+    editor
+}
+
+/// Move the focus of the preferences screen to `row`.
+fn focus_row(m: &mut Model, row: prefs::Row) {
+    let target = prefs::rows().iter().position(|r| *r == row).unwrap();
+    m.key(key(KeyCode::Home));
+    for _ in 0..target {
+        m.key(key(KeyCode::Down));
+    }
+    assert_eq!(preferences_of(m).row, target);
+}
+
+#[test]
+fn preferences_show_each_option_with_its_value_effect_and_moment() {
+    let mut m = model(serde_json::json!({}));
+    // One named action, with a key, also listed in the palette.
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "preferences");
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(matches!(m.view, View::Preferences(_)));
+    m.key(key(KeyCode::Esc));
+    assert!(
+        matches!(m.view, View::List),
+        "an untouched draft closes at once"
+    );
+    m.key(key(KeyCode::Char('o')));
+    let text = screen(&mut m, 110, 44);
+    for expected in [
+        "Préférences",
+        "Apparence",
+        "Liste des hôtes",
+        "Connexion et diagnostics",
+        "Clavier",
+        "Données (lecture seule)",
+        "> Langue",
+        "Français",
+        "Langue de tous les écrans : anglais ou français.",
+        "Prend effet dès l'application.",
+        "[  Appliquer ]  [  Annuler ]  [  Valeurs par défaut ]",
+        "Aucune modification",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // An option read at start says so instead of pretending to apply now.
+    focus_row(&mut m, prefs::Row::PingOnStart);
+    let text = screen(&mut m, 110, 44);
+    assert!(
+        text.contains("Prend effet au prochain démarrage."),
+        "{text}"
+    );
+    // The launcher is explained with its real scope, and is not editable here.
+    focus_row(&mut m, prefs::Row::SshCommand);
+    let text = screen(&mut m, 110, 44);
+    assert!(text.contains("Liste d'arguments littéraux"), "{text}");
+    assert!(text.contains("tunnels, lots, ssh -G et sondes"), "{text}");
+    m.key(key(KeyCode::Char(' ')));
+    assert!(preferences_of(&m).notice.contains("Lecture seule"));
+    assert!(!preferences_of(&m).dirty());
+    // On a very wide terminal the buttons stay next to the options.
+    let wide = screen(&mut m, 300, 44);
+    assert!(column_of(&wide, "Appliquer ]") < 12, "{wide}");
+    // A small terminal keeps the focused option and the buttons.
+    let small = screen(&mut m, 80, 14);
+    assert!(
+        small.contains("> Lanceur SSH") && small.contains("Appliquer ]"),
+        "{small}"
+    );
+}
+
+#[test]
+fn nothing_is_written_before_apply_and_a_modified_draft_is_not_dropped() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let mut m = model(serde_json::json!({}));
+    m.preferences.save(root).unwrap();
+    let before = std::fs::read(root.join("config.json")).unwrap();
+    m.key(key(KeyCode::Char('o')));
+    focus_row(&mut m, prefs::Row::Colors);
+    m.key(key(KeyCode::Char(' ')));
+    focus_row(&mut m, prefs::Row::GroupMode);
+    m.key(key(KeyCode::Right));
+    let text = screen(&mut m, 110, 44);
+    assert!(text.contains("● modifié"), "{text}");
+    assert!(
+        text.contains("● Modifications non enregistrées — rien n'est écrit avant Appliquer"),
+        "{text}"
+    );
+    assert!(
+        m.preferences.colors,
+        "the running preferences are untouched"
+    );
+    assert_eq!(std::fs::read(root.join("config.json")).unwrap(), before);
+    // Esc asks, with the focus on continuing; Enter keeps the draft.
+    m.key(key(KeyCode::Esc));
+    let text = screen(&mut m, 110, 44);
+    assert!(text.contains("[▶ Continuer l'édition ]"), "{text}");
+    m.key(key(KeyCode::Enter));
+    assert!(preferences_of(&m).dirty());
+    // An option edited elsewhere meanwhile is not overwritten by Apply.
+    AppConfig::update(root, |config| {
+        config.ssh_command = vec!["wrapper".into(), "--flag".into()];
+    })
+    .unwrap();
+    // Enter on a row only changes the draft; Apply is a button or Ctrl+S.
+    m.key(key(KeyCode::Tab));
+    let Action::Preferences(draft) = m.key(key(KeyCode::Enter)) else {
+        panic!("the Apply button returns the draft")
+    };
+    assert!(!draft.colors);
+    save_preferences(&mut m, root, &draft).unwrap();
+    assert!(matches!(m.view, View::List));
+    assert!(!m.preferences.colors);
+    assert_eq!(m.preferences.group_mode, GroupMode::Files);
+    assert!(m.hint.contains("✓ Préférences enregistrées"), "{}", m.hint);
+    let saved = AppConfig::load(root).unwrap();
+    assert!(!saved.colors);
+    assert_eq!(saved.ssh_command, ["wrapper", "--flag"]);
+    // The grouping applies at once: the list shows its file headers.
+    assert!(!m.rows.is_empty());
+}
+
+#[test]
+fn restore_defaults_fills_the_draft_and_writes_nothing() {
+    let mut m = model(serde_json::json!({ "prefix_key": "" }));
+    m.preferences.ping_on_start = false;
+    m.preferences.host_columns = vec![HostColumn::Name, HostColumn::Port];
+    m.key(key(KeyCode::Char('o')));
+    for _ in 0..3 {
+        m.key(key(KeyCode::Tab));
+    }
+    assert_eq!(preferences_of(&m).button, Some(2));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    let editor = preferences_of(&m);
+    assert!(editor.draft.ping_on_start);
+    assert_eq!(editor.draft.language, crate::i18n::Language::En);
+    assert_eq!(
+        editor.draft.key_bindings,
+        crate::storage::KeyBindings::default()
+    );
+    // Options without a row here keep their value.
+    assert_eq!(
+        editor.draft.host_columns,
+        [HostColumn::Name, HostColumn::Port]
+    );
+    assert!(
+        editor.notice.contains("Appliquer les écrit"),
+        "{}",
+        editor.notice
+    );
+    assert!(
+        !m.preferences.ping_on_start,
+        "nothing is adopted before Apply"
+    );
+    // The focus moved to Apply: one more Enter is an explicit decision.
+    assert_eq!(preferences_of(&m).button, Some(0));
+}
+
+#[test]
+fn data_locations_are_found_from_the_interface() {
+    let mut m = model(serde_json::json!({}));
+    m.batch.history_root = Some("/home/me/.config/ssho".into());
+    m.batch.root = "/home/me/.ssh/config".into();
+    m.key(key(KeyCode::Char('o')));
+    focus_row(&mut m, prefs::Row::DataMetadata);
+    let text = screen(&mut m, 110, 44);
+    for expected in [
+        "Favoris et notes",
+        "/home/me/.config/ssho/metadata.json",
+        "/home/me/.config/ssho/config.json",
+        "/home/me/.config/ssho/sshm_history.json",
+        "/home/me/.config/ssho/tunnel_profiles.json",
+        "/home/me/.config/ssho/backups",
+        "/home/me/.ssh/config",
+        "Jamais écrits dans les fichiers",
+        "cet écran ne l'écrit jamais",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // In a narrow terminal the focused path is repeated in full under the list.
+    let narrow = screen(&mut m, 50, 30);
+    let joined: String = narrow.split_whitespace().collect();
+    assert!(
+        joined.contains("/home/me/.config/ssho/metadata.json"),
+        "{narrow}"
+    );
+}
+
+fn shortcuts_of(m: &Model) -> &prefs::Shortcuts {
+    let View::Shortcuts(editor) = &m.view else {
+        panic!("the shortcut editor is open")
+    };
+    editor
+}
+
+#[test]
+fn shortcut_editor_changes_a_key_refuses_conflicts_and_returns_to_the_draft() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('o')));
+    focus_row(&mut m, prefs::Row::Shortcuts);
+    m.key(key(KeyCode::Enter));
+    let text = screen(&mut m, 110, 30);
+    for expected in [
+        "Préférences > Raccourcis",
+        "Touches",
+        "Origine",
+        "▶ Se connecter",
+        "[  Changer la touche ]  [  Aucune touche ]  [  Défaut ]  [  Terminer ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    let actions = prefs::shortcut_actions();
+    let edit = actions
+        .iter()
+        .position(|a| *a == PaletteAction::Edit)
+        .unwrap();
+    for _ in 0..edit {
+        m.key(key(KeyCode::Down));
+    }
+    // Enter waits for a key; a letter is then a key, never a command.
+    m.key(key(KeyCode::Enter));
+    assert!(shortcuts_of(&m).capture);
+    assert!(screen(&mut m, 110, 30).contains("En attente d'une touche"));
+    m.key(key(KeyCode::Char('d')));
+    let notice = shortcuts_of(&m).notice.clone();
+    assert!(
+        notice.contains("Refusé") && notice.contains("d sert déjà à « Supprimer »"),
+        "{notice}"
+    );
+    assert!(shortcuts_of(&m).bindings.shortcuts.is_empty());
+    // Esc while waiting keeps the current key and stays in the editor.
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::Shortcuts(_)));
+    assert!(shortcuts_of(&m).notice.contains("Touche inchangée"));
+    // A navigation key is refused with the reason of the keymap.
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Up));
+    assert!(shortcuts_of(&m).notice.contains("réservé à la navigation"));
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Char('E')));
+    let text = screen(&mut m, 110, 30);
+    assert!(
+        text.contains("E lance maintenant « Modifier » dans ce brouillon"),
+        "{text}"
+    );
+    let row = text
+        .lines()
+        .find(|line| line.contains("▶ Modifier"))
+        .unwrap();
+    assert!(row.contains(" E ") && row.contains("personnalisé"), "{row}");
+    // Done hands the shortcuts to the preferences draft; nothing is written yet.
+    for _ in 0..4 {
+        m.key(key(KeyCode::Tab));
+    }
+    assert_eq!(shortcuts_of(&m).button, Some(3));
+    m.key(key(KeyCode::Enter));
+    let editor = preferences_of(&m);
+    assert_eq!(editor.draft.key_bindings.shortcuts["host.edit"], ["E"]);
+    assert!(editor.notice.contains("Appliquer les écrit"));
+    assert!(m.keymap().shortcut(PaletteAction::Edit).as_deref() == Some("e"));
+    let text = screen(&mut m, 110, 44);
+    assert!(text.contains("1 personnalisé(s)"), "{text}");
+    let Action::Preferences(draft) = m.key(ctrl('s')) else {
+        panic!("Ctrl+S applies")
+    };
+    save_preferences(&mut m, temp.path(), &draft).unwrap();
+    assert_eq!(
+        m.keymap().shortcut(PaletteAction::Edit).as_deref(),
+        Some("E")
+    );
+    // The new key runs the action, the old one no longer does.
+    m.key(key(KeyCode::Char('e')));
+    assert!(matches!(m.view, View::List));
+    m.key(key(KeyCode::Char('E')));
+    assert!(matches!(m.view, View::Host(_)));
+}
+
+#[test]
+fn shortcut_editor_removes_and_restores_a_key_and_cancel_asks() {
+    let mut m = model(serde_json::json!({ "shortcuts": { "host.edit": ["E"] } }));
+    m.key(key(KeyCode::Char('o')));
+    focus_row(&mut m, prefs::Row::Shortcuts);
+    m.key(key(KeyCode::Enter));
+    let edit = prefs::shortcut_actions()
+        .iter()
+        .position(|a| *a == PaletteAction::Edit)
+        .unwrap();
+    for _ in 0..edit {
+        m.key(key(KeyCode::Down));
+    }
+    assert_eq!(shortcuts_of(&m).state(PaletteAction::Edit), "personnalisé");
+    // "Default" drops the customisation.
+    for _ in 0..3 {
+        m.key(key(KeyCode::Tab));
+    }
+    m.key(key(KeyCode::Enter));
+    assert_eq!(shortcuts_of(&m).state(PaletteAction::Edit), "défaut");
+    // "No key" leaves the action to the palette.
+    m.key(key(KeyCode::Left));
+    m.key(key(KeyCode::Enter));
+    assert_eq!(shortcuts_of(&m).state(PaletteAction::Edit), "F2 seul");
+    let text = screen(&mut m, 110, 30);
+    let row = text
+        .lines()
+        .find(|line| line.contains("▶ Modifier"))
+        .unwrap();
+    assert!(row.contains("—"), "{row}");
+    // Leaving a modified editor asks first; discarding returns to the draft unchanged.
+    m.key(key(KeyCode::Esc));
+    assert!(screen(&mut m, 110, 30).contains("[▶ Continuer l'édition ]"));
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Enter));
+    let editor = preferences_of(&m);
+    assert_eq!(editor.draft.key_bindings.shortcuts["host.edit"], ["E"]);
+    assert!(!editor.dirty());
+}
+
+#[test]
+fn empty_list_tells_apart_empty_configuration_filters_and_read_error() {
+    let empty = || {
+        let mut m = Model::new(vec![], french(), BTreeMap::new(), false);
+        m.search_focus = false;
+        m.batch.root = "/home/me/.ssh/config".into();
+        m
+    };
+    let mut m = empty();
+    let text = screen(&mut m, 110, 20);
+    assert!(
+        text.contains("Aucun hôte dans /home/me/.ssh/config. a : ajouter un hôte"),
+        "{text}"
+    );
+    // The key named by the message is the one of the keymap, and it works.
+    assert_eq!(m.key(key(KeyCode::Char('a'))), Action::Add(String::new()));
+    let mut m = empty();
+    m.error = "permission denied".into();
+    let text = screen(&mut m, 110, 20);
+    assert!(
+        text.contains(
+            "La configuration SSH n'a pas pu être lue. ! : voir l'erreur • F5 : recharger"
+        ),
+        "{text}"
+    );
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('/')));
+    typing(&mut m, "zzz");
+    m.key(key(KeyCode::Esc));
+    let text = screen(&mut m, 110, 20);
+    assert!(
+        text.contains("Aucun hôte ne correspond aux filtres. Backspace : effacer la recherche • F2 : Effacer tous les filtres"),
+        "{text}"
+    );
+    m.key(key(KeyCode::Backspace));
+    assert_eq!(m.visible.len(), 2);
+    m.favorites_only = true;
+    m.filter(true);
+    let text = screen(&mut m, 110, 20);
+    assert!(
+        text.contains("Aucun favori ne correspond aux filtres. F2 : Favoris seuls"),
+        "{text}"
+    );
+}
+
+#[test]
+fn first_launch_notice_stays_readable_in_the_messages() {
+    let mut m = model(serde_json::json!({}));
+    assert!(m.messages().is_empty());
+    m.startup_notice = "Données de l'application copiées de /a/sshm vers /a/ssho.".into();
+    m.key(key(KeyCode::Char('!')));
+    assert!(matches!(m.view, View::Messages));
+    let text = screen(&mut m, 110, 20);
+    assert!(
+        text.contains("[Info]") && text.contains("copiées de /a/sshm vers /a/ssho"),
+        "{text}"
+    );
+}

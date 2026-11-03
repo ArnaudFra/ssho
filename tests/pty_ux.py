@@ -893,9 +893,125 @@ def scenario_language():
           'no colour sequence under NO_COLOR, terminal restored')
 
 
+def scenario_preferences():
+    import shutil
+    preferences()
+    s = Session('preferences', width=110, height=44)
+    s.expect('? : aide')
+    # Every option with its value, the effect of the focused one, named buttons.
+    s.send(b'o')
+    for text in ['Préférences', 'Apparence', 'Liste des hôtes', 'Connexion et diagnostics', 'Clavier',
+                 'Données (lecture seule)', '> Langue', 'Prend effet dès l\'application.',
+                 '[  Appliquer ]  [  Annuler ]  [  Valeurs par défaut ]', 'Aucune modification',
+                 str(APP / 'metadata.json'), str(CONFIG)]:
+        s.expect(text)
+    # A change stays in the draft: Enter on a row writes nothing.
+    s.send(DOWN)
+    s.expect('> Couleurs')
+    s.send(b'\r')
+    s.expect('● modifié')
+    s.expect('rien n\'est écrit avant Appliquer')
+    assert 'colors' not in json.loads((APP / 'config.json').read_text())
+    # Leaving a modified draft asks first; Enter keeps it.
+    s.send(ESC)
+    s.expect('[▶ Continuer l\'édition ]')
+    s.send(b'\r')
+    s.expect('● modifié')
+    # Shortcut editor, from the same draft.
+    for _ in range(12):
+        s.send(DOWN)
+    s.expect('> Raccourcis')
+    s.send(b'\r')
+    s.expect('Préférences > Raccourcis')
+    for _ in range(60):
+        if any('▶ Modifier' in line for line in s.drain(.05).splitlines()):
+            break
+        s.send(DOWN)
+    else:
+        raise AssertionError('preferences: the Edit action is listed')
+    s.send(b'\r')
+    s.expect('En attente d\'une touche')
+    s.send(b'd')                      # taken by Delete: refused with the reason
+    s.expect('Refusé')
+    s.expect('d sert déjà à « Supprimer »')
+    s.send(b'\r')
+    s.send(b'E')
+    s.expect('E lance maintenant « Modifier » dans ce brouillon')
+    s.send(b'\x13')                   # Ctrl+S: done, back to the preferences draft
+    s.expect('Raccourcis conservés dans ce brouillon')
+    s.expect('1 personnalisé(s)')
+    assert 'shortcuts' not in json.loads((APP / 'config.json').read_text()).get('key_bindings', {})
+    s.send(b'\x13')                   # Ctrl+S: apply
+    s.expect('✓ Préférences enregistrées')
+    saved = json.loads((APP / 'config.json').read_text())
+    assert saved['colors'] is False and saved['key_bindings']['shortcuts'] == {'host.edit': ['E']}, saved
+    assert saved['language'] == 'fr' and saved['ping_on_start'] is False, saved
+    s.send(b'e')                      # the old key no longer edits
+    s.absent('Hôtes > Modifier')
+    s.send(b'E')
+    s.expect('Hôtes > Modifier alpha')
+    s.send(ESC)
+    s.expect('? : aide')
+    assert not connections()
+    s.send(CTRL_C)
+    s.close()
+    # First launch after SSHM: the copy is announced once, with both folders.
+    legacy = ROOT / '.config/sshm'
+    shutil.rmtree(APP)
+    legacy.mkdir()
+    (legacy / 'config.json').write_text(json.dumps(BASE))
+    try:
+        s = Session('preferences-first', width=140, height=30)
+        s.expect('Données copiées de ' + str(legacy) + ' vers ' + str(APP))
+        s.send(b'!')
+        s.expect('[Info]')
+        s.expect('ssho n\'utilise que la copie')
+        s.send(ESC)
+        s.send(CTRL_C)
+        s.close()
+        assert json.loads((legacy / 'config.json').read_text()) == BASE
+        assert (APP / 'config.json').exists()
+        s = Session('preferences-second', width=140, height=30)
+        s.expect('? : aide')
+        s.absent('Données copiées')
+        s.send(CTRL_C)
+        s.close()
+    finally:
+        shutil.rmtree(legacy, ignore_errors=True)
+        APP.mkdir(parents=True, exist_ok=True)
+    # An empty list says why it is empty, with the key that gets out of it.
+    preferences()
+    s = Session('preferences-empty', width=110, height=24)
+    s.expect('? : aide')
+    try:
+        CONFIG.write_text('')
+        s.send(b'\x1b[15~')           # F5
+        s.expect('Aucun hôte dans ' + str(CONFIG))
+        s.expect('a : ajouter un hôte')
+        s.send(b'a')
+        s.expect('Hôtes > Ajouter un hôte')
+        s.send(ESC)
+    finally:
+        CONFIG.write_bytes(ORIGINAL_CONFIG)
+    s.send(b'\x1b[15~')
+    s.expect('beta')
+    s.send(b'/zzz')
+    s.send(ESC)
+    s.expect('Aucun hôte ne correspond aux filtres')
+    s.expect('Backspace : effacer la recherche')
+    s.send(b'\x7f')
+    s.expect('beta')
+    assert not connections()
+    s.send(CTRL_C)
+    s.close()
+    print('PTY PASS [preferences]: preferences with values, effects and named buttons, draft until Apply, '
+          'discard asked, shortcut editor with explained refusal, saved together, first-launch '
+          'copy announced once, empty list explained, terminal restored')
+
+
 SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,
              'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes, 'tunnels': scenario_tunnels, 'batch': scenario_batch, 'help': scenario_help,
-             'language': scenario_language}
+             'language': scenario_language, 'preferences': scenario_preferences}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

@@ -32,9 +32,10 @@ impl AppPaths {
     }
 
     /// Stage the complete copy beside its destination, then publish without replacing anything.
-    pub fn initialize(&self) -> Result<()> {
+    /// Returns `true` when this call copied the data of the legacy `sshm/` folder.
+    pub fn initialize(&self) -> Result<bool> {
         if existing_directory(&self.root)? {
-            return Ok(());
+            return Ok(false);
         }
         let parent = self
             .root
@@ -44,9 +45,11 @@ impl AppPaths {
         let staging = tempfile::Builder::new()
             .prefix(".ssho-migration-")
             .tempdir_in(parent)?;
+        let mut copied = false;
         match fs::metadata(&self.legacy) {
             Ok(metadata) if metadata.is_dir() => {
                 copy_tree(&self.legacy, staging.path(), &mut HashSet::new())?;
+                copied = true;
             }
             Ok(_) => bail!("legacy path {} is not a directory", self.legacy.display()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -67,10 +70,11 @@ impl AppPaths {
             Err(error) => return Err(error).context("inspect legacy directory"),
         }
         match publish_directory(staging.path(), &self.root) {
-            Ok(()) => Ok(()),
+            Ok(()) => Ok(copied),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                // Another process published first: this call copied nothing.
                 existing_directory(&self.root)?;
-                Ok(())
+                Ok(false)
             }
             Err(error) => Err(error).with_context(|| {
                 format!(
@@ -868,6 +872,21 @@ mod tests {
             fs::read(paths.legacy.join("backups/nested/backup")).unwrap(),
             b"original"
         );
+    }
+
+    #[test]
+    fn initialization_reports_a_copy_only_when_it_made_one() {
+        // A legacy folder and no destination: the copy is made and reported.
+        let (_temp, paths) = fixture();
+        fs::create_dir_all(&paths.legacy).unwrap();
+        fs::write(paths.legacy.join("config.json"), b"{}").unwrap();
+        assert!(paths.initialize().unwrap());
+        // The destination now exists: nothing is copied or announced again.
+        assert!(!paths.initialize().unwrap());
+        // A fresh start without SSHM creates defaults and announces nothing.
+        let (_temp, paths) = fixture();
+        assert!(!paths.initialize().unwrap());
+        assert!(paths.root.join("config.json").exists());
     }
 
     #[test]

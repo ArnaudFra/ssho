@@ -22,6 +22,7 @@ mod keys_tests;
 mod nav;
 mod notes;
 mod palette;
+mod prefs;
 mod profiles;
 mod render;
 mod search;
@@ -81,6 +82,10 @@ enum View {
     Language {
         selected: usize,
     },
+    /// Every application option, edited as a draft until Apply.
+    Preferences(Box<prefs::Editor>),
+    /// Shortcut editor opened from the preferences draft.
+    Shortcuts(Box<prefs::Shortcuts>),
     List,
     Keys(keys::Editor),
     Batch(batch::Editor),
@@ -188,6 +193,7 @@ enum Action {
     Columns(Vec<HostColumn>),
     Availability(AvailabilityMethod),
     Language(crate::i18n::Language),
+    Preferences(Box<AppConfig>),
     ToggleColors,
     ToggleAscii,
     None,
@@ -284,6 +290,8 @@ struct Model {
     help_search: bool,
     /// `NO_COLOR` was set when the application started: colours stay off.
     no_color: bool,
+    /// Said once at the first launch, then kept in the Messages screen.
+    startup_notice: String,
     view: View,
     parents: Vec<(View, usize)>,
     preferences: AppConfig,
@@ -349,6 +357,7 @@ impl Model {
             stop_pending: None,
             help_search: false,
             no_color: false,
+            startup_notice: String::new(),
             view: View::List,
             parents: vec![],
             preferences,
@@ -739,6 +748,8 @@ impl Model {
                 View::Host(form) => form.dirty(),
                 View::Forward(form) => form.dirty(),
                 View::Note(editor) => editor.dirty(),
+                View::Preferences(editor) => editor.dirty(),
+                View::Shortcuts(editor) => editor.dirty(),
                 View::Changes(_) => true,
                 View::Keys(keys::Editor {
                     mode: keys::Mode::Generate { path, comment, .. },
@@ -899,6 +910,8 @@ impl Model {
         let texts = self.view.selector_texts().unwrap_or_default();
         match &mut self.view {
             View::Columns(_) => return columns::key(self, k),
+            View::Preferences(_) => return prefs::key(self, k),
+            View::Shortcuts(_) => return prefs::shortcuts_key(self, k),
             View::Keys(_) => return keys::key(self, k),
             View::Batch(_) | View::BatchResults { .. } => return batch::key(self, k),
             View::Changes(_) | View::Backups { .. } => return changes::key(self, k),
@@ -1331,6 +1344,9 @@ impl Model {
         if !self.connection_result.is_empty() {
             messages.push(("Info", self.connection_result.clone()));
         }
+        if !self.startup_notice.is_empty() {
+            messages.push(("Info", self.startup_notice.clone()));
+        }
         messages
     }
     /// Owned work still running, in words: it stays findable from any screen.
@@ -1531,6 +1547,7 @@ impl Model {
                 }
             }
             PaletteAction::ToggleAscii => return Action::ToggleAscii,
+            PaletteAction::Preferences => prefs::open(self),
             PaletteAction::Language => {
                 let selected = crate::i18n::Language::ALL
                     .iter()
@@ -1864,6 +1881,7 @@ pub fn run(
     config: &Path,
     force_search: bool,
     no_update_check: bool,
+    migrated: bool,
     initial: InitialView,
 ) -> Result<i32> {
     let preferences = AppConfig::load(&paths.root)?;
@@ -1880,6 +1898,22 @@ pub fn run(
     );
     // https://no-color.org: any non-empty value asks for an output without colour.
     m.no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
+    if migrated {
+        // First launch after SSHM: say once where the copied data now lives.
+        m.startup_notice = crate::tf!(
+            "Application data copied from {} to {}. The original folder is unchanged; ssho only uses the copy.",
+            "Données de l'application copiées de {} vers {}. Le dossier d'origine est inchangé ; ssho n'utilise que la copie.",
+            paths.legacy.display(),
+            paths.root.display()
+        );
+        m.hint = crate::tf!(
+            "Data copied from {} to {} — {}: details",
+            "Données copiées de {} vers {} — {} : détails",
+            paths.legacy.display(),
+            paths.root.display(),
+            m.keymap().hint(PaletteAction::Messages)
+        );
+    }
     m.metadata = metadata.hosts().clone();
     m.batch.root = config.to_path_buf();
     m.batch.history_root = Some(paths.root.clone());
@@ -2053,6 +2087,7 @@ pub fn run(
             Action::ToggleAliases
             | Action::Availability(_)
             | Action::Language(_)
+            | Action::Preferences(_)
             | Action::ToggleColors
             | Action::ToggleAscii
             | Action::GroupMode(_)
@@ -2163,6 +2198,20 @@ fn search_placeholder() -> &'static str {
     )
 }
 
+/// Apply of the preferences screen: its options are copied into a freshly read
+/// configuration, saved, then adopted as a whole.
+fn save_preferences(m: &mut Model, root: &Path, draft: &AppConfig) -> Result<()> {
+    let host = m.selected_host();
+    m.preferences = AppConfig::update(root, |config| prefs::merge(config, draft))?;
+    crate::i18n::set(m.preferences.language);
+    m.query.placeholder = search_placeholder().into();
+    m.back();
+    m.refilter(host.as_ref(), m.selected);
+    m.error.clear();
+    m.hint = crate::t!("✓ Preferences saved", "✓ Préférences enregistrées").into();
+    Ok(())
+}
+
 /// Display preferences are saved first, then adopted; the list stays in place.
 fn save_display(m: &mut Model, root: &Path, change: impl FnOnce(&mut AppConfig)) -> Result<()> {
     m.preferences = AppConfig::update(root, change)?;
@@ -2200,6 +2249,7 @@ fn apply_preference_action(
         Action::GroupMode(mode) => groups::save(m, root, *mode),
         Action::Availability(method) => save_availability(m, root, *method),
         Action::Language(language) => save_language(m, root, *language),
+        Action::Preferences(draft) => save_preferences(m, root, draft),
         Action::ToggleColors => save_display(m, root, |config| config.colors = !config.colors),
         Action::ToggleAscii => save_display(m, root, |config| config.ascii = !config.ascii),
         _ => unreachable!("only preference adoption actions reach this dispatcher"),

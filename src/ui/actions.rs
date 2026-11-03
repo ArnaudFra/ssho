@@ -47,6 +47,7 @@ pub(super) enum PaletteAction {
     Language,
     ToggleColors,
     ToggleAscii,
+    Preferences,
     Palette,
     Quit,
 }
@@ -83,7 +84,7 @@ impl Category {
 impl PaletteAction {
     /// Every catalogue entry, grouped by category. The palette lists them in this
     /// order; only the action that opens the palette itself is left out of it.
-    pub(super) const CATALOGUE: [Self; 44] = [
+    pub(super) const CATALOGUE: [Self; 45] = [
         Self::Connect,
         Self::Tunnel,
         Self::Profiles,
@@ -122,6 +123,7 @@ impl PaletteAction {
         Self::Backups,
         Self::Reload,
         Self::Messages,
+        Self::Preferences,
         Self::Language,
         Self::ToggleColors,
         Self::ToggleAscii,
@@ -172,6 +174,7 @@ impl PaletteAction {
             Self::ClearSearch => "search.clear",
             Self::ClearFilters => "filter.clear",
             Self::Messages => "app.messages",
+            Self::Preferences => "app.preferences",
             Self::Language => "app.language",
             Self::ToggleColors => "app.colors",
             Self::ToggleAscii => "app.ascii",
@@ -232,6 +235,7 @@ impl PaletteAction {
             Self::ClearSearch => ("Clear the search", "Effacer la recherche"),
             Self::ClearFilters => ("Clear all filters", "Effacer tous les filtres"),
             Self::Messages => ("Messages and last error", "Messages et dernière erreur"),
+            Self::Preferences => ("Preferences", "Préférences"),
             Self::Language => ("Language", "Langue de l'interface"),
             Self::ToggleColors => ("Display: colours", "Affichage : couleurs"),
             Self::ToggleAscii => ("Display: ASCII symbols", "Affichage : symboles ASCII"),
@@ -285,6 +289,7 @@ impl PaletteAction {
             | Self::Backups => Category::Tools,
             Self::Reload
             | Self::Messages
+            | Self::Preferences
             | Self::Language
             | Self::ToggleColors
             | Self::ToggleAscii
@@ -343,6 +348,9 @@ impl PaletteAction {
             Self::Backups => "restaurer restauration historique diff annuler restore history undo",
             Self::Reload => "rafraîchir relire actualiser refresh reread",
             Self::Messages => "erreur avertissement warning error détail journal log",
+            Self::Preferences => {
+                "préférences options réglages paramètres configuration settings données emplacement data location"
+            }
             Self::Language => "langue language english français anglais french traduction",
             Self::ToggleColors => {
                 "couleur color monochrome sobre contraste thème clair sombre no_color plain theme light dark"
@@ -506,6 +514,10 @@ impl PaletteAction {
                 "Shows the last error and the current warnings in full.",
                 "Affiche en entier la dernière erreur et les avertissements en cours."
             ),
+            Self::Preferences => crate::t!(
+                "Shows every option with its effect, the shortcuts and where the data is kept.",
+                "Affiche chaque option avec son effet, les raccourcis et l'emplacement des données."
+            ),
             Self::Language => crate::t!(
                 "Chooses the language of the interface: English or French.",
                 "Choisit la langue de l'interface : anglais ou français."
@@ -631,7 +643,7 @@ pub(super) fn fold(text: &str) -> String {
 
 /// Historical direct shortcuts of the host list. Printable keys only apply while
 /// the table has the focus; function keys also apply from the search input.
-const HISTORICAL: [(&str, PaletteAction); 38] = [
+const HISTORICAL: [(&str, PaletteAction); 39] = [
     ("enter", PaletteAction::Connect),
     ("f2", PaletteAction::Palette),
     ("f3", PaletteAction::ChooseAlias),
@@ -645,6 +657,7 @@ const HISTORICAL: [(&str, PaletteAction); 38] = [
     ("backspace", PaletteAction::ClearSearch),
     ("K", PaletteAction::Keys),
     ("v", PaletteAction::Columns),
+    ("o", PaletteAction::Preferences),
     ("P", PaletteAction::Availability),
     ("x", PaletteAction::BatchMark),
     ("B", PaletteAction::BatchOpen),
