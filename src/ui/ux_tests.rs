@@ -3026,3 +3026,307 @@ fn first_launch_notice_stays_readable_in_the_messages() {
         "{text}"
     );
 }
+
+fn view_fixture() -> (
+    tempfile::TempDir,
+    PathBuf,
+    PathBuf,
+    Model,
+    crate::storage::views::Views,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("app");
+    let config = temp.path().join("config");
+    std::fs::write(
+        &config,
+        "Host alpha\n HostName alpha.example\nHost beta\n HostName beta.example\n",
+    )
+    .unwrap();
+    let hosts = crate::config::load_report(&config).unwrap().hosts;
+    let mut m = Model::new(hosts, french(), BTreeMap::new(), false);
+    m.search_focus = false;
+    m.batch.root.clone_from(&config);
+    let store = crate::storage::views::Views::load(&root, &config).unwrap();
+    m.preferences.save(&root).unwrap();
+    (temp, root, config, m, store)
+}
+
+fn views_of(m: &Model) -> &views::Editor {
+    let View::Views(editor) = &m.view else {
+        panic!("the saved views screen is open")
+    };
+    editor
+}
+
+/// Run the action a key returned, the way the event loop does.
+fn run_view_action(
+    m: &mut Model,
+    store: &mut crate::storage::views::Views,
+    root: &Path,
+    config: &Path,
+    action: Action,
+) -> Result<()> {
+    match action {
+        Action::ApplyView(name) => views::apply(m, root, config, &name),
+        Action::SaveView {
+            original,
+            name,
+            view,
+        } => views::save(m, store, original.as_deref(), &name, &view),
+        Action::DeleteView(name) => views::delete(m, store, &name),
+        other => panic!("unexpected action {other:?}"),
+    }
+}
+
+#[test]
+fn a_view_keeps_the_list_context_under_a_name_and_applies_it_back() {
+    let (_temp, root, config, mut m, mut store) = view_fixture();
+    m.key(key(KeyCode::Char('/')));
+    typing(&mut m, "alp");
+    m.key(key(KeyCode::Esc));
+    m.recent = true;
+    m.filter(true);
+    // Without any view the screen says what a view keeps and offers to save one.
+    m.key(key(KeyCode::Char('V')));
+    let text = screen(&mut m, 100, 30);
+    for expected in [
+        "Vues enregistrées",
+        "Aucune vue en cours",
+        "Aucune vue enregistrée.",
+        "[▶ Enregistrer sous… ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // The other actions explain that there is nothing to act on.
+    m.key(key(KeyCode::BackTab));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(views_of(&m).notice.contains("Aucune vue enregistrée"));
+    m.key(key(KeyCode::Tab));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    let text = screen(&mut m, 100, 30);
+    for expected in [
+        "> Nom de la nouvelle vue :",
+        // What is about to be kept is shown before it is named.
+        "Recherche : alp",
+        "Fichier : tous les fichiers",
+        "tri par connexion récente",
+        "Colonnes : Nom, Adresse, Tags, Dernière tentative",
+        "[  Enregistrer ]  [  Annuler ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // Letters are the name, never a command; pasted text goes to the name too.
+    typing(&mut m, "Produ");
+    m.paste("ction");
+    assert_eq!(views_of(&m).name.value, "Production");
+    // Enter in the name only reaches the Save button.
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(store.all().is_empty());
+    assert!(screen(&mut m, 100, 30).contains("[▶ Enregistrer ]"));
+    let action = m.key(key(KeyCode::Enter));
+    assert!(
+        matches!(&action, Action::SaveView { original: None, name, .. } if name == "Production")
+    );
+    run_view_action(&mut m, &mut store, &root, &config, action).unwrap();
+    let text = screen(&mut m, 100, 30);
+    for expected in [
+        "✓ Vue « Production » enregistrée",
+        "Vue en cours : Production",
+        "▶ Production  ✓ en cours",
+        "[▶ Appliquer ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    assert!(root.join("views.json").exists());
+    m.key(key(KeyCode::Esc));
+    assert!(screen(&mut m, 100, 30).contains("Filtres : Vue : Production • alp"));
+    // Changing the list marks the view as modified; the saved one is untouched.
+    m.key(key(KeyCode::Backspace));
+    m.recent = false;
+    m.filter(true);
+    let text = screen(&mut m, 100, 30);
+    assert!(text.contains("Vue : Production (modifiée)"), "{text}");
+    assert_eq!(store.all()["Production"].query, "alp");
+    m.key(key(KeyCode::Char('V')));
+    assert!(screen(&mut m, 100, 30).contains("Vue en cours : Production (modifiée"));
+    let action = m.key(key(KeyCode::Enter));
+    assert_eq!(action, Action::ApplyView("Production".into()));
+    run_view_action(&mut m, &mut store, &root, &config, action).unwrap();
+    assert!(matches!(m.view, View::List));
+    assert_eq!(m.query.value, "alp");
+    assert!(m.recent);
+    assert_eq!(m.visible.len(), 1);
+    assert!(
+        m.hint.contains("✓ Vue « Production » appliquée"),
+        "{}",
+        m.hint
+    );
+    let text = screen(&mut m, 100, 30);
+    assert!(
+        text.contains("Vue : Production") && !text.contains("(modifiée)"),
+        "{text}"
+    );
+    // Clearing every filter leaves the view, instead of calling it modified for ever.
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "effacer tous les filtres");
+    m.key(key(KeyCode::Enter));
+    assert!(m.active_view.is_none());
+}
+
+#[test]
+fn update_rename_and_delete_are_named_and_never_silent() {
+    let (_temp, root, config, mut m, mut store) = view_fixture();
+    let sample = m.current_view();
+    store.save(None, "Bases", &sample).unwrap();
+    store.save(None, "Production", &sample).unwrap();
+    m.views.clone_from(store.all());
+    m.favorites_only = true;
+    m.key(key(KeyCode::Char('V')));
+    m.key(key(KeyCode::Down));
+    assert_eq!(views_of(&m).selected, 1);
+    // Update stores the current list in the selected view, and says so.
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Tab));
+    assert!(screen(&mut m, 100, 30).contains("[▶ Mettre à jour ]"));
+    let action = m.key(key(KeyCode::Enter));
+    run_view_action(&mut m, &mut store, &root, &config, action).unwrap();
+    assert!(store.all()["Production"].favorites_only);
+    assert!(!store.all()["Bases"].favorites_only);
+    assert!(views_of(&m)
+        .notice
+        .contains("✓ Vue « Production » mise à jour"));
+    // Rename: the name is pre-filled, an existing name is refused and explained.
+    for _ in 0..3 {
+        m.key(key(KeyCode::Tab));
+    }
+    assert!(screen(&mut m, 100, 30).contains("[▶ Renommer ]"));
+    m.key(key(KeyCode::Enter));
+    assert_eq!(views_of(&m).name.value, "Production");
+    assert!(screen(&mut m, 100, 30).contains("> Nouveau nom :"));
+    for _ in 0.."Production".len() {
+        m.key(key(KeyCode::Backspace));
+    }
+    typing(&mut m, "Bases");
+    let action = m.key(ctrl('s'));
+    run_view_action(&mut m, &mut store, &root, &config, action).unwrap();
+    assert!(
+        views_of(&m).notice.contains("existe déjà"),
+        "{}",
+        views_of(&m).notice
+    );
+    assert_eq!(
+        views_of(&m).mode,
+        views::Mode::Rename,
+        "the name can be corrected"
+    );
+    assert_eq!(store.all().len(), 2);
+    typing(&mut m, " 2");
+    let action = m.key(ctrl('s'));
+    run_view_action(&mut m, &mut store, &root, &config, action).unwrap();
+    assert!(store.all().contains_key("Bases 2") && !store.all().contains_key("Production"));
+    assert!(
+        store.all()["Bases 2"].favorites_only,
+        "a rename keeps the criteria"
+    );
+    // An empty name is refused without leaving the step.
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Enter));
+    assert_eq!(m.key(ctrl('s')), Action::None);
+    assert!(views_of(&m).notice.contains("Un nom est requis"));
+    m.key(key(KeyCode::Esc));
+    assert_eq!(views_of(&m).mode, views::Mode::Browse);
+    // Delete asks, with the focus on going back.
+    for _ in 0..3 {
+        m.key(key(KeyCode::Tab));
+    }
+    assert!(screen(&mut m, 100, 30).contains("[▶ Supprimer ]"));
+    m.key(key(KeyCode::Enter));
+    let text = screen(&mut m, 100, 30);
+    assert!(
+        text.contains("Supprimer cette vue ?") && text.contains("[▶ Revenir ]"),
+        "{text}"
+    );
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert_eq!(store.all().len(), 2);
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Tab));
+    let action = m.key(key(KeyCode::Enter));
+    assert_eq!(action, Action::DeleteView("Bases 2".into()));
+    run_view_action(&mut m, &mut store, &root, &config, action).unwrap();
+    assert_eq!(store.all().len(), 1);
+    assert!(views_of(&m).notice.contains("✓ Vue « Bases 2 » supprimée"));
+    assert!(matches!(m.view, View::Views(_)), "the screen stays open");
+}
+
+#[test]
+fn a_missing_source_is_reported_and_the_filter_is_never_widened() {
+    let (temp, root, config, mut m, mut store) = view_fixture();
+    let gone = temp.path().join("gone.conf");
+    let mut view = m.current_view();
+    view.source = Some(gone.clone());
+    view.query = "beta".into();
+    store.save(None, "Ancienne", &view).unwrap();
+    m.views.clone_from(store.all());
+    m.key(key(KeyCode::Char('V')));
+    let text = screen(&mut m, 100, 30);
+    assert!(
+        text.contains(&format!("Fichier : {}", gone.display())),
+        "{text}"
+    );
+    let action = m.key(key(KeyCode::Enter));
+    let error = run_view_action(&mut m, &mut store, &root, &config, action).unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("ne fait plus partie de la configuration SSH")
+            && message.contains("Rien n'a été appliqué"),
+        "{message}"
+    );
+    // The event loop keeps the refusal: the screen shows it in full, until the next key.
+    m.error = message;
+    let text = screen(&mut m, 100, 30);
+    let joined: String = text
+        .lines()
+        .map(|line| line.trim().trim_matches('│').trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        joined.contains("Erreur : La vue « Ancienne » filtre sur")
+            && joined.contains("mettez à jour ou supprimez cette vue."),
+        "{text}"
+    );
+    m.key(key(KeyCode::Down));
+    assert!(m.error.is_empty());
+    // Nothing moved: no query, no source filter, no view in use.
+    assert!(m.query.value.is_empty());
+    assert!(m.source_filter.is_none());
+    assert!(m.active_view.is_none());
+    assert!(matches!(m.view, View::Views(_)));
+}
+
+#[test]
+fn batch_marks_and_presentation_changes_are_told_apart() {
+    let (_temp, root, config, mut m, mut store) = view_fixture();
+    let before = m.current_view();
+    // A batch mark is a moment, not a criterion: it never enters a view.
+    m.key(key(KeyCode::Char('x')));
+    assert!(!m.batch.marks.is_empty());
+    assert_eq!(m.current_view(), before);
+    // A view carries the grouping and the columns, and applies them as preferences.
+    let mut grouped = before.clone();
+    grouped.group_mode = GroupMode::Files;
+    grouped.columns = vec![HostColumn::Name, HostColumn::Port];
+    store.save(None, "Par fichier", &grouped).unwrap();
+    m.views.clone_from(store.all());
+    views::apply(&mut m, &root, &config, "Par fichier").unwrap();
+    assert_eq!(m.preferences.group_mode, GroupMode::Files);
+    assert_eq!(
+        m.preferences.host_columns,
+        [HostColumn::Name, HostColumn::Port]
+    );
+    assert_eq!(AppConfig::load(&root).unwrap().group_mode, GroupMode::Files);
+    assert!(!m.batch.marks.is_empty(), "applying a view keeps the marks");
+    assert_eq!(m.view_state(), Some(("Par fichier", false)));
+    // Changing the grouping by hand afterwards is a modification of the view.
+    m.preferences.group_mode = GroupMode::Flat;
+    assert_eq!(m.view_state(), Some(("Par fichier", true)));
+}

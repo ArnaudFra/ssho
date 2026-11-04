@@ -494,6 +494,7 @@ impl AppConfig {
 mod history;
 pub mod metadata;
 pub mod tunnels;
+pub mod views;
 pub use history::History;
 
 fn merge_value(target: &mut Value, incoming: Value) {

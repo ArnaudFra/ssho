@@ -32,6 +32,7 @@ mod source_filter;
 mod tests;
 #[cfg(test)]
 mod ux_tests;
+mod views;
 use crate::{
     config,
     runtime::{self, PingResult, PingStatus},
@@ -82,6 +83,8 @@ enum View {
     Language {
         selected: usize,
     },
+    /// Named list contexts: apply, save, update, rename, delete.
+    Views(views::Editor),
     /// Every application option, edited as a draft until Apply.
     Preferences(Box<prefs::Editor>),
     /// Shortcut editor opened from the preferences draft.
@@ -194,6 +197,13 @@ enum Action {
     Availability(AvailabilityMethod),
     Language(crate::i18n::Language),
     Preferences(Box<AppConfig>),
+    ApplyView(String),
+    SaveView {
+        original: Option<String>,
+        name: String,
+        view: Box<crate::storage::views::SavedView>,
+    },
+    DeleteView(String),
     ToggleColors,
     ToggleAscii,
     None,
@@ -292,6 +302,9 @@ struct Model {
     no_color: bool,
     /// Said once at the first launch, then kept in the Messages screen.
     startup_notice: String,
+    /// Saved views of this configuration, and the one the list was set from.
+    views: BTreeMap<String, crate::storage::views::SavedView>,
+    active_view: Option<String>,
     view: View,
     parents: Vec<(View, usize)>,
     preferences: AppConfig,
@@ -358,6 +371,8 @@ impl Model {
             help_search: false,
             no_color: false,
             startup_notice: String::new(),
+            views: BTreeMap::new(),
+            active_view: None,
             view: View::List,
             parents: vec![],
             preferences,
@@ -792,6 +807,12 @@ impl Model {
             // A focused button receives no text.
             View::Note(editor) if editor.button.is_some() => return,
             View::Note(editor) => &mut editor.input,
+            View::Views(editor) => {
+                let Some(input) = views::input(editor) else {
+                    return;
+                };
+                input
+            }
             View::Keys(editor) => {
                 let Some(input) = keys::input(editor) else {
                     return;
@@ -911,6 +932,7 @@ impl Model {
         match &mut self.view {
             View::Columns(_) => return columns::key(self, k),
             View::Preferences(_) => return prefs::key(self, k),
+            View::Views(_) => return views::key(self, k),
             View::Shortcuts(_) => return prefs::shortcuts_key(self, k),
             View::Keys(_) => return keys::key(self, k),
             View::Batch(_) | View::BatchResults { .. } => return batch::key(self, k),
@@ -1419,6 +1441,7 @@ impl Model {
             PaletteAction::Columns => columns::open(self),
             PaletteAction::Availability => self.open_availability(),
             PaletteAction::GroupMode => groups::open(self),
+            PaletteAction::Views => views::open(self),
             PaletteAction::ChooseAlias => aliases::open(self),
             PaletteAction::SourceFilter => return Action::SourceFilter,
             PaletteAction::ClearSourceFilter => {
@@ -1532,6 +1555,8 @@ impl Model {
                 self.source_filter = None;
                 self.favorites_only = false;
                 self.show_hidden = false;
+                // Without its criteria the list no longer shows the view.
+                self.active_view = None;
                 self.filter(true);
             }
             PaletteAction::ToggleColors => {
@@ -1889,6 +1914,7 @@ pub fn run(
     let report = config::load_report(config)?;
     let mut metadata = Metadata::load(&paths.root, config)?;
     let mut profiles = TunnelProfiles::load(&paths.root, config)?;
+    let mut saved_views = crate::storage::views::Views::load(&paths.root, config)?;
     let standalone = !matches!(initial, InitialView::List | InitialView::ListQuery(_));
     let mut m = Model::new(
         report.hosts,
@@ -1919,6 +1945,7 @@ pub fn run(
     m.batch.history_root = Some(paths.root.clone());
     m.config_warnings = report.warnings;
     m.tunnel_profiles = profiles.hosts().clone();
+    m.views.clone_from(saved_views.all());
     m.tunnel_modes = profiles.modes().clone();
     m.filter(false);
     match initial {
@@ -1993,6 +2020,18 @@ pub fn run(
             }),
             Action::Backups => changes::open_backups(&mut m, &paths.root).map(|_| false),
             Action::RestoreBackup(index) => changes::open_restore(&mut m, index).map(|_| false),
+            Action::ApplyView(name) => {
+                views::apply(&mut m, &paths.root, config, &name).map(|()| false)
+            }
+            Action::SaveView {
+                original,
+                name,
+                view,
+            } => views::save(&mut m, &mut saved_views, original.as_deref(), &name, &view)
+                .map(|()| false),
+            Action::DeleteView(name) => {
+                views::delete(&mut m, &mut saved_views, &name).map(|()| false)
+            }
             Action::StartBatch => batch::start(&mut m).map(|_| false),
             Action::CancelBatch => {
                 m.batch.manager.cancel();

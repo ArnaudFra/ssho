@@ -276,6 +276,7 @@ fn draw_view(f: &mut Frame, m: &mut Model, area: Rect) {
         View::Help => help(f, m, area),
         View::Messages => messages(f, m, area),
         View::Preferences(_) => preferences(f, m, area),
+        View::Views(_) => saved_views(f, m, area),
         View::Shortcuts(_) => shortcuts(f, m, area),
         View::Files { .. } => files(f, m, area),
         View::SourceFiles { .. } => source_files(f, m, area),
@@ -850,6 +851,17 @@ fn filter_band(
             "Masqués visibles ({})",
             keymap.hint(A::ToggleHidden)
         ));
+    }
+    // The view in use leads the criteria; a context that moved away says so.
+    if let Some((name, modified)) = m.view_state() {
+        filters.insert(
+            0,
+            if modified {
+                crate::tf!("View: {name} (modified)", "Vue : {name} (modifiée)")
+            } else {
+                crate::tf!("View: {name}", "Vue : {name}")
+            },
+        );
     }
     let file = m
         .source_filter
@@ -3785,5 +3797,198 @@ fn shortcuts(f: &mut Frame, m: &mut Model, area: Rect) {
     );
     if let View::Shortcuts(editor) = &mut m.view {
         editor.offset = offset;
+    }
+}
+
+/// Saved views: the view in use, the list, the criteria of the selected one,
+/// then the named actions. Naming and deleting are steps of this same screen.
+fn saved_views(f: &mut Frame, m: &mut Model, area: Rect) {
+    let View::Views(editor) = &m.view else {
+        return;
+    };
+    let whole = area;
+    let area = nav::bounded(inset(area), FORM_WIDTH as u16 + 2);
+    let border = block(crate::t!("Saved views", "Vues enregistrées"), true);
+    let inner = border.inner(area);
+    f.render_widget(border, area);
+    let width = usize::from(inner.width).max(1);
+    let naming = matches!(editor.mode, views::Mode::SaveAs | views::Mode::Rename);
+    let selected = m.views.iter().nth(editor.selected);
+    let detail: Vec<String> = match (naming, editor.mode, selected) {
+        // A new view is made of the current context: show exactly what is kept.
+        (true, views::Mode::SaveAs, _) => views::summary(&m.current_view()),
+        (_, _, Some((_, view))) => views::summary(view),
+        _ => Vec::new(),
+    };
+    let detail_rows: usize = detail
+        .iter()
+        .map(|line| select::wrapped_rows(line, width))
+        .sum();
+    let footer = if naming {
+        crate::t!(
+            "Enter: to the Save button • Tab: name and buttons • Ctrl+S: save • Esc: cancel",
+            "Entrée : vers le bouton Enregistrer • Tab : nom et boutons • Ctrl+S : enregistrer • Échap : annuler"
+        )
+    } else {
+        crate::t!(
+            "↑↓: view • Tab/←→: action • Enter: run the action • Esc: back",
+            "↑↓ : vue • Tab/←→ : action • Entrée : lancer l'action • Échap : retour"
+        )
+    };
+    let footer_height = select::wrapped_rows(footer, width).min(2) as u16;
+    // A refused action (missing source file...) is shown in full, not cut.
+    let (notice, notice_style) = if m.error.is_empty() {
+        (editor.notice.clone(), Style::default().fg(Color::Yellow))
+    } else {
+        (
+            crate::tf!("Error: {}", "Erreur : {}", m.error),
+            Style::default().fg(Color::Red),
+        )
+    };
+    let notice_height = select::wrapped_rows(&notice, width).clamp(1, 4) as u16;
+    let parts = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length((detail_rows as u16).min((inner.height / 3).max(1))),
+        Constraint::Length(2),
+        Constraint::Length(notice_height),
+        Constraint::Length(footer_height),
+    ])
+    .split(inner);
+    let in_use = match m.view_state() {
+        Some((name, true)) => crate::tf!(
+            "View in use: {name} (modified — Update stores the current list)",
+            "Vue en cours : {name} (modifiée — Mettre à jour enregistre la liste actuelle)"
+        ),
+        Some((name, false)) => crate::tf!("View in use: {name}", "Vue en cours : {name}"),
+        None => crate::t!("No view in use", "Aucune vue en cours").to_owned(),
+    };
+    f.render_widget(Paragraph::new(in_use).style(accent()), parts[0]);
+    let lines: Vec<Line<'_>> = if m.views.is_empty() {
+        vec![Line::styled(
+            crate::t!(
+                "No saved view. \"Save current as…\" keeps the search, the filters, the sort, the groups and the columns of the list under a name.",
+                "Aucune vue enregistrée. « Enregistrer sous… » garde sous un nom la recherche, les filtres, le tri, les groupes et les colonnes de la liste."
+            ),
+            Style::default().fg(GRAY),
+        )]
+    } else {
+        let height = usize::from(parts[1].height).max(1);
+        let offset = (editor.selected + 1).saturating_sub(height);
+        m.views
+            .keys()
+            .enumerate()
+            .skip(offset)
+            .take(height)
+            .map(|(index, name)| {
+                let current = index == editor.selected;
+                let used = m.active_view.as_deref() == Some(name.as_str());
+                Line::styled(
+                    format!(
+                        "{} {name}{}",
+                        if current { "▶" } else { " " },
+                        if used {
+                            crate::t!("  ✓ in use", "  ✓ en cours")
+                        } else {
+                            ""
+                        }
+                    ),
+                    if current {
+                        Style::default().fg(Color::Black).bg(CYAN)
+                    } else {
+                        Style::default()
+                    },
+                )
+            })
+            .collect()
+    };
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), parts[1]);
+    f.render_widget(
+        Paragraph::new(
+            detail
+                .into_iter()
+                .map(Line::from)
+                .collect::<Vec<Line<'_>>>(),
+        )
+        .style(Style::default().fg(GRAY))
+        .wrap(Wrap { trim: true }),
+        parts[2],
+    );
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(parts[3]);
+    if naming {
+        let label = if editor.mode == views::Mode::SaveAs {
+            crate::t!("Name of the new view: ", "Nom de la nouvelle vue : ")
+        } else {
+            crate::t!("New name: ", "Nouveau nom : ")
+        };
+        let prefix = label.width() as u16 + 2;
+        let room = usize::from(rows[0].width.saturating_sub(prefix)).max(1);
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    format!("{} {label}", if editor.name_focus == 0 { ">" } else { " " }),
+                    if editor.name_focus == 0 {
+                        accent()
+                    } else {
+                        Style::default()
+                    },
+                ),
+                input_span(&editor.name, editor.name_focus == 0, room),
+            ])),
+            rows[0],
+        );
+        if editor.name_focus == 0 {
+            input_cursor(f, &editor.name, rows[0], prefix, 0);
+        }
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                nav::button(crate::t!("Save", "Enregistrer"), editor.name_focus == 1),
+                Span::raw("  "),
+                nav::button(crate::t!("Cancel", "Annuler"), editor.name_focus == 2),
+            ])),
+            rows[1],
+        );
+    } else {
+        // Two rows of three, so that no button is cut at 80 columns.
+        for (row, chunk) in views::buttons().chunks(3).enumerate() {
+            let mut spans = Vec::new();
+            for (index, label) in chunk.iter().enumerate() {
+                if index > 0 {
+                    spans.push(Span::raw("  "));
+                }
+                spans.push(nav::button(label, editor.button == row * 3 + index));
+            }
+            f.render_widget(Paragraph::new(Line::from(spans)), rows[row]);
+        }
+    }
+    f.render_widget(
+        Paragraph::new(notice)
+            .style(notice_style)
+            .wrap(Wrap { trim: true }),
+        parts[4],
+    );
+    f.render_widget(
+        Paragraph::new(footer)
+            .style(Style::default().fg(GRAY))
+            .wrap(Wrap { trim: true }),
+        parts[5],
+    );
+    if editor.mode == views::Mode::Delete {
+        if let Some((name, _)) = selected {
+            m.confirm.draw(
+                f,
+                whole,
+                crate::t!("Delete this view?", "Supprimer cette vue ?"),
+                vec![
+                    Line::from(name.clone()),
+                    Line::from(crate::t!(
+                        "Only the saved view is removed; the list and the SSH files are unchanged.",
+                        "Seule la vue enregistrée est retirée ; la liste et les fichiers SSH sont inchangés."
+                    )),
+                ],
+                crate::t!("Go back", "Revenir"),
+                crate::t!("Delete the view", "Supprimer la vue"),
+            );
+        }
     }
 }

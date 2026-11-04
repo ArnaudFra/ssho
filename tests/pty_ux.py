@@ -1009,9 +1009,90 @@ def scenario_preferences():
           'copy announced once, empty list explained, terminal restored')
 
 
+def scenario_views():
+    preferences()
+    views = APP / 'views.json'
+    if views.exists():
+        views.unlink()
+    s = Session('views', width=110, height=34)
+    s.expect('? : aide')
+    s.send(b'/alp')
+    s.send(ESC)
+    s.expect('Filtres : alp')
+    # No view yet: the screen says what a view keeps, focus on saving one.
+    s.send(b'V')
+    s.expect('Vues enregistrées')
+    s.expect('Aucune vue en cours')
+    s.expect('[▶ Enregistrer sous… ]')
+    s.send(b'\r')
+    s.expect('> Nom de la nouvelle vue :')
+    s.expect('Recherche : alp')
+    s.send(b'Production')
+    s.send(b'\r')                     # Enter in the name only reaches the button
+    s.expect('[▶ Enregistrer ]')
+    assert not views.exists()
+    s.send(b'\r')
+    s.expect('✓ Vue « Production » enregistrée')
+    s.expect('▶ Production  ✓ en cours')
+    saved = json.loads(views.read_text())
+    (scope,) = saved['configs'].values()
+    assert scope['views']['Production']['query'] == 'alp', saved
+    s.send(ESC)
+    s.expect('Filtres : Vue : Production • alp')
+    # The list moves away from the view: it says so, the saved view is untouched.
+    s.send(b'\x7f')
+    s.expect('Vue : Production (modifiée)')
+    s.expect('beta')
+    assert json.loads(views.read_text()) == saved
+    s.send(b'V')
+    s.expect('Vue en cours : Production (modifiée')
+    s.send(b'\r')                     # Apply
+    s.expect('✓ Vue « Production » appliquée')
+    s.expect('Filtres : Vue : Production • alp')
+    s.absent('(modifiée)')
+    # Delete asks first, focus on going back.
+    s.send(b'V')
+    for _ in range(4):
+        s.send(b'\t')
+    s.expect('[▶ Supprimer ]')
+    s.send(b'\r')
+    s.expect('Supprimer cette vue ?')
+    s.expect('[▶ Revenir ]')
+    s.send(b'\r')
+    assert json.loads(views.read_text()) == saved
+    s.send(b'\r')
+    s.send(b'\t')
+    s.send(b'\r')
+    s.expect('✓ Vue « Production » supprimée')
+    (scope,) = json.loads(views.read_text())['configs'].values()
+    assert scope['views'] == {}
+    s.send(ESC)
+    s.expect('Filtres : alp')
+    assert not connections()
+    s.send(CTRL_C)
+    s.close()
+    # The view is found again at the next start.
+    views.write_text(json.dumps(saved))
+    s = Session('views-restart', width=110, height=34)
+    s.expect('? : aide')
+    s.send(F2)
+    s.send(b'vues')
+    s.expect('Vues enregistrées')
+    s.send(b'\r')
+    s.expect('▶ Production')
+    s.send(b'\r')
+    s.expect('Filtres : Vue : Production • alp')
+    s.send(CTRL_C)
+    s.close()
+    views.unlink()
+    print('PTY PASS [views]: view saved from the current list, Enter never saves from the name, '
+          'modified state shown, applied back, delete confirmed, kept across restarts, terminal restored')
+
+
 SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,
              'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes, 'tunnels': scenario_tunnels, 'batch': scenario_batch, 'help': scenario_help,
-             'language': scenario_language, 'preferences': scenario_preferences}
+             'language': scenario_language, 'preferences': scenario_preferences,
+             'views': scenario_views}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

@@ -30,6 +30,7 @@ pub(super) enum Row {
     DataMetadata,
     DataHistory,
     DataProfiles,
+    DataViews,
     DataBackups,
     DataSshConfig,
 }
@@ -71,6 +72,7 @@ pub(super) fn sections() -> [(&'static str, &'static [Row]); 5] {
                 Row::DataMetadata,
                 Row::DataHistory,
                 Row::DataProfiles,
+                Row::DataViews,
                 Row::DataBackups,
                 Row::DataSshConfig,
             ],
@@ -123,6 +125,7 @@ impl Row {
             Self::DataMetadata => crate::t!("Favorites and notes", "Favoris et notes"),
             Self::DataHistory => crate::t!("Connection history", "Historique des connexions"),
             Self::DataProfiles => crate::t!("Tunnel profiles", "Profils de tunnels"),
+            Self::DataViews => crate::t!("Saved views", "Vues enregistrées"),
             Self::DataBackups => crate::t!("Backups", "Sauvegardes"),
             Self::DataSshConfig => crate::t!("SSH configuration", "Configuration SSH"),
         }
@@ -138,6 +141,7 @@ impl Row {
                 | Self::DataMetadata
                 | Self::DataHistory
                 | Self::DataProfiles
+                | Self::DataViews
                 | Self::DataBackups
                 | Self::DataSshConfig
         )
@@ -204,6 +208,7 @@ impl Row {
             Self::DataMetadata => data("metadata.json"),
             Self::DataHistory => data("sshm_history.json"),
             Self::DataProfiles => data("tunnel_profiles.json"),
+            Self::DataViews => data("views.json"),
             Self::DataBackups => data("backups"),
             Self::DataSshConfig => m.batch.root.display().to_string(),
         }
@@ -357,6 +362,13 @@ impl Row {
                 crate::t!(
                     "Saved tunnel profiles, per host.",
                     "Profils de tunnels enregistrés, par hôte."
+                ),
+                read_only,
+            ],
+            Self::DataViews => [
+                crate::t!(
+                    "Named list contexts (search, filters, sort, groups, columns), per SSH configuration file.",
+                    "Contextes de liste nommés (recherche, filtres, tri, groupes, colonnes), par fichier de configuration SSH."
                 ),
                 read_only,
             ],
