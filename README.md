@@ -158,6 +158,28 @@ En JSON, `tags` contient l’union sans préfixes graphiques. Lorsqu’un hôte 
 
 ## Navigation au clavier
 
+### Commandes enregistrées
+
+Le catalogue garde des commandes personnelles sous un nom, avec une description, la portée prévue (un hôte ou un lot, un hôte seulement, un lot seulement) et les paramètres demandés à chaque utilisation. `R` depuis le tableau, ou F2 → **Saved commands** (*Commandes enregistrées*), l'ouvre ; six actions nommées : **Utiliser sur cet hôte**, **Utiliser sur le lot**, **Nouvelle**, **Modifier**, **Supprimer**, **Fermer**.
+
+Une commande s'écrit sur une ligne, avec ses paramètres entre accolades :
+
+| Écriture | Paramètre demandé |
+| --- | --- |
+| `{file}` | texte, sans valeur par défaut |
+| `{file=/var/log/syslog}` | texte, avec une valeur par défaut |
+| `{lines:number=50}` | nombre entier |
+| `{level:choice=info\|warn\|error}` | une valeur parmi celles listées (←/→) |
+| `{{` et `}}` | accolades littérales, par exemple dans `awk '{{print $1}}'` |
+
+Exemple : `tail -n {lines:number=50} {file=/var/log/syslog}`. Un même nom réutilisé (`cp {f} {f}.bak`) n'est demandé qu'une fois. Le formulaire affiche, pendant la frappe, les paramètres reconnus ou la raison d'un refus (accolade non fermée, type inconnu, valeur par défaut qui n'est pas un nombre…). Entrée passe au champ suivant et n'enregistre jamais ; le bouton Enregistrer ou Ctrl+S enregistre.
+
+**Substitution.** Ce n'est pas un moteur de script : chaque valeur est contrôlée selon son type, puis insérée comme **un seul mot protégé** pour un shell POSIX (entre apostrophes, les apostrophes de la valeur étant échappées). Une valeur ne peut donc ni ajouter une commande, ni une redirection, ni une substitution : taper `x; id` dans un texte donne `'x; id'`, et dans un nombre un refus expliqué. En conséquence, **ne mettez pas de guillemets autour d'un paramètre** dans la commande. Sauts de ligne et caractères de contrôle sont refusés. Limite : la protection suppose un shell distant de type POSIX.
+
+**Utilisation.** « Utiliser » demande les valeurs (pré-remplies par les défauts), montre la « Commande à vérifier » recalculée à chaque frappe, puis **remet la commande à la préparation de lot** (voir Lots) : une seule cible explicite pour « sur cet hôte » — les marques de la liste ne sont pas touchées — ou les cibles déjà marquées pour « sur le lot ». La vérification des cibles et de la commande, puis le lancement explicite, restent ceux du lot : rien ne s'exécute depuis le catalogue, et aucune commande n'est lancée à l'ouverture d'un hôte. Sans cible marquée, « sur le lot » l'explique et ne choisit jamais de cible à votre place ; une commande prévue pour un hôte seulement est refusée pour un lot, et inversement, avec la raison.
+
+**Secrets.** Il n'existe pas de paramètre « secret » : une valeur finirait dans la ligne de commande et dans l'historique des lots. Les commandes sont enregistrées en clair dans `ssho/commands.json` (catalogue commun à toutes les configurations SSH) ; n'y écrivez jamais de mot de passe. Les valeurs saisies à l'utilisation ne sont pas enregistrées dans le catalogue.
+
 ### Vues enregistrées
 
 Une vue garde sous un nom le contexte de la liste : la recherche, le filtre exact par fichier, « favoris seuls », la visibilité des hôtes masqués, le tri (nom ou connexion récente), le regroupement, les alias regroupés et les colonnes. Exemples : « Production », « À maintenir », « Bases de données ». Les marques de lot et l'état de disponibilité n'en font jamais partie : ils décrivent un instant, pas une vue.
@@ -180,7 +202,7 @@ Les vues sont conservées dans `ssho/views.json`, séparément pour chaque fichi
 - **Liste des hôtes** : recherche au démarrage, groupes, alias regroupés, colonnes (Entrée ouvre leur éditeur, qui enregistre de lui-même).
 - **Connexion et diagnostics** : méthode de disponibilité (SSH / ICMP local), sondes au démarrage, avis de mise à jour, lanceur SSH (lecture seule : tableau d'arguments littéraux de `ssh_command`, qui ne lance que les connexions ordinaires — tunnels, lots, `ssh -G` et sondes utilisent toujours `ssh`).
 - **Clavier** : touche des actions rapides, Échap quittant ou non à la liste, raccourcis.
-- **Données (lecture seule)** : dossier de l'application, `config.json` (préférences), `metadata.json` (favoris et notes), `sshm_history.json` (historique), `tunnel_profiles.json` (profils de tunnels), `views.json` (vues enregistrées), `backups/` (sauvegardes) et la configuration SSH lue par la session.
+- **Données (lecture seule)** : dossier de l'application, `config.json` (préférences), `metadata.json` (favoris et notes), `sshm_history.json` (historique), `tunnel_profiles.json` (profils de tunnels), `views.json` (vues enregistrées), `commands.json` (commandes enregistrées), `backups/` (sauvegardes) et la configuration SSH lue par la session.
 
 Chaque ligne montre la valeur en cours ; sous la liste, l'option qui a le focus est expliquée (son effet, puis « prend effet dès l'application » ou « au prochain démarrage ») et une valeur longue, comme un chemin, y est répétée en entier. ↑↓ choisit une option ; Espace, Entrée ou ←/→ change sa valeur **dans le brouillon** : la ligne porte « ● modifié » et rien n'est écrit. Tab atteint les boutons **Appliquer**, **Annuler** et **Valeurs par défaut** ; Ctrl+S applique aussi. « Valeurs par défaut » remplit seulement le brouillon (les options sans ligne propre, colonnes et lanceur, sont conservées) et place le focus sur Appliquer. Échap ou Annuler sur un brouillon modifié demande confirmation, focus sur « Continuer l'édition ». Appliquer relit `config.json`, n'y remplace que les options de cet écran — une option modifiée ailleurs entre-temps n'est pas écrasée — puis confirme « ✓ Préférences enregistrées ».
 

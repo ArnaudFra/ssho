@@ -1905,7 +1905,12 @@ fn forward_unicode_caret_survives_wrapped_errors_and_tiny_terminals() {
 fn help_keeps_existing_system_keys_after_form_shortcuts() {
     let mut m = model();
     m.open_view(View::Help);
-    let text = screen(&mut m, 120, 50);
+    // The help grows with the catalogue: read it whole, page after page.
+    let mut text = screen(&mut m, 120, 50);
+    for _ in 0..3 {
+        m.key(key(KeyCode::PageDown));
+        text.push_str(&screen(&mut m, 120, 50));
+    }
     for shortcut in [
         "Ctrl+S",
         "Alt+A/D",

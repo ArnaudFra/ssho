@@ -11,6 +11,7 @@ mod changes;
 mod columns;
 #[cfg(test)]
 mod columns_tests;
+mod commands;
 mod details;
 mod forms;
 mod groups;
@@ -83,6 +84,8 @@ enum View {
     Language {
         selected: usize,
     },
+    /// Personal commands with typed parameters, handed to the batch preparation.
+    Commands(Box<commands::Editor>),
     /// Named list contexts: apply, save, update, rename, delete.
     Views(views::Editor),
     /// Every application option, edited as a draft until Apply.
@@ -204,6 +207,17 @@ enum Action {
         view: Box<crate::storage::views::SavedView>,
     },
     DeleteView(String),
+    SaveCommand {
+        original: Option<String>,
+        name: String,
+        command: Box<crate::storage::commands::SavedCommand>,
+    },
+    DeleteCommand(String),
+    /// A rendered command for the selected host (`batch: false`) or the marks.
+    UseCommand {
+        command: String,
+        batch: bool,
+    },
     ToggleColors,
     ToggleAscii,
     None,
@@ -305,6 +319,8 @@ struct Model {
     /// Saved views of this configuration, and the one the list was set from.
     views: BTreeMap<String, crate::storage::views::SavedView>,
     active_view: Option<String>,
+    /// Personal command catalogue, shared by every SSH configuration.
+    commands: BTreeMap<String, crate::storage::commands::SavedCommand>,
     view: View,
     parents: Vec<(View, usize)>,
     preferences: AppConfig,
@@ -373,6 +389,7 @@ impl Model {
             startup_notice: String::new(),
             views: BTreeMap::new(),
             active_view: None,
+            commands: BTreeMap::new(),
             view: View::List,
             parents: vec![],
             preferences,
@@ -764,6 +781,7 @@ impl Model {
                 View::Forward(form) => form.dirty(),
                 View::Note(editor) => editor.dirty(),
                 View::Preferences(editor) => editor.dirty(),
+                View::Commands(editor) => editor.dirty(),
                 View::Shortcuts(editor) => editor.dirty(),
                 View::Changes(_) => true,
                 View::Keys(keys::Editor {
@@ -809,6 +827,12 @@ impl Model {
             View::Note(editor) => &mut editor.input,
             View::Views(editor) => {
                 let Some(input) = views::input(editor) else {
+                    return;
+                };
+                input
+            }
+            View::Commands(editor) => {
+                let Some(input) = commands::input(editor) else {
                     return;
                 };
                 input
@@ -933,6 +957,7 @@ impl Model {
             View::Columns(_) => return columns::key(self, k),
             View::Preferences(_) => return prefs::key(self, k),
             View::Views(_) => return views::key(self, k),
+            View::Commands(_) => return commands::key(self, k),
             View::Shortcuts(_) => return prefs::shortcuts_key(self, k),
             View::Keys(_) => return keys::key(self, k),
             View::Batch(_) | View::BatchResults { .. } => return batch::key(self, k),
@@ -1442,6 +1467,7 @@ impl Model {
             PaletteAction::Availability => self.open_availability(),
             PaletteAction::GroupMode => groups::open(self),
             PaletteAction::Views => views::open(self),
+            PaletteAction::Commands => commands::open(self),
             PaletteAction::ChooseAlias => aliases::open(self),
             PaletteAction::SourceFilter => return Action::SourceFilter,
             PaletteAction::ClearSourceFilter => {
@@ -1915,6 +1941,7 @@ pub fn run(
     let mut metadata = Metadata::load(&paths.root, config)?;
     let mut profiles = TunnelProfiles::load(&paths.root, config)?;
     let mut saved_views = crate::storage::views::Views::load(&paths.root, config)?;
+    let mut catalogue = crate::storage::commands::Commands::load(&paths.root)?;
     let standalone = !matches!(initial, InitialView::List | InitialView::ListQuery(_));
     let mut m = Model::new(
         report.hosts,
@@ -1946,6 +1973,7 @@ pub fn run(
     m.config_warnings = report.warnings;
     m.tunnel_profiles = profiles.hosts().clone();
     m.views.clone_from(saved_views.all());
+    m.commands.clone_from(catalogue.all());
     m.tunnel_modes = profiles.modes().clone();
     m.filter(false);
     match initial {
@@ -2031,6 +2059,18 @@ pub fn run(
                 .map(|()| false),
             Action::DeleteView(name) => {
                 views::delete(&mut m, &mut saved_views, &name).map(|()| false)
+            }
+            Action::SaveCommand {
+                original,
+                name,
+                command,
+            } => commands::save(&mut m, &mut catalogue, original.as_deref(), &name, &command)
+                .map(|()| false),
+            Action::DeleteCommand(name) => {
+                commands::delete(&mut m, &mut catalogue, &name).map(|()| false)
+            }
+            Action::UseCommand { command, batch } => {
+                commands::prepare(&mut m, &command, batch).map(|()| false)
             }
             Action::StartBatch => batch::start(&mut m).map(|_| false),
             Action::CancelBatch => {

@@ -1089,10 +1089,85 @@ def scenario_views():
           'modified state shown, applied back, delete confirmed, kept across restarts, terminal restored')
 
 
+def scenario_commands():
+    preferences()
+    catalogue = APP / 'commands.json'
+    if catalogue.exists():
+        catalogue.unlink()
+    log = ROOT / 'ssh.jsonl'
+    s = Session('commands', width=110, height=34)
+    s.expect('? : aide')
+    s.send(b'R')
+    s.expect('Commandes enregistrées')
+    s.expect('Aucune commande enregistrée.')
+    s.expect('[▶ Nouvelle ]')
+    # A command is written in a form; Enter moves between fields and never saves.
+    s.send(b'\r')
+    s.expect('Commandes enregistrées > Nouvelle commande')
+    s.send(b'Journal\r')
+    s.send(b'Fin du journal\r')
+    s.send(b'\r')                     # scope kept: one host or a batch
+    s.send(b'tail -n {lines:number=50} {file=/var/log/syslog}')
+    s.expect('Demandé à chaque utilisation')
+    s.send(b'\r')
+    s.expect('[▶ Enregistrer ]')
+    assert not catalogue.exists()
+    s.send(b'\r')
+    s.expect('✓ Commande « Journal » enregistrée')
+    saved = json.loads(catalogue.read_text())['commands']['Journal']
+    assert saved == {'description': 'Fin du journal', 'scope': 'any',
+                     'template': 'tail -n {lines:number=50} {file=/var/log/syslog}'}, saved
+    # Using it asks the values; a wrong type is explained and nothing continues.
+    s.expect('[▶ Utiliser sur cet hôte ]')
+    s.send(b'\r')
+    s.expect('Journal — pour alpha')
+    s.expect("Commande à vérifier : tail -n 50 '/var/log/syslog'")
+    s.send(b'; id')
+    s.expect('lines : un nombre entier est attendu')
+    s.send(b'\x0c')                   # Ctrl+L: refused, still on the values
+    s.expect('Commandes enregistrées > Paramètres')
+    s.send(b'\x7f' * 6)
+    s.send(b'5')
+    s.send(b'\t')
+    s.send(b' a; id')                 # shell syntax stays inside one quoted word
+    s.expect("Commande à vérifier : tail -n 5 '/var/log/syslog a; id'")
+    before = connections()
+    s.send(b'\x0c')
+    # The batch preparation takes over: one explicit target, command to review.
+    s.expect('Lot : 1 cibles • Cibles ✓ → [Commande] → Vérification → Résultats')
+    s.expect("tail -n 5 '/var/log/syslog a; id'")
+    assert connections() == before, 'using a command launches nothing'
+    s.send(b'\x0c')                   # Ctrl+L: review
+    s.expect("[▶ Retour à l'édition ]")
+    s.expect('[  Lancer sur 1 cible(s) ]')
+    assert connections() == before
+    s.send(b'\t')
+    s.send(b'\r')                     # explicit launch
+    s.expect('fixture SSH return')
+    ran = [a for a in connections() if a not in before]
+    assert len(ran) == 1 and ran[0][-1] == "tail -n 5 '/var/log/syslog a; id'" and 'alpha' in ran[0], ran
+    s.send(ESC)
+    s.expect('? : aide')
+    # The batch use never chooses the targets.
+    s.send(b'R')
+    s.send(b'\t')
+    s.expect('[▶ Utiliser sur le lot ]')
+    s.send(b'\r')
+    s.expect('Aucune cible n\'est marquée')
+    s.send(ESC)
+    s.send(CTRL_C)
+    s.close()
+    catalogue.unlink()
+    if log.exists():
+        log.unlink()
+    print('PTY PASS [commands]: command written in a form, typed values checked, quoted substitution, '
+          'batch preparation with review, explicit launch, no automatic target, terminal restored')
+
+
 SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,
              'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes, 'tunnels': scenario_tunnels, 'batch': scenario_batch, 'help': scenario_help,
              'language': scenario_language, 'preferences': scenario_preferences,
-             'views': scenario_views}
+             'views': scenario_views, 'commands': scenario_commands}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

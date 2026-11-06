@@ -491,6 +491,7 @@ impl AppConfig {
     }
 }
 
+pub mod commands;
 mod history;
 pub mod metadata;
 pub mod tunnels;

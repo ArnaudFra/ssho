@@ -49,6 +49,7 @@ pub(super) enum PaletteAction {
     ToggleAscii,
     Preferences,
     Views,
+    Commands,
     Palette,
     Quit,
 }
@@ -85,7 +86,7 @@ impl Category {
 impl PaletteAction {
     /// Every catalogue entry, grouped by category. The palette lists them in this
     /// order; only the action that opens the palette itself is left out of it.
-    pub(super) const CATALOGUE: [Self; 46] = [
+    pub(super) const CATALOGUE: [Self; 47] = [
         Self::Connect,
         Self::Tunnel,
         Self::Profiles,
@@ -121,6 +122,7 @@ impl PaletteAction {
         Self::BatchClear,
         Self::BatchOpen,
         Self::BatchResults,
+        Self::Commands,
         Self::Keys,
         Self::Backups,
         Self::Reload,
@@ -157,6 +159,7 @@ impl PaletteAction {
             Self::ChooseAlias => "host.alias",
             Self::GroupMode => "view.groups",
             Self::Views => "view.saved",
+            Self::Commands => "tools.commands",
             Self::BatchMark => "batch.mark",
             Self::BatchSelectVisible => "batch.select_visible",
             Self::BatchClear => "batch.clear",
@@ -206,6 +209,7 @@ impl PaletteAction {
             Self::BatchResults => ("Batch: last results", "Lot : derniers résultats"),
             Self::GroupMode => ("Groups", "Groupes"),
             Self::Views => ("Saved views", "Vues enregistrées"),
+            Self::Commands => ("Saved commands", "Commandes enregistrées"),
             Self::ToggleAliases => ("Grouped aliases", "Alias regroupés"),
             Self::ChooseAlias => ("Choose an alias", "Choisir un alias"),
             Self::SourceFilter => ("Filter by source file", "Filtrer par fichier source"),
@@ -290,6 +294,7 @@ impl PaletteAction {
             | Self::BatchClear
             | Self::BatchOpen
             | Self::BatchResults
+            | Self::Commands
             | Self::Keys
             | Self::Backups => Category::Tools,
             Self::Reload
@@ -322,6 +327,9 @@ impl PaletteAction {
                 "détails configuration effective historique info details effective history sheet"
             }
             Self::Views => "vue contexte filtre nommé enregistrer view context named save preset",
+            Self::Commands => {
+                "catalogue modèle paramètre commande distante template parameter remote command snippet"
+            }
             Self::Details => "latéral aperçu volet side preview pane",
             Self::Favorite => "étoile épingle pin star favorite",
             Self::Note => "commentaire mémo comment memo",
@@ -466,6 +474,10 @@ impl PaletteAction {
             Self::ToggleAliases => crate::t!(
                 "Groups the aliases of one block on a single row, or separates them.",
                 "Regroupe les alias d'un même bloc sur une seule ligne, ou les sépare."
+            ),
+            Self::Commands => crate::t!(
+                "Personal named commands with typed parameters, prepared for the selected host or the batch; nothing runs before the review.",
+                "Commandes personnelles nommées, avec paramètres typés, préparées pour l'hôte sélectionné ou le lot ; rien ne s'exécute avant la vérification."
             ),
             Self::Views => crate::t!(
                 "Applies, saves, updates, renames or deletes a named list context: search, filters, sort, groups and columns.",
@@ -653,7 +665,7 @@ pub(super) fn fold(text: &str) -> String {
 
 /// Historical direct shortcuts of the host list. Printable keys only apply while
 /// the table has the focus; function keys also apply from the search input.
-const HISTORICAL: [(&str, PaletteAction); 40] = [
+const HISTORICAL: [(&str, PaletteAction); 41] = [
     ("enter", PaletteAction::Connect),
     ("f2", PaletteAction::Palette),
     ("f3", PaletteAction::ChooseAlias),
@@ -674,6 +686,7 @@ const HISTORICAL: [(&str, PaletteAction); 40] = [
     ("A", PaletteAction::ToggleAliases),
     ("g", PaletteAction::GroupMode),
     ("V", PaletteAction::Views),
+    ("R", PaletteAction::Commands),
     ("c", PaletteAction::SourceFilter),
     ("C", PaletteAction::ClearSourceFilter),
     ("*", PaletteAction::Favorite),

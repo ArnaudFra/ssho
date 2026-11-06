@@ -31,6 +31,7 @@ pub(super) enum Row {
     DataHistory,
     DataProfiles,
     DataViews,
+    DataCommands,
     DataBackups,
     DataSshConfig,
 }
@@ -73,6 +74,7 @@ pub(super) fn sections() -> [(&'static str, &'static [Row]); 5] {
                 Row::DataHistory,
                 Row::DataProfiles,
                 Row::DataViews,
+                Row::DataCommands,
                 Row::DataBackups,
                 Row::DataSshConfig,
             ],
@@ -126,6 +128,7 @@ impl Row {
             Self::DataHistory => crate::t!("Connection history", "Historique des connexions"),
             Self::DataProfiles => crate::t!("Tunnel profiles", "Profils de tunnels"),
             Self::DataViews => crate::t!("Saved views", "Vues enregistrées"),
+            Self::DataCommands => crate::t!("Saved commands", "Commandes enregistrées"),
             Self::DataBackups => crate::t!("Backups", "Sauvegardes"),
             Self::DataSshConfig => crate::t!("SSH configuration", "Configuration SSH"),
         }
@@ -142,6 +145,7 @@ impl Row {
                 | Self::DataHistory
                 | Self::DataProfiles
                 | Self::DataViews
+                | Self::DataCommands
                 | Self::DataBackups
                 | Self::DataSshConfig
         )
@@ -209,6 +213,7 @@ impl Row {
             Self::DataHistory => data("sshm_history.json"),
             Self::DataProfiles => data("tunnel_profiles.json"),
             Self::DataViews => data("views.json"),
+            Self::DataCommands => data("commands.json"),
             Self::DataBackups => data("backups"),
             Self::DataSshConfig => m.batch.root.display().to_string(),
         }
@@ -369,6 +374,13 @@ impl Row {
                 crate::t!(
                     "Named list contexts (search, filters, sort, groups, columns), per SSH configuration file.",
                     "Contextes de liste nommés (recherche, filtres, tri, groupes, colonnes), par fichier de configuration SSH."
+                ),
+                read_only,
+            ],
+            Self::DataCommands => [
+                crate::t!(
+                    "Personal command catalogue, shared by every SSH configuration. Stored in clear text: never a secret.",
+                    "Catalogue personnel de commandes, commun à toutes les configurations SSH. Enregistré en clair : jamais de secret."
                 ),
                 read_only,
             ],

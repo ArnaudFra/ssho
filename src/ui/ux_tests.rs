@@ -3330,3 +3330,333 @@ fn batch_marks_and_presentation_changes_are_told_apart() {
     m.preferences.group_mode = GroupMode::Flat;
     assert_eq!(m.view_state(), Some(("Par fichier", true)));
 }
+
+use crate::storage::commands::{Commands, SavedCommand, Scope};
+
+/// A screen as running text: frame borders and wrapping removed.
+fn flat(text: &str) -> String {
+    text.lines()
+        .map(|line| line.trim().trim_matches('│').trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn commands_of(m: &Model) -> &commands::Editor {
+    let View::Commands(editor) = &m.view else {
+        panic!("the command catalogue is open")
+    };
+    editor
+}
+
+/// Run the action a key returned, the way the event loop does.
+fn run_command_action(m: &mut Model, store: &mut Commands, action: Action) -> Result<()> {
+    match action {
+        Action::SaveCommand {
+            original,
+            name,
+            command,
+        } => commands::save(m, store, original.as_deref(), &name, &command),
+        Action::DeleteCommand(name) => commands::delete(m, store, &name),
+        Action::UseCommand { command, batch } => commands::prepare(m, &command, batch),
+        other => panic!("unexpected action {other:?}"),
+    }
+}
+
+fn command_fixture() -> (tempfile::TempDir, Model, Commands) {
+    let (temp, root, _config, mut m, _views) = view_fixture();
+    m.batch.cache_sources(&m.all.clone());
+    let store = Commands::load(&root).unwrap();
+    (temp, m, store)
+}
+
+fn journal() -> SavedCommand {
+    SavedCommand {
+        description: "Fin du journal".into(),
+        scope: Scope::Any,
+        template: "tail -n {lines:number=50} {file=/var/log/syslog}".into(),
+    }
+}
+
+#[test]
+fn a_command_is_written_in_a_named_form_and_enter_never_saves() {
+    let (_temp, mut m, mut store) = command_fixture();
+    m.key(key(KeyCode::Char('R')));
+    let text = flat(&screen(&mut m, 100, 30));
+    for expected in [
+        "Commandes enregistrées",
+        "Hôte sélectionné : alpha • Lot : 0 cible(s) marquée(s)",
+        "Aucune commande enregistrée.",
+        "vous vérifiez encore les cibles et la commande avant toute exécution",
+        "[▶ Nouvelle ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    m.key(key(KeyCode::Enter));
+    let text = screen(&mut m, 100, 30);
+    for expected in [
+        "Commandes enregistrées > Nouvelle commande",
+        "> Nom *",
+        "Prévue pour  ‹ un hôte ou un lot ›",
+        "Commande *",
+        "La commande est vide",
+        "Chaque valeur est insérée comme un seul mot protégé",
+        "N'écrivez jamais de mot de passe ni de secret ici",
+        "[  Enregistrer ]  [  Annuler ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    typing(&mut m, "Journal");
+    m.key(key(KeyCode::Enter));
+    typing(&mut m, "Fin du journal");
+    m.key(key(KeyCode::Enter));
+    // The scope is a choice, not a text: arrows change it, letters do nothing.
+    assert_eq!(commands_of(&m).focus, commands::SCOPE);
+    typing(&mut m, "zz");
+    m.key(key(KeyCode::Right));
+    assert_eq!(commands_of(&m).scope, Scope::Host);
+    m.key(key(KeyCode::Left));
+    assert_eq!(commands_of(&m).scope, Scope::Any);
+    m.key(key(KeyCode::Enter));
+    // A malformed command is explained while it is typed, and refused on save.
+    typing(&mut m, "tail -n {lines:number=50} {file");
+    assert!(screen(&mut m, 100, 30).contains("Accolades non appariées"));
+    assert_eq!(m.key(ctrl('s')), Action::None);
+    assert_eq!(commands_of(&m).focus, commands::TEMPLATE);
+    typing(&mut m, "=/var/log/syslog}");
+    let text = screen(&mut m, 100, 30);
+    assert!(
+        text.contains(
+            "Demandé à chaque utilisation : lines (nombre entier, défaut 50) • file (texte, défaut"
+        ),
+        "{text}"
+    );
+    // Enter in the last field reaches Save and writes nothing.
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert_eq!(commands_of(&m).focus, commands::SAVE);
+    assert!(store.all().is_empty());
+    let action = m.key(key(KeyCode::Enter));
+    assert!(
+        matches!(&action, Action::SaveCommand { original: None, name, .. } if name == "Journal")
+    );
+    run_command_action(&mut m, &mut store, action).unwrap();
+    assert_eq!(store.all()["Journal"], journal());
+    let text = screen(&mut m, 100, 30);
+    for expected in [
+        "✓ Commande « Journal » enregistrée",
+        "▶ Journal — Fin du journal",
+        "Commande : tail -n {lines:number=50} {file=/var/log/syslog}",
+        "Prévue pour : un hôte ou un lot",
+        "[▶ Utiliser sur cet hôte ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // Editing: a modified form is not dropped by Esc without asking.
+    for _ in 0..3 {
+        m.key(key(KeyCode::Tab));
+    }
+    assert!(screen(&mut m, 100, 30).contains("[▶ Modifier ]"));
+    m.key(key(KeyCode::Enter));
+    assert!(screen(&mut m, 100, 30).contains("Commandes enregistrées > Modifier Journal"));
+    m.key(key(KeyCode::Esc));
+    assert_eq!(
+        commands_of(&m).mode,
+        commands::Mode::Browse,
+        "untouched form closes"
+    );
+    m.key(key(KeyCode::Enter));
+    typing(&mut m, "x");
+    m.key(key(KeyCode::Esc));
+    let text = screen(&mut m, 100, 30);
+    assert!(
+        text.contains("Abandonner les modifications de cette commande ?")
+            && text.contains("[▶ Continuer l'édition ]"),
+        "{text}"
+    );
+    m.key(key(KeyCode::Enter));
+    assert_eq!(commands_of(&m).inputs[0].value, "Journalx");
+    // A name already taken is refused and explained; the form stays open.
+    store.save(None, "Journalx", &journal()).unwrap();
+    m.commands.clone_from(store.all());
+    let action = m.key(ctrl('s'));
+    run_command_action(&mut m, &mut store, action).unwrap();
+    assert!(commands_of(&m).notice.contains("existe déjà"));
+    assert_eq!(commands_of(&m).mode, commands::Mode::Form);
+    assert!(store.all().contains_key("Journal"));
+    assert!(m.has_unsaved_context());
+}
+
+#[test]
+fn using_a_command_asks_its_values_and_only_fills_the_batch_preparation() {
+    let (_temp, mut m, mut store) = command_fixture();
+    store.save(None, "Journal", &journal()).unwrap();
+    m.commands.clone_from(store.all());
+    m.key(key(KeyCode::Char('R')));
+    m.key(key(KeyCode::Enter));
+    assert_eq!(commands_of(&m).mode, commands::Mode::Params);
+    let text = screen(&mut m, 100, 30);
+    for expected in [
+        "Commandes enregistrées > Paramètres",
+        "Journal — pour alpha",
+        "> lines (nombre entier)",
+        "file (texte)",
+        "Commande à vérifier : tail -n 50 '/var/log/syslog'",
+        "[  Passer à la vérification ]  [  Retour ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // A typed value that is not of its type is explained, and nothing continues.
+    typing(&mut m, "; reboot");
+    assert!(screen(&mut m, 100, 30).contains("lines : un nombre entier est attendu"));
+    assert_eq!(m.key(ctrl('l')), Action::None);
+    assert_eq!(commands_of(&m).param_focus, 0);
+    assert!(commands_of(&m)
+        .notice
+        .contains("un nombre entier est attendu"));
+    for _ in 0.."50; reboot".len() {
+        m.key(key(KeyCode::Backspace));
+    }
+    typing(&mut m, "20");
+    // Enter on a value goes to the next one; shell syntax stays inside its word.
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert_eq!(commands_of(&m).param_focus, 1);
+    typing(&mut m, " x; id");
+    m.paste("$(id)");
+    let text = screen(&mut m, 100, 30);
+    assert!(
+        text.contains("Commande à vérifier : tail -n 20 '/var/log/syslog x; id$(id)'"),
+        "{text}"
+    );
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(screen(&mut m, 100, 30).contains("[▶ Passer à la vérification ]"));
+    let action = m.key(key(KeyCode::Enter));
+    assert_eq!(
+        action,
+        Action::UseCommand {
+            command: "tail -n 20 '/var/log/syslog x; id$(id)'".into(),
+            batch: false
+        }
+    );
+    run_command_action(&mut m, &mut store, action).unwrap();
+    // The batch preparation takes over, with one explicit target.
+    let View::Batch(editor) = &m.view else {
+        panic!("the batch preparation is open")
+    };
+    assert_eq!(editor.targets.len(), 1);
+    assert_eq!(editor.targets[0].alias, "alpha");
+    assert_eq!(
+        editor.command.value,
+        "tail -n 20 '/var/log/syslog x; id$(id)'"
+    );
+    assert!(!editor.confirm, "nothing is confirmed, nothing runs");
+    assert!(
+        m.batch.marks.is_empty(),
+        "the marks of the list are not touched"
+    );
+    assert!(!m.batch.manager.has_active());
+    let text = screen(&mut m, 110, 30);
+    assert!(
+        text.contains("[Commande]") && text.contains("1 cibles"),
+        "{text}"
+    );
+    m.key(key(KeyCode::Esc));
+    assert!(
+        matches!(m.view, View::List),
+        "the preparation returns to the list"
+    );
+}
+
+#[test]
+fn the_catalogue_never_chooses_targets_and_respects_the_intended_scope() {
+    let (_temp, mut m, mut store) = command_fixture();
+    store
+        .save(
+            None,
+            "Charge",
+            &SavedCommand {
+                description: String::new(),
+                scope: Scope::Any,
+                template: "uptime".into(),
+            },
+        )
+        .unwrap();
+    store
+        .save(
+            None,
+            "Redémarrage",
+            &SavedCommand {
+                description: "Un hôte à la fois".into(),
+                scope: Scope::Host,
+                template: "sudo systemctl restart {service}".into(),
+            },
+        )
+        .unwrap();
+    m.commands.clone_from(store.all());
+    m.key(key(KeyCode::Char('R')));
+    // No mark: the batch use explains, and marks nothing on its own.
+    m.key(key(KeyCode::Tab));
+    assert!(screen(&mut m, 100, 30).contains("[▶ Utiliser sur le lot ]"));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(commands_of(&m)
+        .notice
+        .contains("Aucune cible n'est marquée"));
+    assert!(m.batch.marks.is_empty());
+    m.key(key(KeyCode::Esc));
+    m.key(key(KeyCode::Char('x')));
+    m.key(key(KeyCode::Down));
+    m.key(key(KeyCode::Char('x')));
+    assert_eq!(m.batch.marks.len(), 2);
+    m.key(key(KeyCode::Char('R')));
+    assert!(screen(&mut m, 100, 30).contains("Lot : 2 cible(s) marquée(s)"));
+    m.key(key(KeyCode::Tab));
+    // A command without parameter goes straight to the preparation.
+    let action = m.key(key(KeyCode::Enter));
+    assert_eq!(
+        action,
+        Action::UseCommand {
+            command: "uptime".into(),
+            batch: true
+        }
+    );
+    run_command_action(&mut m, &mut store, action).unwrap();
+    let View::Batch(editor) = &m.view else {
+        panic!("the batch preparation is open")
+    };
+    assert_eq!(editor.targets.len(), 2);
+    assert_eq!(editor.command.value, "uptime");
+    m.key(key(KeyCode::Esc));
+    // A command written for one host is refused for a batch, with the reason.
+    m.key(key(KeyCode::Char('R')));
+    m.key(key(KeyCode::Down));
+    m.key(key(KeyCode::Tab));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(
+        commands_of(&m)
+            .notice
+            .contains("prévue pour un hôte seulement"),
+        "{}",
+        commands_of(&m).notice
+    );
+    // Delete asks first, with the focus on going back.
+    for _ in 0..3 {
+        m.key(key(KeyCode::Tab));
+    }
+    assert!(screen(&mut m, 100, 30).contains("[▶ Supprimer ]"));
+    m.key(key(KeyCode::Enter));
+    let text = screen(&mut m, 100, 30);
+    assert!(
+        text.contains("Supprimer cette commande ?") && text.contains("[▶ Revenir ]"),
+        "{text}"
+    );
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert_eq!(store.all().len(), 2);
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Tab));
+    let action = m.key(key(KeyCode::Enter));
+    assert_eq!(action, Action::DeleteCommand("Redémarrage".into()));
+    run_command_action(&mut m, &mut store, action).unwrap();
+    assert_eq!(store.all().len(), 1);
+    assert!(commands_of(&m)
+        .notice
+        .contains("✓ Commande « Redémarrage » supprimée"));
+}

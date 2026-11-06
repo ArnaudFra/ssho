@@ -218,6 +218,17 @@ pub(super) fn open(m: &mut Model) {
         m.open_view(View::Batch(Editor::new(m.batch.marks.clone())));
     }
 }
+/// One explicit target for a command used on the selected host only.
+pub(super) fn freeze(m: &Model, host: &Host) -> Result<Target> {
+    m.batch.freeze(host)
+}
+/// Preparation filled by the command catalogue: the targets are the ones it
+/// was given, the command can still be edited, and review and launch are unchanged.
+pub(super) fn open_with(m: &mut Model, targets: Vec<Target>, command: &str) {
+    let mut editor = Editor::new(targets);
+    editor.command.set(command);
+    m.open_view(View::Batch(editor));
+}
 fn results(m: &mut Model) {
     m.open_view(View::BatchResults {
         selected: 0,
