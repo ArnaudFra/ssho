@@ -51,6 +51,7 @@ pub(super) enum PaletteAction {
     Views,
     Commands,
     Transfer,
+    Sftp,
     Palette,
     Quit,
 }
@@ -87,8 +88,9 @@ impl Category {
 impl PaletteAction {
     /// Every catalogue entry, grouped by category. The palette lists them in this
     /// order; only the action that opens the palette itself is left out of it.
-    pub(super) const CATALOGUE: [Self; 48] = [
+    pub(super) const CATALOGUE: [Self; 49] = [
         Self::Connect,
+        Self::Sftp,
         Self::Tunnel,
         Self::Profiles,
         Self::Active,
@@ -143,6 +145,7 @@ impl PaletteAction {
         match self {
             Self::Add => "host.add",
             Self::Edit => "host.edit",
+            Self::Sftp => "host.sftp",
             Self::Tunnel => "tunnel.form",
             Self::Test => "availability.test",
             Self::Help => "app.help",
@@ -219,6 +222,7 @@ impl PaletteAction {
             Self::ClearSourceFilter => ("All files", "Tous les fichiers"),
             Self::Add => ("Add host", "Ajouter un hôte"),
             Self::Edit => ("Edit", "Modifier"),
+            Self::Sftp => ("SFTP: open a session", "SFTP : ouvrir une session"),
             Self::Tunnel => ("Create a tunnel", "Créer un tunnel"),
             Self::Test => ("Test availability", "Tester la disponibilité"),
             Self::Help => ("Help", "Aide"),
@@ -264,6 +268,7 @@ impl PaletteAction {
     pub(super) fn category(self) -> Category {
         match self {
             Self::Connect
+            | Self::Sftp
             | Self::Tunnel
             | Self::Profiles
             | Self::Active
@@ -318,6 +323,7 @@ impl PaletteAction {
     pub(super) fn keywords(self) -> &'static str {
         match self {
             Self::Connect => "connexion ssh session ouvrir connect login open",
+            Self::Sftp => "fichier transfert envoyer télécharger file transfer upload download scp",
             Self::Tunnel => "transfert port forwarding redirection socks local distant tunnel port",
             Self::Profiles => "tunnel transfert forwarding enregistrés lancer saved launch",
             Self::Active => "tunnel en cours suivi arrêter processus running follow stop",
@@ -390,6 +396,10 @@ impl PaletteAction {
             Self::Connect => crate::t!(
                 "Opens an SSH session on the selected alias, then comes back here.",
                 "Ouvre une session SSH sur l'alias sélectionné, puis revient ici."
+            ),
+            Self::Sftp => crate::t!(
+                "Opens the native sftp client for this exact alias, with the same SSH configuration; leaving it returns here. A custom SSH launcher does not apply.",
+                "Ouvre le client sftp natif pour cet alias exact, avec la même configuration SSH ; le quitter revient ici. Un lanceur SSH personnalisé ne s'applique pas."
             ),
             Self::Tunnel => crate::t!(
                 "Prepares a local, remote or SOCKS port forwarding for this host.",
@@ -580,6 +590,7 @@ impl PaletteAction {
         matches!(
             self,
             Self::Edit
+                | Self::Sftp
                 | Self::Tunnel
                 | Self::Test
                 | Self::Favorite
@@ -677,7 +688,7 @@ pub(super) fn fold(text: &str) -> String {
 
 /// Historical direct shortcuts of the host list. Printable keys only apply while
 /// the table has the focus; function keys also apply from the search input.
-const HISTORICAL: [(&str, PaletteAction); 41] = [
+const HISTORICAL: [(&str, PaletteAction); 42] = [
     ("enter", PaletteAction::Connect),
     ("f2", PaletteAction::Palette),
     ("f3", PaletteAction::ChooseAlias),
@@ -699,6 +710,7 @@ const HISTORICAL: [(&str, PaletteAction); 41] = [
     ("g", PaletteAction::GroupMode),
     ("V", PaletteAction::Views),
     ("R", PaletteAction::Commands),
+    ("S", PaletteAction::Sftp),
     ("c", PaletteAction::SourceFilter),
     ("C", PaletteAction::ClearSourceFilter),
     ("*", PaletteAction::Favorite),

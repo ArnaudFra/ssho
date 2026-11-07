@@ -111,6 +111,34 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
     1
 }
 
+/// Arguments of the native SFTP client for one exact alias: the configuration
+/// in use, then the alias after `--` so that it can never be read as an option.
+pub fn sftp_arguments(config: &Path, name: &str) -> Result<Vec<String>> {
+    anyhow::ensure!(
+        !name.is_empty() && !name.starts_with('-') && !name.chars().any(char::is_control),
+        "invalid SSH host name"
+    );
+    Ok(vec![
+        "-F".into(),
+        config.to_string_lossy().into_owned(),
+        "--".into(),
+        name.into(),
+    ])
+}
+
+/// Open the native `sftp` client in the foreground for a declared alias.
+/// The custom `ssh_command` launcher does not apply: `sftp` starts its own
+/// `ssh`. The session is not a connection of the history.
+pub fn sftp(config: &Path, name: &str) -> Result<i32> {
+    crate::config::find_host(config, name)?;
+    let arguments = sftp_arguments(config, name)?;
+    Command::new("sftp")
+        .args(arguments)
+        .status()
+        .context("Error executing sftp; ensure the OpenSSH sftp client is installed")
+        .map(exit_code)
+}
+
 pub fn ssh_arguments(
     config: &Path,
     name: &str,
@@ -277,5 +305,34 @@ mod diagnostic_tests {
             "an open HTTP port must not be Online SSH"
         );
         server.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod sftp_tests {
+    use super::*;
+
+    #[test]
+    fn sftp_arguments_are_the_configuration_then_the_exact_alias() {
+        let config = Path::new("/home/me/.ssh/config with space");
+        assert_eq!(
+            sftp_arguments(config, "alpha").unwrap(),
+            ["-F", "/home/me/.ssh/config with space", "--", "alpha"]
+        );
+        // An alias can never be read as an option or carry control characters.
+        for name in ["", "-oProxyCommand=id", "a\nb", "a\u{1b}b"] {
+            assert!(sftp_arguments(config, name).is_err(), "{name:?}");
+        }
+        // An alias that looks like shell syntax is still a single argument.
+        assert_eq!(sftp_arguments(config, "a;id $(x)").unwrap()[3], "a;id $(x)");
+    }
+
+    #[test]
+    fn sftp_refuses_an_alias_the_configuration_does_not_declare() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        std::fs::write(&config, "Host alpha\n HostName alpha.example\n").unwrap();
+        // Refused before any process is started.
+        assert!(sftp(&config, "missing").is_err());
     }
 }

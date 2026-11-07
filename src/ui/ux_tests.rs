@@ -3872,3 +3872,51 @@ fn import_previews_asks_how_to_merge_and_writes_only_after_confirmation() {
     m.key(key(KeyCode::Esc));
     assert!(matches!(m.view, View::List));
 }
+
+#[test]
+fn sftp_targets_the_exact_alias_and_says_it_is_the_native_client() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Down));
+    // A named action with its key; the palette finds it by what it is used for.
+    assert_eq!(m.key(key(KeyCode::Char('S'))), Action::Sftp("beta".into()));
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "fichier transfert");
+    let text = screen(&mut m, 110, 30);
+    assert!(text.contains("SFTP : ouvrir une session"), "{text}");
+    assert!(text.contains("client sftp natif"), "{text}");
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::Sftp("beta".into()));
+    // Coming back keeps the list where it was and says how the client ended.
+    m.resume_sftp("beta", Ok(0));
+    assert!(matches!(m.view, View::List));
+    assert_eq!(m.selected_host().unwrap().name, "beta");
+    let text = screen(&mut m, 110, 24);
+    assert!(
+        text.contains("SFTP a fini avec le code 0 : beta (client natif)"),
+        "{text}"
+    );
+    let announcement = m.sftp_announcement("beta", Path::new("/home/me/.ssh/config"));
+    assert!(
+        announcement.contains("sftp natif pour beta (configuration /home/me/.ssh/config)")
+            && !announcement.contains("lanceur"),
+        "{announcement}"
+    );
+    // A custom launcher is said not to apply, before and after the session.
+    m.preferences.ssh_command = vec!["/opt/wrapper".into(), "--profile".into()];
+    let announcement = m.sftp_announcement("beta", Path::new("/home/me/.ssh/config"));
+    assert!(
+        announcement.contains("le lanceur SSH personnalisé (ssh_command) ne s'applique pas à SFTP"),
+        "{announcement}"
+    );
+    m.resume_sftp("beta", Err(anyhow::anyhow!("sftp introuvable")));
+    assert!(m
+        .connection_result
+        .contains("Échec de SFTP : sftp introuvable (beta)"));
+    assert!(m
+        .connection_result
+        .contains("le lanceur SSH personnalisé ne s'applique pas à SFTP"));
+    // Without a host the key explains instead of opening anything.
+    let mut m = Model::new(vec![], french(), BTreeMap::new(), false);
+    m.search_focus = false;
+    assert_eq!(m.key(key(KeyCode::Char('S'))), Action::None);
+    assert!(m.hint.contains("Sélectionnez un hôte"), "{}", m.hint);
+}

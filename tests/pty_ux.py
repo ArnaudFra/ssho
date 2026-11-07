@@ -1251,10 +1251,72 @@ def scenario_transfer():
           'explicit merge choice and confirmation, previous files kept, list refreshed, terminal restored')
 
 
+def scenario_sftp():
+    # A fake sftp records its arguments, checks it owns the terminal, then ends.
+    log = ROOT / 'sftp.jsonl'
+    if log.exists():
+        log.unlink()
+    sftp = ROOT / 'bin/sftp'
+    sftp.write_text('#!' + sys.executable + '\n' + r'''
+import json, os, sys, termios
+from pathlib import Path
+cooked = bool(termios.tcgetattr(0)[3] & termios.ICANON)
+with (Path(os.environ['HOME']) / 'sftp.jsonl').open('a') as out:
+    out.write(json.dumps({'args': sys.argv[1:], 'cooked': cooked}) + '\n')
+print('sftp> fixture session')
+sys.exit(int(os.environ.get('SFTP_EXIT', '0')))
+''')
+    sftp.chmod(0o700)
+    try:
+        preferences()
+        s = Session('sftp', width=120, height=30)
+        s.expect('? : aide')
+        s.send(DOWN)
+        s.send(b'S')
+        s.expect('SFTP a fini avec le code 0 : beta (client natif)')
+        (call,) = [json.loads(line) for line in log.read_text().splitlines()]
+        assert call['args'] == ['-F', str(CONFIG), '--', 'beta'], call
+        assert call['cooked'], 'the native client receives a restored terminal'
+        raw = bytes(s.raw)
+        assert 'sftp natif pour beta'.encode() in raw, 'the native client is announced'
+        assert 'lanceur'.encode() not in raw.split('sftp natif pour beta'.encode())[1][:400]
+        # The list is found as it was: same selection, and the keys work again.
+        s.send(b'i')
+        s.expect("Fiche de l'hôte SSH : beta")
+        s.send(ESC)
+        s.send(CTRL_C)
+        s.close()
+        # A custom launcher does not apply to SFTP: said before and after.
+        (APP / 'config.json').write_text(json.dumps(dict(BASE, ssh_command=[str(ROOT / 'bin/ssh'), '--wrapped'])))
+        ENV['SFTP_EXIT'] = '3'
+        s = Session('sftp-launcher', width=140, height=30)
+        s.expect('? : aide')
+        s.send(F2)
+        s.send(b'sftp')
+        s.expect('SFTP : ouvrir une session')
+        s.send(b'\r')
+        s.expect('SFTP a fini avec le code 3 : alpha (client natif)')
+        s.expect("le lanceur SSH personnalisé ne s'applique pas à SFTP")
+        assert "le lanceur SSH personnalisé (ssh_command) ne s'applique pas à SFTP".encode() in bytes(s.raw)
+        calls = [json.loads(line) for line in log.read_text().splitlines()]
+        assert calls[-1]['args'] == ['-F', str(CONFIG), '--', 'alpha'], calls
+        assert not connections(), 'sftp is not a connection of the history'
+        s.send(CTRL_C)
+        s.close()
+    finally:
+        ENV.pop('SFTP_EXIT', None)
+        sftp.unlink()
+        if log.exists():
+            log.unlink()
+    print('PTY PASS [sftp]: native sftp for the exact alias and configuration, restored terminal, '
+          'return to the same list, exit code reported, custom launcher said not to apply')
+
+
 SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,
              'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes, 'tunnels': scenario_tunnels, 'batch': scenario_batch, 'help': scenario_help,
              'language': scenario_language, 'preferences': scenario_preferences,
-             'views': scenario_views, 'commands': scenario_commands, 'transfer': scenario_transfer}
+             'views': scenario_views, 'commands': scenario_commands, 'transfer': scenario_transfer,
+             'sftp': scenario_sftp}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

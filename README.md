@@ -158,6 +158,16 @@ En JSON, `tags` contient l’union sans préfixes graphiques. Lorsqu’un hôte 
 
 ## Navigation au clavier
 
+### SFTP natif
+
+`S` sur un hôte, ou F2 → **SFTP: open a session** (*SFTP : ouvrir une session*), ouvre le client `sftp` d'OpenSSH dans le terminal pour **l'alias exact sélectionné**, avec la configuration SSH de la session (`sftp -F <configuration> -- <alias>`). C'est le client natif en ligne de commande, pas un gestionnaire de fichiers à deux panneaux : `help` y liste ses commandes, `bye` ou Ctrl+D revient à la liste, retrouvée telle qu'elle était (sélection, recherche, filtres).
+
+- Avant de céder le terminal, ssho y écrit une ligne annonçant le client natif, l'alias et la configuration ; au retour, la liste indique comment il s'est terminé (« SFTP a fini avec le code 0 : beta (client natif) », ou l'erreur de lancement si `sftp` est absent).
+- **Lanceur personnalisé** : `ssh_command` ne s'applique pas à SFTP, `sftp` démarrant son propre `ssh`. Si un lanceur est configuré, c'est dit avant et après la session.
+- L'alias doit être déclaré dans la configuration ; il est passé après `--` comme un seul argument et ne peut pas être lu comme une option. Aucun chemin ni commande n'est ajouté par ssho.
+- Une session SFTP n'est pas comptée comme une connexion dans l'historique. Pendant un lot en cours, l'action est refusée comme les autres outils au premier plan.
+- Sur un groupe ou sans hôte sélectionné, la touche explique pourquoi elle ne fait rien.
+
 ### Exporter et importer les données de l'application
 
 F2 → **Export / import data** (*Exporter / importer les données*) sert à emporter ses données d'une machine à l'autre, ou à en garder une copie lisible.

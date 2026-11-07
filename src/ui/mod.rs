@@ -212,6 +212,8 @@ enum Action {
     DeleteView(String),
     /// The import that was previewed and confirmed.
     ImportData,
+    /// Native `sftp` session for one exact alias.
+    Sftp(String),
     SaveCommand {
         original: Option<String>,
         name: String,
@@ -743,6 +745,45 @@ impl Model {
                 " • History: {error:#}",
                 " • Historique : {error:#}"
             )),
+        }
+    }
+    /// A custom launcher only owns ordinary connections: SFTP says so.
+    fn custom_launcher(&self) -> bool {
+        self.preferences.ssh_command != ["ssh"]
+    }
+    /// What is printed in the terminal before the native client starts.
+    fn sftp_announcement(&self, name: &str, config: &Path) -> String {
+        let mut text = crate::tf!(
+            "ssho: native sftp for {name} (configuration {}). \"bye\" or Ctrl+D comes back to the list.",
+            "ssho : sftp natif pour {name} (configuration {}). « bye » ou Ctrl+D revient à la liste.",
+            config.display()
+        );
+        if self.custom_launcher() {
+            text.push_str(crate::t!(
+                "\nssho: the custom SSH launcher (ssh_command) does not apply to SFTP.",
+                "\nssho : le lanceur SSH personnalisé (ssh_command) ne s'applique pas à SFTP."
+            ));
+        }
+        text
+    }
+    /// Back from the native client: the list is found as it was left.
+    fn resume_sftp(&mut self, name: &str, result: Result<i32>) {
+        self.error.clear();
+        self.connection_result = match result {
+            Ok(code) => crate::tf!(
+                "SFTP exit {code}: {name} (native client)",
+                "SFTP a fini avec le code {code} : {name} (client natif)"
+            ),
+            Err(error) => crate::tf!(
+                "SFTP failed: {error:#} ({name})",
+                "Échec de SFTP : {error:#} ({name})"
+            ),
+        };
+        if self.custom_launcher() {
+            self.connection_result.push_str(crate::t!(
+                " — the custom SSH launcher does not apply to SFTP",
+                " — le lanceur SSH personnalisé ne s'applique pas à SFTP"
+            ));
         }
     }
     fn navigate(&mut self, delta: isize) {
@@ -1532,6 +1573,11 @@ impl Model {
                     self.open_view(View::Forward(ForwardForm::new(host.name, saved)));
                 }
             }
+            PaletteAction::Sftp => {
+                if let Some(host) = self.selected_host() {
+                    return Action::Sftp(host.name);
+                }
+            }
             PaletteAction::Test => return Action::Ping,
             PaletteAction::Reload => return Action::Reload,
             PaletteAction::Details => self.details.shown = !self.details.shown,
@@ -2163,8 +2209,22 @@ pub fn run(
                 .start(&mut m, paths, config, name, profile, forward)
                 .map(|_| false),
             Action::StopTunnel(id) => tunnels.manager.stop(id).map(|_| false),
-            Action::Connect(_, _) if m.batch.manager.has_active() => {
+            Action::Connect(_, _) | Action::Sftp(_) if m.batch.manager.has_active() => {
                 m.batch.ensure_foreground_idle().map(|_| false)
+            }
+            Action::Sftp(name) => {
+                #[cfg(unix)]
+                let signals = SshSignals::enter()?;
+                guard.restore();
+                // Said in the restored terminal, before the native client takes over.
+                eprintln!("{}", m.sftp_announcement(&name, config));
+                let result = runtime::sftp(config, &name);
+                guard = TerminalGuard::enter()?;
+                #[cfg(unix)]
+                drop(signals);
+                terminal.clear()?;
+                m.resume_sftp(&name, result);
+                Ok(false)
             }
             Action::Connect(name, forward) => {
                 #[cfg(unix)]
