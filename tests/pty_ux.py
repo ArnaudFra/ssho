@@ -1164,10 +1164,97 @@ def scenario_commands():
           'batch preparation with review, explicit launch, no automatic target, terminal restored')
 
 
+def scenario_transfer():
+    import shutil
+    preferences()
+    scope = str(CONFIG.resolve())
+    metadata = APP / 'metadata.json'
+    exported = ROOT / 'export.json'
+    backups = APP / 'data-backups'
+    for leftover in (exported, APP / 'views.json', APP / 'commands.json', APP / 'tunnel_profiles.json'):
+        if leftover.exists():
+            leftover.unlink()
+    shutil.rmtree(backups, ignore_errors=True)
+    original = {'configs': {scope: {'hosts': {
+        'alpha': {'favorite': False, 'note': 'Bastion requis'},
+        'beta': {'favorite': True, 'note': ''}}}}}
+    metadata.write_text(json.dumps(original))
+    s = Session('transfer', width=110, height=36)
+    s.expect('*beta')
+    s.send(F2)
+    s.send(b'exporter')
+    s.send(b'\r')
+    # The scope is on screen before anything is written.
+    s.expect('Exporter / importer les données')
+    s.expect('Jamais inclus : clés privées')
+    s.send(b'\r')
+    s.expect('[x] Favoris et notes')
+    s.expect('2 entrées')
+    s.expect('[ ] Profils de tunnels')
+    s.expect('Fichier à créer : ~/ssho-export-')
+    for _ in range(5):
+        s.send(b'\t')
+    s.send(b'\x15')                   # Ctrl+U
+    s.send(str(exported).encode())
+    s.send(b'\r')                     # Enter in the path only reaches the button
+    s.expect('[▶ Exporter ]')
+    assert not exported.exists()
+    s.send(b'\r')
+    s.expect('✓ Exporté vers')
+    data = json.loads(exported.read_text())
+    assert data['format'] == 'ssho.export' and data['version'] == 1, data
+    assert data['sections']['hosts'] == original['configs'][scope]['hosts'], data
+    assert 'ssh_command' not in data['sections']['preferences'], data
+    assert oct(exported.stat().st_mode & 0o777) == '0o600'
+    # The data changes here; the file is then read back.
+    changed = {'configs': {scope: {'hosts': {'alpha': {'favorite': False, 'note': 'note locale'}}}}}
+    metadata.write_text(json.dumps(changed))
+    s.send(b'\t')
+    s.expect('[▶ Importer… ]')
+    s.send(b'\r')
+    s.send(str(exported).encode())
+    s.send(b'\r')
+    s.expect('[▶ Lire le fichier ]')
+    s.send(b'\r')
+    s.expect('Vers : ' + str(CONFIG))
+    s.expect('1 nouvelles • 0 identiques • 1 différentes')
+    s.expect('‹ Ajouter seulement ce qui est nouveau ›')
+    assert json.loads(metadata.read_text()) == changed, 'reading a file changes nothing'
+    s.send(b'\r')
+    s.send(b'\r')                     # to the merge choice
+    s.send(b'\x1b[C')                 # Right: replace what differs
+    s.expect('‹ Ajouter, et remplacer ce qui diffère ›')
+    s.expect('en remplacerait 1')
+    s.send(b'\r')
+    s.expect('[▶ Importer ]')
+    s.send(b'\r')
+    s.expect('Importer ces données ?')
+    s.expect('[▶ Revenir ]')
+    assert json.loads(metadata.read_text()) == changed and not backups.exists()
+    s.send(b'\t')
+    s.send(b'\r')
+    s.expect('✓ Importé')
+    restored = json.loads(metadata.read_text())['configs'][scope]['hosts']
+    assert restored == original['configs'][scope]['hosts'], restored
+    (kept,) = list(backups.iterdir())
+    assert json.loads((kept / 'metadata.json').read_text()) == changed, 'the previous file is kept'
+    # The list shows the imported favorite without restarting.
+    s.send(ESC)
+    s.expect('*beta')
+    assert not connections()
+    s.send(CTRL_C)
+    s.close()
+    exported.unlink()
+    metadata.unlink()
+    shutil.rmtree(backups)
+    print('PTY PASS [transfer]: export scope shown, private file never overwritten, import preview, '
+          'explicit merge choice and confirmation, previous files kept, list refreshed, terminal restored')
+
+
 SCENARIOS = {'search': scenario_search, 'palette': scenario_palette, 'shortcuts': scenario_shortcuts, 'navigation': scenario_navigation, 'host_form': scenario_host_form, 'selectors': scenario_selectors,
              'list_marks': scenario_list_marks, 'host_sheet': scenario_host_sheet, 'notes': scenario_notes, 'tunnels': scenario_tunnels, 'batch': scenario_batch, 'help': scenario_help,
              'language': scenario_language, 'preferences': scenario_preferences,
-             'views': scenario_views, 'commands': scenario_commands}
+             'views': scenario_views, 'commands': scenario_commands, 'transfer': scenario_transfer}
 selected = sys.argv[3:] or list(SCENARIOS)
 for name in selected:
     SCENARIOS[name]()

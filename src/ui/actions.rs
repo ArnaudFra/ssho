@@ -50,6 +50,7 @@ pub(super) enum PaletteAction {
     Preferences,
     Views,
     Commands,
+    Transfer,
     Palette,
     Quit,
 }
@@ -86,7 +87,7 @@ impl Category {
 impl PaletteAction {
     /// Every catalogue entry, grouped by category. The palette lists them in this
     /// order; only the action that opens the palette itself is left out of it.
-    pub(super) const CATALOGUE: [Self; 47] = [
+    pub(super) const CATALOGUE: [Self; 48] = [
         Self::Connect,
         Self::Tunnel,
         Self::Profiles,
@@ -128,6 +129,7 @@ impl PaletteAction {
         Self::Reload,
         Self::Messages,
         Self::Preferences,
+        Self::Transfer,
         Self::Language,
         Self::ToggleColors,
         Self::ToggleAscii,
@@ -181,6 +183,7 @@ impl PaletteAction {
             Self::ClearFilters => "filter.clear",
             Self::Messages => "app.messages",
             Self::Preferences => "app.preferences",
+            Self::Transfer => "app.transfer",
             Self::Language => "app.language",
             Self::ToggleColors => "app.colors",
             Self::ToggleAscii => "app.ascii",
@@ -244,6 +247,7 @@ impl PaletteAction {
             Self::ClearFilters => ("Clear all filters", "Effacer tous les filtres"),
             Self::Messages => ("Messages and last error", "Messages et dernière erreur"),
             Self::Preferences => ("Preferences", "Préférences"),
+            Self::Transfer => ("Export / import data", "Exporter / importer les données"),
             Self::Language => ("Language", "Langue de l'interface"),
             Self::ToggleColors => ("Display: colours", "Affichage : couleurs"),
             Self::ToggleAscii => ("Display: ASCII symbols", "Affichage : symboles ASCII"),
@@ -300,6 +304,7 @@ impl PaletteAction {
             Self::Reload
             | Self::Messages
             | Self::Preferences
+            | Self::Transfer
             | Self::Language
             | Self::ToggleColors
             | Self::ToggleAscii
@@ -364,6 +369,9 @@ impl PaletteAction {
             Self::Messages => "erreur avertissement warning error détail journal log",
             Self::Preferences => {
                 "préférences options réglages paramètres configuration settings données emplacement data location"
+            }
+            Self::Transfer => {
+                "export import sauvegarde transférer machine migration backup transfer portable favoris notes"
             }
             Self::Language => "langue language english français anglais french traduction",
             Self::ToggleColors => {
@@ -535,6 +543,10 @@ impl PaletteAction {
             Self::Messages => crate::t!(
                 "Shows the last error and the current warnings in full.",
                 "Affiche en entier la dernière erreur et les avertissements en cours."
+            ),
+            Self::Transfer => crate::t!(
+                "Writes favorites, notes, tunnel profiles, views, commands and preferences to a file, or reads such a file with a preview before anything changes.",
+                "Écrit favoris, notes, profils de tunnels, vues, commandes et préférences dans un fichier, ou lit un tel fichier avec un aperçu avant tout changement."
             ),
             Self::Preferences => crate::t!(
                 "Shows every option with its effect, the shortcuts and where the data is kept.",

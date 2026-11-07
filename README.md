@@ -158,6 +158,22 @@ En JSON, `tags` contient l’union sans préfixes graphiques. Lorsqu’un hôte 
 
 ## Navigation au clavier
 
+### Exporter et importer les données de l'application
+
+F2 → **Export / import data** (*Exporter / importer les données*) sert à emporter ses données d'une machine à l'autre, ou à en garder une copie lisible.
+
+**Périmètre.** Un export contient, au choix (cases à cocher, Espace) : favoris et notes, profils de tunnels et vues enregistrées **de la configuration SSH en cours**, commandes enregistrées, et préférences portables (langue, affichage, liste, clavier). Le nombre d'entrées de chaque section est affiché avant l'écriture, et une section vide n'est pas cochée. **Ne sont jamais inclus** : clés privées, mots de passe, fichiers SSH, historique des connexions, sauvegardes, ni le lanceur SSH (un chemin local). Notes et commandes pouvant contenir des informations privées, le fichier est créé lisible par vous seul (`0600`) ; un fichier existant n'est jamais remplacé. `~/` désigne le dossier personnel.
+
+**Format.** Fichier JSON versionné (`"format": "ssho.export"`, `"version": 1`), avec la date, la version de l'application et la configuration d'origine. Un fichier d'un autre format, d'une version inconnue ou contenant une section inconnue est refusé avec la raison. Le fichier source d'une vue est écrit relativement au dossier de la configuration quand il s'y trouve, et recherché de la même façon à l'import.
+
+**Import.** L'import se fait toujours dans la configuration en cours — l'association est « cette configuration + alias », jamais un nom d'alias seul entre deux fichiers. Lire un fichier ne modifie rien ; l'aperçu indique d'où il vient et où il sera importé, puis pour chaque section : entrées nouvelles, identiques, différentes, « pour un alias inconnu ici » et « seulement ici ». Trois choix explicites :
+
+- **Entrées présentes des deux côtés** (←/→) : *Ajouter seulement ce qui est nouveau* (défaut : rien de ce qui existe ici n'est modifié), *Ajouter, et remplacer ce qui diffère*, ou *Remplacer entièrement les sections choisies* (les entrées qui n'existent qu'ici sont supprimées).
+- **Alias inconnus ici** : les laisser de côté (défaut) ou les importer quand même.
+- les sections à importer (Espace).
+
+Une phrase récapitule ce que l'import ajouterait, remplacerait, supprimerait et laisserait de côté ; elle se met à jour à chaque choix. Une vue dont le fichier source n'existe pas dans cette configuration est signalée (son application demandera une mise à jour). Le bouton **Importer** demande confirmation, focus sur « Revenir ». Avant toute écriture, le résultat est d'abord relu par les chargeurs de l'application dans un dossier à part — un fichier invalide ne change rien — puis les fichiers actuels sont copiés dans `ssho/data-backups/<date>/`, et seulement alors remplacés. La liste, les vues, le catalogue et les préférences sont rechargés aussitôt.
+
 ### Commandes enregistrées
 
 Le catalogue garde des commandes personnelles sous un nom, avec une description, la portée prévue (un hôte ou un lot, un hôte seulement, un lot seulement) et les paramètres demandés à chaque utilisation. `R` depuis le tableau, ou F2 → **Saved commands** (*Commandes enregistrées*), l'ouvre ; six actions nommées : **Utiliser sur cet hôte**, **Utiliser sur le lot**, **Nouvelle**, **Modifier**, **Supprimer**, **Fermer**.
@@ -202,7 +218,7 @@ Les vues sont conservées dans `ssho/views.json`, séparément pour chaque fichi
 - **Liste des hôtes** : recherche au démarrage, groupes, alias regroupés, colonnes (Entrée ouvre leur éditeur, qui enregistre de lui-même).
 - **Connexion et diagnostics** : méthode de disponibilité (SSH / ICMP local), sondes au démarrage, avis de mise à jour, lanceur SSH (lecture seule : tableau d'arguments littéraux de `ssh_command`, qui ne lance que les connexions ordinaires — tunnels, lots, `ssh -G` et sondes utilisent toujours `ssh`).
 - **Clavier** : touche des actions rapides, Échap quittant ou non à la liste, raccourcis.
-- **Données (lecture seule)** : dossier de l'application, `config.json` (préférences), `metadata.json` (favoris et notes), `sshm_history.json` (historique), `tunnel_profiles.json` (profils de tunnels), `views.json` (vues enregistrées), `commands.json` (commandes enregistrées), `backups/` (sauvegardes) et la configuration SSH lue par la session.
+- **Données (lecture seule)** : dossier de l'application, `config.json` (préférences), `metadata.json` (favoris et notes), `sshm_history.json` (historique), `tunnel_profiles.json` (profils de tunnels), `views.json` (vues enregistrées), `commands.json` (commandes enregistrées), `backups/` (sauvegardes), `data-backups/` (copies avant import) et la configuration SSH lue par la session.
 
 Chaque ligne montre la valeur en cours ; sous la liste, l'option qui a le focus est expliquée (son effet, puis « prend effet dès l'application » ou « au prochain démarrage ») et une valeur longue, comme un chemin, y est répétée en entier. ↑↓ choisit une option ; Espace, Entrée ou ←/→ change sa valeur **dans le brouillon** : la ligne porte « ● modifié » et rien n'est écrit. Tab atteint les boutons **Appliquer**, **Annuler** et **Valeurs par défaut** ; Ctrl+S applique aussi. « Valeurs par défaut » remplit seulement le brouillon (les options sans ligne propre, colonnes et lanceur, sont conservées) et place le focus sur Appliquer. Échap ou Annuler sur un brouillon modifié demande confirmation, focus sur « Continuer l'édition ». Appliquer relit `config.json`, n'y remplace que les options de cet écran — une option modifiée ailleurs entre-temps n'est pas écrasée — puis confirme « ✓ Préférences enregistrées ».
 

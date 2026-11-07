@@ -494,6 +494,7 @@ impl AppConfig {
 pub mod commands;
 mod history;
 pub mod metadata;
+pub mod transfer;
 pub mod tunnels;
 pub mod views;
 pub use history::History;

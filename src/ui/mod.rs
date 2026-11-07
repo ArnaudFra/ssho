@@ -31,6 +31,7 @@ mod select;
 mod source_filter;
 #[cfg(test)]
 mod tests;
+mod transfer;
 #[cfg(test)]
 mod ux_tests;
 mod views;
@@ -86,6 +87,8 @@ enum View {
     },
     /// Personal commands with typed parameters, handed to the batch preparation.
     Commands(Box<commands::Editor>),
+    /// Export of the application data to a file, and import with a preview.
+    Transfer(Box<transfer::Editor>),
     /// Named list contexts: apply, save, update, rename, delete.
     Views(views::Editor),
     /// Every application option, edited as a draft until Apply.
@@ -207,6 +210,8 @@ enum Action {
         view: Box<crate::storage::views::SavedView>,
     },
     DeleteView(String),
+    /// The import that was previewed and confirmed.
+    ImportData,
     SaveCommand {
         original: Option<String>,
         name: String,
@@ -837,6 +842,12 @@ impl Model {
                 };
                 input
             }
+            View::Transfer(editor) => {
+                let Some(input) = transfer::input(editor) else {
+                    return;
+                };
+                input
+            }
             View::Keys(editor) => {
                 let Some(input) = keys::input(editor) else {
                     return;
@@ -958,6 +969,7 @@ impl Model {
             View::Preferences(_) => return prefs::key(self, k),
             View::Views(_) => return views::key(self, k),
             View::Commands(_) => return commands::key(self, k),
+            View::Transfer(_) => return transfer::key(self, k),
             View::Shortcuts(_) => return prefs::shortcuts_key(self, k),
             View::Keys(_) => return keys::key(self, k),
             View::Batch(_) | View::BatchResults { .. } => return batch::key(self, k),
@@ -1468,6 +1480,7 @@ impl Model {
             PaletteAction::GroupMode => groups::open(self),
             PaletteAction::Views => views::open(self),
             PaletteAction::Commands => commands::open(self),
+            PaletteAction::Transfer => transfer::open(self),
             PaletteAction::ChooseAlias => aliases::open(self),
             PaletteAction::SourceFilter => return Action::SourceFilter,
             PaletteAction::ClearSourceFilter => {
@@ -2072,6 +2085,25 @@ pub fn run(
             Action::UseCommand { command, batch } => {
                 commands::prepare(&mut m, &command, batch).map(|()| false)
             }
+            Action::ImportData => transfer::apply(&mut m, &paths.root, config).and_then(|_| {
+                // Every store is read again from the files that were just written.
+                metadata = Metadata::load(&paths.root, config)?;
+                m.metadata = metadata.hosts().clone();
+                profiles = TunnelProfiles::load(&paths.root, config)?;
+                m.tunnel_profiles = profiles.hosts().clone();
+                m.tunnel_modes = profiles.modes().clone();
+                saved_views = crate::storage::views::Views::load(&paths.root, config)?;
+                m.views.clone_from(saved_views.all());
+                catalogue = crate::storage::commands::Commands::load(&paths.root)?;
+                m.commands.clone_from(catalogue.all());
+                m.preferences = AppConfig::load(&paths.root)?;
+                crate::i18n::set(m.preferences.language);
+                m.query.placeholder = search_placeholder().into();
+                let host = m.selected_host();
+                m.refilter(host.as_ref(), m.selected);
+                transfer::refresh_counts(&mut m);
+                Ok(false)
+            }),
             Action::StartBatch => batch::start(&mut m).map(|_| false),
             Action::CancelBatch => {
                 m.batch.manager.cancel();

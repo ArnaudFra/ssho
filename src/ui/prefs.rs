@@ -33,6 +33,7 @@ pub(super) enum Row {
     DataViews,
     DataCommands,
     DataBackups,
+    DataImportBackups,
     DataSshConfig,
 }
 
@@ -76,6 +77,7 @@ pub(super) fn sections() -> [(&'static str, &'static [Row]); 5] {
                 Row::DataViews,
                 Row::DataCommands,
                 Row::DataBackups,
+                Row::DataImportBackups,
                 Row::DataSshConfig,
             ],
         ),
@@ -130,6 +132,7 @@ impl Row {
             Self::DataViews => crate::t!("Saved views", "Vues enregistrées"),
             Self::DataCommands => crate::t!("Saved commands", "Commandes enregistrées"),
             Self::DataBackups => crate::t!("Backups", "Sauvegardes"),
+            Self::DataImportBackups => crate::t!("Copies before import", "Copies avant import"),
             Self::DataSshConfig => crate::t!("SSH configuration", "Configuration SSH"),
         }
     }
@@ -147,6 +150,7 @@ impl Row {
                 | Self::DataViews
                 | Self::DataCommands
                 | Self::DataBackups
+                | Self::DataImportBackups
                 | Self::DataSshConfig
         )
     }
@@ -215,6 +219,7 @@ impl Row {
             Self::DataViews => data("views.json"),
             Self::DataCommands => data("commands.json"),
             Self::DataBackups => data("backups"),
+            Self::DataImportBackups => data("data-backups"),
             Self::DataSshConfig => m.batch.root.display().to_string(),
         }
     }
@@ -388,6 +393,13 @@ impl Row {
                 crate::t!(
                     "Copies of the SSH files taken before each write; F8 lists and restores them.",
                     "Copies des fichiers SSH prises avant chaque écriture ; F8 les liste et les restaure."
+                ),
+                read_only,
+            ],
+            Self::DataImportBackups => [
+                crate::t!(
+                    "Application files as they were before each import (F2: Export / import data), one dated folder per import.",
+                    "Fichiers de l'application tels qu'ils étaient avant chaque import (F2 : Exporter / importer les données), un dossier daté par import."
                 ),
                 read_only,
             ],

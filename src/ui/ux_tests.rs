@@ -3660,3 +3660,215 @@ fn the_catalogue_never_chooses_targets_and_respects_the_intended_scope() {
         .notice
         .contains("✓ Commande « Redémarrage » supprimée"));
 }
+
+use crate::storage::metadata::Metadata;
+use crate::storage::transfer as data;
+
+fn transfer_of(m: &Model) -> &transfer::Editor {
+    let View::Transfer(editor) = &m.view else {
+        panic!("the export / import screen is open")
+    };
+    editor
+}
+
+fn transfer_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, Model) {
+    let (temp, root, config, mut m, _views) = view_fixture();
+    m.batch.history_root = Some(root.clone());
+    let mut metadata = Metadata::load(&root, &config).unwrap();
+    metadata.set_note("alpha", "note locale").unwrap();
+    (temp, root, config, m)
+}
+
+#[test]
+fn export_shows_its_scope_and_never_replaces_a_file() {
+    let (temp, _root, _config, mut m) = transfer_fixture();
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "exporter");
+    m.key(key(KeyCode::Enter));
+    let text = flat(&screen(&mut m, 110, 34));
+    for expected in [
+        "Exporter / importer les données",
+        "Configuration en cours :",
+        "Jamais inclus : clés privées, mots de passe, fichiers SSH, historique des connexions",
+        "rien ne change avant votre confirmation",
+        "[▶ Exporter… ]  [  Importer… ]  [  Fermer ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    m.key(key(KeyCode::Enter));
+    let text = screen(&mut m, 110, 34);
+    for expected in [
+        "Exporter / importer les données > Exporter",
+        "> [x] Favoris et notes",
+        "1 entrées",
+        // An empty section is not chosen: the export says what it really holds.
+        "[ ] Profils de tunnels",
+        "0 entrées",
+        "[x] Préférences",
+        "Notes et commandes peuvent contenir des informations privées",
+        "Fichier à créer : ~/ssho-export-",
+        "Un fichier existant n'est jamais remplacé.",
+        "[  Exporter ]  [  Retour ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // Space includes or leaves out a section; nothing chosen is explained.
+    m.key(key(KeyCode::Char(' ')));
+    assert!(!transfer_of(&m).chosen[0]);
+    m.key(key(KeyCode::Char(' ')));
+    let target = temp.path().join("export.json");
+    for _ in 0..5 {
+        m.key(key(KeyCode::Tab));
+    }
+    assert_eq!(transfer_of(&m).focus, 5);
+    m.key(ctrl('u'));
+    // Letters are the path, and a pasted path goes to the same input.
+    typing(&mut m, "x");
+    m.key(key(KeyCode::Backspace));
+    m.paste(target.to_str().unwrap());
+    // Enter in the path reaches the button and writes nothing.
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert!(!target.exists());
+    assert_eq!(transfer_of(&m).focus, 6);
+    m.key(key(KeyCode::Enter));
+    assert!(target.exists());
+    let notice = transfer_of(&m).notice.clone();
+    assert!(
+        notice.contains("✓ Exporté vers") && notice.contains("lisible par vous seul"),
+        "{notice}"
+    );
+    assert_eq!(transfer_of(&m).mode, transfer::Mode::Home);
+    let exported = data::read(&target).unwrap();
+    assert_eq!(exported.sections["hosts"]["alpha"]["note"], "note locale");
+    assert!(!exported.sections.contains_key("tunnels"));
+    // A second export to the same file is refused and explained.
+    let before = std::fs::read(&target).unwrap();
+    m.key(key(KeyCode::Enter));
+    for _ in 0..6 {
+        m.key(key(KeyCode::Tab));
+    }
+    m.key(key(KeyCode::Enter));
+    assert!(
+        transfer_of(&m)
+            .notice
+            .contains("un export ne remplace jamais un fichier"),
+        "{}",
+        transfer_of(&m).notice
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), before);
+    assert_eq!(transfer_of(&m).focus, 5, "the path can be corrected");
+}
+
+#[test]
+fn import_previews_asks_how_to_merge_and_writes_only_after_confirmation() {
+    // The file comes from another machine: another path, another set of aliases.
+    let (other, other_root, other_config, _unused) = transfer_fixture();
+    std::fs::write(
+        &other_config,
+        "Host alpha\n HostName a.example\nHost omega\n HostName o.example\n",
+    )
+    .unwrap();
+    let mut metadata = Metadata::load(&other_root, &other_config).unwrap();
+    metadata.set_note("alpha", "note distante").unwrap();
+    metadata.set_favorite("omega", true).unwrap();
+    let file = other.path().join("export.json");
+    data::write(
+        &file,
+        &data::export(&other_root, &other_config, &[data::Section::Hosts]).unwrap(),
+    )
+    .unwrap();
+    let (temp, root, config, mut m) = transfer_fixture();
+    m.key(key(KeyCode::F(2)));
+    typing(&mut m, "importer");
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Tab));
+    m.key(key(KeyCode::Enter));
+    assert_eq!(transfer_of(&m).mode, transfer::Mode::ImportPath);
+    // A file that is not an export is refused; reading never changes anything.
+    let wrong = temp.path().join("notes.txt");
+    std::fs::write(&wrong, "hello").unwrap();
+    m.paste(wrong.to_str().unwrap());
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    m.key(key(KeyCode::Enter));
+    assert!(
+        transfer_of(&m)
+            .notice
+            .contains("n'est pas un export de ssho"),
+        "{}",
+        transfer_of(&m).notice
+    );
+    m.key(ctrl('u'));
+    m.paste(file.to_str().unwrap());
+    m.key(ctrl('l'));
+    assert_eq!(transfer_of(&m).mode, transfer::Mode::Preview);
+    let text = flat(&screen(&mut m, 110, 34));
+    for expected in [
+        "Exporter / importer les données > Importer",
+        "Depuis :",
+        "Vers :",
+        "> [x] Favoris et notes",
+        "0 nouvelles • 0 identiques • 1 différentes • 1 pour un alias inconnu ici",
+        "Entrées présentes des deux côtés : ‹ Ajouter seulement ce qui est nouveau ›",
+        "Rien de ce qui existe ici n'est modifié",
+        "Alias inconnus ici : ‹ les laisser de côté ›",
+        "omega — une entrée est rattachée à un alias de cette configuration, jamais à un nom seul.",
+        "Cet import ajouterait 0 entrées, en remplacerait 0, en supprimerait 0 et en laisserait 2 de côté.",
+        "[  Importer ]  [  Retour ]",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    // The choices are made with arrows; Enter only moves on.
+    m.key(key(KeyCode::Enter));
+    assert_eq!(transfer_of(&m).focus, 1);
+    m.key(key(KeyCode::Right));
+    let text = flat(&screen(&mut m, 110, 34));
+    assert!(
+        text.contains("‹ Ajouter, et remplacer ce qui diffère ›")
+            && text.contains("en remplacerait 1"),
+        "{text}"
+    );
+    m.key(key(KeyCode::Right));
+    assert!(flat(&screen(&mut m, 110, 34))
+        .contains("les entrées qui n'existent qu'ici sont supprimées"));
+    m.key(key(KeyCode::Left));
+    for _ in 0..2 {
+        m.key(key(KeyCode::Enter));
+    }
+    assert!(screen(&mut m, 110, 34).contains("[▶ Importer ]"));
+    let note = |root: &Path, config: &Path| {
+        Metadata::load(root, config).unwrap().hosts()["alpha"]
+            .note
+            .clone()
+    };
+    // The button asks first, with the focus on going back.
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    let text = flat(&screen(&mut m, 110, 34));
+    assert!(
+        text.contains("Importer ces données ?")
+            && text.contains("[▶ Revenir ]")
+            && text.contains("Les fichiers actuels sont d'abord copiés dans"),
+        "{text}"
+    );
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::None);
+    assert_eq!(note(&root, &config), "note locale");
+    m.key(key(KeyCode::Enter));
+    m.key(key(KeyCode::Tab));
+    assert_eq!(m.key(key(KeyCode::Enter)), Action::ImportData);
+    let applied = transfer::apply(&mut m, &root, &config).unwrap();
+    assert_eq!(note(&root, &config), "note distante");
+    assert!(!Metadata::load(&root, &config)
+        .unwrap()
+        .hosts()
+        .contains_key("omega"));
+    assert!(applied.backup.join("metadata.json").exists());
+    let notice = transfer_of(&m).notice.clone();
+    assert!(
+        notice.contains("✓ Importé : 1 écrites, 0 supprimées, 1 laissées de côté")
+            && notice.contains("data-backups"),
+        "{notice}"
+    );
+    // Esc walks back one step at a time, down to the list.
+    assert_eq!(transfer_of(&m).mode, transfer::Mode::Home);
+    m.key(key(KeyCode::Esc));
+    assert!(matches!(m.view, View::List));
+}
