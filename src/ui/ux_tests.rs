@@ -2828,8 +2828,13 @@ fn data_locations_are_found_from_the_interface() {
     ] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
-    // In a narrow terminal the focused path is repeated in full under the list.
+    // In a narrow terminal a row keeps the end of its path, where the file name is,
+    // and the focused path is repeated in full under the list.
     let narrow = screen(&mut m, 50, 30);
+    assert!(
+        narrow.contains("…") && narrow.contains("config.json"),
+        "{narrow}"
+    );
     let joined: String = narrow.split_whitespace().collect();
     assert!(
         joined.contains("/home/me/.config/ssho/metadata.json"),

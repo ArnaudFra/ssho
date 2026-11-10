@@ -3595,7 +3595,9 @@ fn preferences(f: &mut Frame, m: &mut Model, area: Rect) {
             let mut spans = vec![
                 Span::styled(label, if on_row { accent() } else { Style::default() }),
                 Span::styled(
-                    row.value(m, editor),
+                    // A long path keeps its end, where the file name is; the
+                    // focused row repeats it in full under the list.
+                    group_label(&row.value(m, editor), width.saturating_sub(label_width + 2)),
                     if row.editable() {
                         Style::default().add_modifier(Modifier::BOLD)
                     } else {

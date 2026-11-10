@@ -903,7 +903,8 @@ def scenario_preferences():
     for text in ['Préférences', 'Apparence', 'Liste des hôtes', 'Connexion et diagnostics', 'Clavier',
                  'Données (lecture seule)', '> Langue', 'Prend effet dès l\'application.',
                  '[  Appliquer ]  [  Annuler ]  [  Valeurs par défaut ]', 'Aucune modification',
-                 str(APP / 'metadata.json'), str(CONFIG)]:
+                 # Whatever the length of the path, its end stays readable.
+                 'ssho/metadata.json', '.ssh/config']:
         s.expect(text)
     # A change stays in the draft: Enter on a row writes nothing.
     s.send(DOWN)
@@ -962,10 +963,13 @@ def scenario_preferences():
     (legacy / 'config.json').write_text(json.dumps(BASE))
     try:
         s = Session('preferences-first', width=140, height=30)
-        s.expect('Données copiées de ' + str(legacy) + ' vers ' + str(APP))
+        s.expect("Données de l'application copiées depuis l'ancien dossier sshm — ! : détails")
         s.send(b'!')
         s.expect('[Info]')
         s.expect('ssho n\'utilise que la copie')
+        # Both folders are named in full there, wrapped if they are long.
+        shown = ''.join(''.join(s.drain(.2).split()).split('│'))
+        assert ''.join(str(legacy).split()) in shown and ''.join(str(APP).split()) in shown, shown
         s.send(ESC)
         s.send(CTRL_C)
         s.close()
@@ -973,7 +977,7 @@ def scenario_preferences():
         assert (APP / 'config.json').exists()
         s = Session('preferences-second', width=140, height=30)
         s.expect('? : aide')
-        s.absent('Données copiées')
+        s.absent('copiées depuis')
         s.send(CTRL_C)
         s.close()
     finally:

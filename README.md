@@ -234,7 +234,7 @@ Chaque ligne montre la valeur en cours ; sous la liste, l'option qui a le focus 
 
 **Raccourcis.** La ligne Raccourcis ouvre un éditeur : une ligne par action de la liste, avec ses touches et leur origine (défaut, personnalisé, F2 seul). Entrée ou **Changer la touche** attend la prochaine touche, qui devient le raccourci de l'action ; **Aucune touche** laisse l'action à F2 ; **Défaut** retire la personnalisation ; **Terminer** (ou Ctrl+S) rend les raccourcis au brouillon des préférences, qui les écrit avec le reste. Une touche déjà prise, réservée à la navigation ou gardée par les touches de sortie est refusée avec la raison donnée par la table de raccourcis (« d sert déjà à « Supprimer » »). Les touches de sortie (`quit_keys`) autres qu'Échap se règlent encore dans `config.json`. Une configuration existante qui attribuait `o` à une autre action voit ce raccourci refusé et expliqué, `o` ouvrant désormais les préférences.
 
-**Premier lancement.** Quand le dossier `ssho/` vient d'être créé par copie de `sshm/`, la liste l'annonce une fois (« Data copied from … to … ») et l'écran Messages (`!`) garde la phrase complète pour la session : le dossier d'origine est inchangé, seule la copie est utilisée. Aucun avis si le dossier existait déjà ou s'il n'y avait rien à copier ; la règle de copie elle-même est inchangée.
+**Premier lancement.** Quand le dossier `ssho/` vient d'être créé par copie de `sshm/`, la liste l'annonce une fois (« Application data copied from the former sshm folder — !: details ») et l'écran Messages (`!`) garde pour la session la phrase complète, avec les deux chemins : le dossier d'origine est inchangé, seule la copie est utilisée. Aucun avis si le dossier existait déjà ou s'il n'y avait rien à copier ; la règle de copie elle-même est inchangée.
 
 **Liste vide.** Trois situations sont distinguées, chacune avec la touche utile tirée des raccourcis en vigueur : configuration sans hôte (« No host in *fichier*. a: add a host »), aucun résultat pour les filtres (« … clear the search • F2: Clear all filters ») et configuration illisible (« … !: see the error • F5: reload »).
 
@@ -576,7 +576,11 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build --release
 
-# Parcours dans un pseudo-terminal, Linux/macOS avec Python 3
+# Tous les parcours en pseudo-terminal d'un coup (Linux, Python 3) : chaque
+# scénario reçoit un dossier de fixture neuf et court, supprimé à la fin.
+sh scripts/pty-checks.sh target/release/ssho
+
+# Ou un par un. Parcours dans un pseudo-terminal, Linux/macOS avec Python 3
 python3 tests/pty_smoke.py target/release/ssho
 # Parcours ciblé du filtre par fichier
 python3 tests/pty_smoke.py target/release/ssho --source-filter-only
@@ -596,6 +600,8 @@ python3 tests/pty_ux.py target/release/ssho "$(mktemp -d)/ux"
 # Comparaison facultative avec un exécutable SSHM
 python3 tests/reference_parity.py /path/to/sshm target/release/ssho
 ```
+
+**Intégration continue.** `.github/workflows/ci.yml` lance ces vérifications à chaque push et pull request, sans rien publier : un contrôle rapide sous Linux (formatage, Clippy sans avertissement, tests Rust), les tests avec Rust 1.88 (version minimale déclarée), les scripts d'installation et de paquetage (`sh -n`, `tests/distribution.py`), puis la compilation et les tests sur les quatre cibles annoncées (Linux et macOS, x86_64 et ARM64, chacune sur son exécuteur natif). Les parcours en pseudo-terminal y tournent sous Linux seulement ; ils n'ont pas été adaptés à macOS. Le workflow `release.yml` reste le seul à produire des archives.
 
 Tous les tests utilisent des dossiers temporaires. Les parcours de connexion et de tunnel utilisent un faux client SSH ; ils ne se connectent pas aux serveurs personnels de l'utilisateur.
 

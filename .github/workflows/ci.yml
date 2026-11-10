@@ -1,0 +1,97 @@
+name: Rust checks
+
+# Development checks on every push and pull request. Release archives are
+# built by release.yml; this workflow never publishes anything.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast feedback on one platform: formatting, lints, the whole Rust suite.
+  quick:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the stable toolchain with rustfmt and clippy
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Formatting
+        run: cargo +stable fmt --all -- --check
+      - name: Clippy, warnings refused
+        run: cargo +stable clippy --all-targets --locked -- -D warnings
+      - name: Rust tests
+        run: cargo +stable test --locked
+
+  # The declared minimum Rust version must keep building and passing the suite.
+  msrv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the declared minimum Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+      - name: Rust tests with Rust 1.88
+        run: cargo +1.88.0 test --locked
+
+  # Installation and packaging scripts, in an owned temporary HOME.
+  scripts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Shell syntax
+        run: |
+          sh -n install.sh
+          sh -n scripts/package-release.sh
+          sh -n scripts/pty-checks.sh
+      - name: Python syntax of the test scripts
+        run: python3 -m py_compile tests/*.py
+      - name: Distribution contract
+        run: python3 tests/distribution.py
+
+  # The announced targets, each on its native runner. Slower: only after the
+  # quick checks pass.
+  platforms:
+    needs: quick
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the stable toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Native release build
+        run: cargo +stable build --release --locked
+      - name: Rust tests
+        run: cargo +stable test --locked
+      # Keyboard, focus and terminal-restoration journeys in a real pseudo-terminal,
+      # with fake SSH tools. Linux only for now: the scenarios have not been
+      # adapted to, nor run on, macOS.
+      - name: Pseudo-terminal journeys
+        if: runner.os == 'Linux'
+        run: sh scripts/pty-checks.sh target/release/ssho

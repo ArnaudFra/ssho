@@ -2018,11 +2018,10 @@ pub fn run(
             paths.legacy.display(),
             paths.root.display()
         );
+        // Short enough for any width: the two paths are in the Messages screen.
         m.hint = crate::tf!(
-            "Data copied from {} to {} — {}: details",
-            "Données copiées de {} vers {} — {} : détails",
-            paths.legacy.display(),
-            paths.root.display(),
+            "Application data copied from the former sshm folder — {}: details",
+            "Données de l'application copiées depuis l'ancien dossier sshm — {} : détails",
             m.keymap().hint(PaletteAction::Messages)
         );
     }
