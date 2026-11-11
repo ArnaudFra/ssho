@@ -162,12 +162,21 @@ pub fn ssh_arguments(
     Ok(arguments)
 }
 
-fn ping_host(host: &Host, config: &Path) -> PingResult {
+/// Whether the SSH availability check of this host runs an `ssh` process.
+fn via_proxy(host: &Host) -> bool {
+    !(host.proxy_jump.is_empty() && host.proxy_command.is_empty())
+}
+
+fn ping_host(
+    host: &Host,
+    config: &Path,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> PingResult {
     let started = Instant::now();
-    let check = if host.proxy_jump.is_empty() && host.proxy_command.is_empty() {
-        direct_ping(host)
+    let check = if via_proxy(host) {
+        proxy_ping(host, config, cancel)
     } else {
-        proxy_ping(host, config)
+        direct_ping(host)
     };
     PingResult {
         method: crate::storage::AvailabilityMethod::Ssh,
@@ -221,7 +230,11 @@ fn direct_ping(host: &Host) -> Result<()> {
         .unwrap_or_else(|| anyhow::anyhow!("host has no reachable address")))
 }
 
-fn proxy_ping(host: &Host, config: &Path) -> Result<()> {
+fn proxy_ping(
+    host: &Host,
+    config: &Path,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<()> {
     anyhow::ensure!(!host.name.starts_with('-'), "invalid SSH host name");
     let null_device = if cfg!(windows) { "NUL" } else { "/dev/null" };
     let mut command = Command::new("ssh");
@@ -244,12 +257,16 @@ fn proxy_ping(host: &Host, config: &Path) -> Result<()> {
         .arg(config)
         .arg(&host.name)
         .arg("exit");
-    let (status, _, stderr) = effective::capture(&mut command, Duration::from_secs(5))?;
+    let (status, _, stderr) = effective::capture_with(
+        &mut command,
+        effective::OPERATION_TIMEOUT,
+        effective::Control::ssh(cancel),
+    )?;
     anyhow::ensure!(
         status.success(),
         "SSH proxy check exited {}: {}",
         exit_code(status),
-        stderr.trim()
+        effective::excerpt(&stderr)
     );
     Ok(())
 }

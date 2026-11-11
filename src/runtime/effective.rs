@@ -87,27 +87,82 @@ impl EffectiveConfig {
 }
 
 pub fn resolve(config: &Path, alias: &str) -> Result<EffectiveConfig> {
-    resolve_controlled(config, alias, Duration::from_secs(5), None)
+    resolve_controlled(config, alias, OPERATION_TIMEOUT, Control::ssh(None))
 }
 fn resolve_controlled(
     config: &Path,
     alias: &str,
     timeout: Duration,
-    cancel: Option<&AtomicBool>,
+    control: Control<'_>,
 ) -> Result<EffectiveConfig> {
     // Reuse connection validation, but never run a connection for configuration resolution.
     super::ssh_arguments(config, alias, false, &[], None)?;
     let mut command = Command::new("ssh");
     command.arg("-G").arg("-F").arg(config).arg(alias);
-    let (status, stdout, stderr) = capture_controlled(&mut command, timeout, cancel)
+    let (status, stdout, stderr) = capture_with(&mut command, timeout, control)
         .context("resolve configuration with ssh -G")?;
     anyhow::ensure!(
         status.success(),
         "ssh -G exited {}: {}",
         super::exit_code(status),
-        stderr.trim()
+        excerpt(&stderr)
     );
     EffectiveConfig::parse(&stdout)
+}
+
+/// Limits of the native diagnostics, per operation and per session.
+///
+/// One operation: `OPERATION_TIMEOUT`, and `OUTPUT_LIMIT` per output stream.
+/// One session: `WORKERS` operations at most run at once, hence twice as many
+/// capture files. These files are anonymous: the system releases them as soon
+/// as the operation ends, whatever its outcome.
+pub(super) const OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const OUTPUT_LIMIT: u64 = 256 * 1024;
+pub(super) const WORKERS: usize = 8;
+/// How often a running operation is checked for cancellation, deadline and size.
+const POLL: Duration = Duration::from_millis(10);
+/// Longest diagnostic text kept in an error message; the end is the useful part.
+const EXCERPT: usize = 2000;
+const TRUNCATED: &str = "\n[output truncated at 256 KiB]";
+
+/// The useful end of a diagnostic text, with a visible mark when it was cut.
+pub(super) fn excerpt(text: &str) -> String {
+    let text = text.trim();
+    let count = text.chars().count();
+    if count <= EXCERPT {
+        return text.to_owned();
+    }
+    let tail: String = text.chars().skip(count - EXCERPT).collect();
+    format!("[beginning truncated] {tail}")
+}
+
+/// How one native operation is supervised.
+#[derive(Clone, Copy)]
+pub(super) struct Control<'a> {
+    /// Checked at every poll: a refresh or the end of the session stops the
+    /// operation and its whole process group at once.
+    pub cancel: Option<&'a AtomicBool>,
+    /// Kernel-enforced size limit on every file the child writes. Only for a
+    /// tool this application fully owns (ping): an SSH proxy helper or a
+    /// `Match exec` command may legitimately append to its own log file.
+    pub hard_limit: bool,
+    pub label: &'static str,
+}
+impl<'a> Control<'a> {
+    pub(super) fn ssh(cancel: Option<&'a AtomicBool>) -> Self {
+        Self {
+            cancel,
+            hard_limit: false,
+            label: "SSH command",
+        }
+    }
+    pub(super) fn owned_tool(cancel: &'a AtomicBool) -> Self {
+        Self {
+            cancel: Some(cancel),
+            hard_limit: true,
+            label: "native diagnostic",
+        }
+    }
 }
 
 /// Owns the child as well as its private process group. Keep the leader unreaped
@@ -177,21 +232,38 @@ pub(super) fn capture(
     command: &mut Command,
     timeout: Duration,
 ) -> Result<(std::process::ExitStatus, String, String)> {
-    capture_controlled(command, timeout, None)
+    capture_with(command, timeout, Control::ssh(None))
 }
 
-/// ICMP adds cancellation and a hard per-stream file limit; historical SSH callers retain behavior.
+/// ICMP entry point: cancellation and a hard per-stream file limit.
 pub(super) fn capture_controlled(
     command: &mut Command,
     timeout: Duration,
     cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<(std::process::ExitStatus, String, String)> {
+    match cancel {
+        Some(cancel) => capture_with(command, timeout, Control::owned_tool(cancel)),
+        None => capture_with(command, timeout, Control::ssh(None)),
+    }
+}
+
+/// Every native operation goes through here: owned process group, deadline,
+/// cancellation, and an output that is watched while the operation runs.
+pub(super) fn capture_with(
+    command: &mut Command,
+    timeout: Duration,
+    control: Control<'_>,
+) -> Result<(std::process::ExitStatus, String, String)> {
     use std::sync::atomic::Ordering;
+    let Control {
+        cancel,
+        hard_limit,
+        label,
+    } = control;
     anyhow::ensure!(
         !cancel.is_some_and(|c| c.load(Ordering::Relaxed)),
-        "native diagnostic cancelled"
+        "{label} cancelled"
     );
-    const OUTPUT_LIMIT: u64 = 256 * 1024;
     let mut stdout = tempfile::tempfile()?;
     let mut stderr = tempfile::tempfile()?;
     command
@@ -202,7 +274,7 @@ pub(super) fn capture_controlled(
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
-        if cancel.is_some() {
+        if hard_limit {
             // SAFETY: only async-signal-safe setrlimit is used between fork and exec.
             unsafe {
                 command.pre_exec(|| {
@@ -228,6 +300,10 @@ pub(super) fn capture_controlled(
     let mut child = child;
     let deadline = Instant::now() + timeout;
     let mut cancelled = false;
+    // A stream that keeps growing is stopped when it is noticed, not at the deadline.
+    let oversized =
+        |file: &std::fs::File| file.metadata().is_ok_and(|data| data.len() >= OUTPUT_LIMIT);
+    let mut flooded = false;
     let (status, timed_out) = loop {
         #[cfg(unix)]
         if child.exited()? {
@@ -238,7 +314,8 @@ pub(super) fn capture_controlled(
             break (status, false);
         }
         cancelled = cancel.is_some_and(|c| c.load(Ordering::Relaxed));
-        if cancelled || Instant::now() >= deadline {
+        flooded = oversized(&stdout) || oversized(&stderr);
+        if cancelled || flooded || Instant::now() >= deadline {
             #[cfg(unix)]
             break (child.finish()?, true);
             #[cfg(not(unix))]
@@ -247,28 +324,34 @@ pub(super) fn capture_controlled(
                 break (child.wait()?, true);
             }
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(POLL);
     };
+    /// At most `OUTPUT_LIMIT` bytes, with a visible mark when the stream held more.
     fn read(file: &mut std::fs::File) -> Result<String> {
+        let truncated = file.metadata()?.len() >= OUTPUT_LIMIT;
+        let keep = if truncated {
+            OUTPUT_LIMIT - TRUNCATED.len() as u64
+        } else {
+            OUTPUT_LIMIT
+        };
         file.seek(SeekFrom::Start(0))?;
         let mut bytes = Vec::new();
-        file.take(256 * 1024).read_to_end(&mut bytes)?;
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
+        file.take(keep).read_to_end(&mut bytes)?;
+        let mut text = String::from_utf8_lossy(&bytes).into_owned();
+        if truncated {
+            text.push_str(TRUNCATED);
+        }
+        Ok(text)
     }
-    anyhow::ensure!(!cancelled, "native diagnostic cancelled");
-    if cancel.is_some() {
-        anyhow::ensure!(
-            stdout.metadata()?.len() < OUTPUT_LIMIT && stderr.metadata()?.len() < OUTPUT_LIMIT,
-            "native diagnostic output limit (256 KiB per stream) reached"
-        );
-    }
+    anyhow::ensure!(!cancelled, "{label} cancelled");
+    // Stopped while running, or a tool whose every byte is under a hard limit.
+    let over = oversized(&stdout) || oversized(&stderr);
+    anyhow::ensure!(
+        !(flooded || hard_limit && over),
+        "{label} output limit (256 KiB per stream) reached: the process was stopped"
+    );
     let stderr = read(&mut stderr)?;
-    let label = if cancel.is_some() {
-        "native diagnostic"
-    } else {
-        "SSH command"
-    };
-    anyhow::ensure!(!timed_out, "{label} timed out: {}", stderr.trim());
+    anyhow::ensure!(!timed_out, "{label} timed out: {}", excerpt(&stderr));
     Ok((status, read(&mut stdout)?, stderr))
 }
 
@@ -288,7 +371,8 @@ struct Job {
 }
 #[derive(Default)]
 struct Work {
-    active_icmp: usize,
+    /// Jobs that may own a native child: waited for when the session ends.
+    active_native: usize,
     cancel: Arc<AtomicBool>,
     queue: VecDeque<Job>,
     stopped: bool,
@@ -296,13 +380,13 @@ struct Work {
 
 /// Registered under the queue lock before a job can leave it. Every return and
 /// unwind releases the count after the owned native child has been cleaned up.
-struct ActiveIcmp(Option<Arc<(Mutex<Work>, std::sync::Condvar)>>);
-impl Drop for ActiveIcmp {
+struct ActiveNative(Option<Arc<(Mutex<Work>, std::sync::Condvar)>>);
+impl Drop for ActiveNative {
     fn drop(&mut self) {
         if let Some(work) = &self.0 {
             let (lock, ready) = &**work;
             let mut state = lock.lock().unwrap_or_else(|error| error.into_inner());
-            state.active_icmp -= 1;
+            state.active_native -= 1;
             ready.notify_all();
         }
     }
@@ -316,10 +400,10 @@ pub struct Inspector {
 impl Default for Inspector {
     fn default() -> Self {
         let work = Arc::new((Mutex::new(Work::default()), std::sync::Condvar::new()));
-        for _ in 0..8 {
+        for _ in 0..WORKERS {
             let work = Arc::clone(&work);
             thread::spawn(move || loop {
-                let (job, _active) = {
+                let (job, mut active) = {
                     let (lock, ready) = &*work;
                     let Ok(mut state) = lock.lock() else { return };
                     while state.queue.is_empty() && !state.stopped {
@@ -330,13 +414,10 @@ impl Default for Inspector {
                         return;
                     }
                     let job = state.queue.pop_front().expect("nonempty job queue");
-                    let active = if job.method == AvailabilityMethod::Icmp {
-                        state.active_icmp += 1;
-                        Some(Arc::clone(&work))
-                    } else {
-                        None
-                    };
-                    (job, ActiveIcmp(active))
+                    // Registered under the queue lock, whatever the method: an
+                    // SSH diagnostic owns ssh processes just as ICMP owns ping.
+                    state.active_native += 1;
+                    (job, ActiveNative(Some(Arc::clone(&work))))
                 };
                 let Job {
                     host,
@@ -350,17 +431,19 @@ impl Default for Inspector {
                     continue;
                 }
                 let started = Instant::now();
-                let deadline = started + Duration::from_secs(5);
-                let effective = if method == AvailabilityMethod::Icmp {
-                    resolve_controlled(
-                        &config,
-                        &host.name,
-                        deadline.saturating_duration_since(Instant::now()),
-                        Some(&cancel),
-                    )
-                } else {
-                    resolve(&config, &host.name)
-                }
+                let deadline = started + OPERATION_TIMEOUT;
+                // Both methods resolve under the same deadline and cancellation;
+                // only a tool this application owns gets the hard file limit.
+                let effective = resolve_controlled(
+                    &config,
+                    &host.name,
+                    deadline.saturating_duration_since(Instant::now()),
+                    if method == AvailabilityMethod::Icmp {
+                        Control::owned_tool(&cancel)
+                    } else {
+                        Control::ssh(Some(&cancel))
+                    },
+                )
                 .map_err(|error| format!("{error:#}"));
                 if cancel.load(Ordering::Relaxed) {
                     continue;
@@ -386,7 +469,15 @@ impl Default for Inspector {
                             ping.duration = started.elapsed();
                             ping
                         }
-                        Ok(value) => super::ping_host(&value.host(&host), &config),
+                        Ok(value) => {
+                            let target = value.host(&host);
+                            if !super::via_proxy(&target) {
+                                // A direct handshake owns no process: the end of
+                                // the session does not have to wait for it.
+                                drop(std::mem::replace(&mut active, ActiveNative(None)));
+                            }
+                            super::ping_host(&target, &config, Some(&cancel))
+                        }
                         Err(error) => PingResult {
                             method,
                             name: host.name.clone(),
@@ -452,8 +543,10 @@ impl Drop for Inspector {
             state.queue.clear();
             ready.notify_all();
             // The terminal guard is restored before Inspector is dropped. Waiting
-            // here prevents process exit from abandoning ICMP workers mid-cleanup.
-            while state.active_icmp > 0 {
+            // here prevents process exit from abandoning a worker that still owns
+            // a native child (ping, ssh -G, proxy check). Cancellation is seen
+            // within one poll, so this wait is short and never indefinite.
+            while state.active_native > 0 {
                 state = ready.wait(state).unwrap_or_else(|error| error.into_inner());
             }
         }
@@ -680,12 +773,192 @@ mod tests {
         let (status, _, stderr) = capture(&mut command, Duration::from_secs(2)).unwrap();
         assert_eq!(status.code(), Some(37));
         assert!(stderr.len() <= 256 * 1024);
+        // The cut is visible instead of silent, and the exit status is kept.
+        assert!(stderr.ends_with("[output truncated at 256 KiB]"), "tail");
         let mut command = Command::new("sh");
         command.args(["-c", "echo timeout-cause >&2; sleep 30 & wait"]);
         let started = Instant::now();
         let error = capture(&mut command, Duration::from_millis(100)).unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(2));
         assert!(error.to_string().contains("timed out: timeout-cause"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod bounded_diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn runaway_output_is_stopped_when_noticed_not_at_the_deadline() {
+        for stream in ["", " >&2"] {
+            let mut command = Command::new("sh");
+            command.args(["-c", &format!("while :; do echo flood{stream}; done")]);
+            let started = Instant::now();
+            let error = capture(&mut command, Duration::from_secs(30)).unwrap_err();
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "stopped long before the 30 s deadline: {:?}",
+                started.elapsed()
+            );
+            let message = error.to_string();
+            assert!(
+                message
+                    .contains("output limit (256 KiB per stream) reached: the process was stopped"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ssh_diagnostic_is_cancelled_at_once_and_says_so() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = Arc::clone(&cancel);
+        let waker = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            stop.store(true, Ordering::Relaxed);
+        });
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        let started = Instant::now();
+        let error = capture_with(
+            &mut command,
+            Duration::from_secs(30),
+            Control::ssh(Some(&cancel)),
+        )
+        .unwrap_err();
+        waker.join().unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(error.to_string(), "SSH command cancelled");
+        // A cancellation already requested starts nothing at all.
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+        assert!(capture_with(
+            &mut command,
+            Duration::from_secs(1),
+            Control::ssh(Some(&cancel))
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn an_ssh_helper_keeps_its_own_files_while_an_owned_tool_is_hard_limited() {
+        let temp = tempfile::tempdir().unwrap();
+        let log = temp.path().join("helper.log");
+        let script = format!(
+            "head -c 400000 /dev/zero > '{}' && echo done",
+            log.display()
+        );
+        // A proxy helper or a Match exec command may write its own large file.
+        let mut command = Command::new("sh");
+        command.args(["-c", &script]);
+        let cancel = AtomicBool::new(false);
+        let (status, stdout, _) = capture_with(
+            &mut command,
+            Duration::from_secs(5),
+            Control::ssh(Some(&cancel)),
+        )
+        .unwrap();
+        assert!(status.success());
+        assert_eq!(stdout.trim(), "done");
+        assert_eq!(std::fs::metadata(&log).unwrap().len(), 400_000);
+        // A tool this application fully owns cannot write past the limit anywhere.
+        std::fs::remove_file(&log).unwrap();
+        let mut command = Command::new("sh");
+        command.args(["-c", &script]);
+        let outcome = capture_with(
+            &mut command,
+            Duration::from_secs(5),
+            Control::owned_tool(&cancel),
+        );
+        assert!(std::fs::metadata(&log).unwrap().len() <= OUTPUT_LIMIT);
+        assert!(
+            !outcome.is_ok_and(|(status, stdout, _)| status.success() && stdout.trim() == "done")
+        );
+    }
+
+    #[test]
+    fn a_long_diagnostic_keeps_its_useful_end_with_a_visible_cut() {
+        assert_eq!(excerpt("  short cause \n"), "short cause");
+        let long = format!("{}final cause", "x".repeat(10_000));
+        let cut = excerpt(&long);
+        assert!(cut.starts_with("[beginning truncated] "), "{cut}");
+        assert!(cut.ends_with("final cause"));
+        assert!(cut.chars().count() <= EXCERPT + 30);
+        // Multi-byte text is cut on character boundaries.
+        let accents = "é".repeat(5_000);
+        assert!(excerpt(&accents).ends_with('é'));
+    }
+
+    #[test]
+    fn session_limits_are_stated_and_the_pool_never_exceeds_them() {
+        // One session: at most WORKERS operations, hence twice as many capture
+        // files of at most OUTPUT_LIMIT each while they are being watched.
+        assert_eq!(WORKERS, 8);
+        assert_eq!(OUTPUT_LIMIT, 256 * 1024);
+        assert_eq!(OPERATION_TIMEOUT, Duration::from_secs(5));
+        assert!(POLL <= Duration::from_millis(20));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_end_of_the_session_stops_ssh_diagnostics_without_waiting_for_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let pid = temp.path().join("pid");
+        let config = temp.path().join("config");
+        // `ssh -G` waits for this Match exec command: a diagnostic that would
+        // last until its deadline if nothing stopped it.
+        std::fs::write(
+            &config,
+            format!(
+                "Host slow\n HostName 127.0.0.1\nMatch exec \"sh -c 'echo $$ > {}; sleep 30'\"\n User fixture\n",
+                pid.display()
+            ),
+        )
+        .unwrap();
+        let inspector = Inspector::default();
+        let receiver = inspector.inspect_with_method(
+            vec![Host {
+                name: "slow".into(),
+                ..Host::default()
+            }],
+            config,
+            true,
+            AvailabilityMethod::Ssh,
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !pid.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(pid.exists(), "the diagnostic started its helper");
+        let started = Instant::now();
+        drop(inspector);
+        // Ended by cancellation, well before the 5 s deadline of the operation.
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "a cancelled diagnostic reports nothing"
+        );
+        let helper: i32 = std::fs::read_to_string(&pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let stat = std::fs::read_to_string(format!("/proc/{helper}/stat"));
+        let live = stat.is_ok_and(|stat| {
+            !matches!(
+                stat.rsplit_once(") ").unwrap().1.chars().next(),
+                Some('Z' | 'X')
+            )
+        });
+        assert!(!live, "the helper of the cancelled diagnostic was stopped");
     }
 }
 

@@ -2372,7 +2372,8 @@ fn manual_reload_old_native_generation_cannot_overwrite_new_cache() {
     let release = temp.path().join("release");
     let finished = temp.path().join("finished");
     // Block a real old ssh -G after it has read the old values. The new generation
-    // can finish on another worker while this one still owns its old sender.
+    // finishes on another worker; the old diagnostic is cancelled by the reload
+    // and its helper is stopped instead of running to its end.
     std::fs::write(&root, format!(
         "Host fixture\n HostName 127.0.0.1\n User old-user\n Port 2201\nMatch exec \"touch {}; while test ! -e {}; do sleep 0.02; done; touch {}\"\n",
         ready.display(), release.display(), finished.display()
@@ -2407,14 +2408,13 @@ fn manual_reload_old_native_generation_cannot_overwrite_new_cache() {
     assert_eq!(fresh.effective.as_ref().unwrap().user, "new-user");
     m.effective.insert(fresh.name, fresh.effective);
     std::fs::write(&release, "").unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    while !finished.exists() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "old native resolver did not finish"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    // Released or not, the old helper was stopped: it never completes.
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !finished.exists(),
+        "the old native resolver was cancelled with its generation"
+    );
+    drop(inspector);
     for result in receiver {
         m.effective.insert(result.name, result.effective);
     }
@@ -3458,14 +3458,10 @@ fn advanced_search_saved_pending_reload_cancels_preference_and_excludes_old_gene
         m.filter(true);
         m.apply_inspection(receiver.recv_timeout(Duration::from_secs(3)).unwrap());
         fs::write(&release, "").unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        while !finished.exists() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "old generation must finish"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        // The old diagnostic was cancelled with its generation: released
+        // or not, its helper was stopped and never completes.
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!finished.exists(), "old generation is stopped, not awaited");
         for result in receiver {
             m.apply_inspection(result);
         }
