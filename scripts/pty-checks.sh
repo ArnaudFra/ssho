@@ -22,7 +22,7 @@ python3 tests/pty_smoke.py "$binary"
 for mode in source-filter file-tags launcher aliases groups; do
     python3 tests/pty_smoke.py "$binary" "--$mode-only"
 done
-for name in batch keys availability columns initial_query ux; do
+for name in batch keys availability columns initial_query ux completion; do
     python3 "tests/pty_$name.py" "$binary" "$work/$name"
 done
 echo "PTY checks passed: $binary"

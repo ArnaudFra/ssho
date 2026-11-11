@@ -224,12 +224,13 @@ Les vues sont conservées dans `ssho/views.json`, séparément pour chaque fichi
 
 ### Préférences, données et premier lancement
 
-`o` depuis le tableau, ou F2 → **Preferences** (*Préférences*), ouvre un écran unique pour les options de l'application, en cinq sections :
+`o` depuis le tableau, ou F2 → **Preferences** (*Préférences*), ouvre un écran unique pour les options de l'application, en six sections :
 
 - **Apparence** : langue, couleurs, symboles ASCII.
 - **Liste des hôtes** : recherche au démarrage, groupes, alias regroupés, colonnes (Entrée ouvre leur éditeur, qui enregistre de lui-même).
 - **Connexion et diagnostics** : méthode de disponibilité (SSH / ICMP local), sondes au démarrage, avis de mise à jour, lanceur SSH (lecture seule : tableau d'arguments littéraux de `ssh_command`, qui ne lance que les connexions ordinaires — tunnels, lots, `ssh -G` et sondes utilisent toujours `ssh`).
 - **Clavier** : touche des actions rapides, Échap quittant ou non à la liste, raccourcis.
+- **Outils natifs (lecture seule)** : `ssh`, `sftp`, `ssh-keygen`, `ssh-copy-id`, `ssh-add`, `ping` — trouvé ou non dans le `PATH`, usage, et quoi faire s'il manque.
 - **Données (lecture seule)** : dossier de l'application, `config.json` (préférences), `metadata.json` (favoris et notes), `sshm_history.json` (historique), `tunnel_profiles.json` (profils de tunnels), `views.json` (vues enregistrées), `commands.json` (commandes enregistrées), `backups/` (sauvegardes), `data-backups/` (copies avant import) et la configuration SSH lue par la session.
 
 Chaque ligne montre la valeur en cours ; sous la liste, l'option qui a le focus est expliquée (son effet, puis « prend effet dès l'application » ou « au prochain démarrage ») et une valeur longue, comme un chemin, y est répétée en entier. ↑↓ choisit une option ; Espace, Entrée ou ←/→ change sa valeur **dans le brouillon** : la ligne porte « ● modifié » et rien n'est écrit. Tab atteint les boutons **Appliquer**, **Annuler** et **Valeurs par défaut** ; Ctrl+S applique aussi. « Valeurs par défaut » remplit seulement le brouillon (les options sans ligne propre, colonnes et lanceur, sont conservées) et place le focus sur Appliquer. Échap ou Annuler sur un brouillon modifié demande confirmation, focus sur « Continuer l'édition ». Appliquer relit `config.json`, n'y remplace que les options de cet écran — une option modifiée ailleurs entre-temps n'est pas écrasée — puis confirme « ✓ Préférences enregistrées ».
@@ -570,6 +571,8 @@ ssho completion fish | source
 ssho completion powershell | Out-String | Invoke-Expression
 ```
 
+Le script de complétion est enregistré pour le nom `ssho`. Bash applique la même complétion à un lancement par chemin (`./target/release/ssho`), car il se rabat sur le dernier composant du chemin : c'est vérifié dans un Bash interactif réel par `tests/pty_completion.py`, pour le nom installé comme pour un chemin, hôtes et sous-commandes. Les tests des scripts Zsh, Fish et PowerShell portent sur leur contenu. Demander une complétion ne crée aucun dossier applicatif.
+
 ## Vérification
 
 ```sh
@@ -611,7 +614,17 @@ Tous les tests utilisent des dossiers temporaires. Les parcours de connexion et 
 
 La vérification des mises à jour interroge, en arrière-plan, le dépôt de releases fixé à la compilation par `SSHO_REPOSITORY=ArnaudFra/ssho` ou `SSHO_RELEASES_URL=https://…` ; sans l'une de ces variables, aucune requête n'est faite. Les préférences et `--no-update-check` désactivent la vérification.
 
-Le programme et les parcours terminal sont testés sous Linux. Les chemins et branches spécifiques macOS/Windows existent mais ne sont pas testés.
+**Plateformes.**
+
+| Plateforme | Prise en charge |
+| --- | --- |
+| Linux x86_64 | Plateforme de développement : tests Rust, parcours en pseudo-terminal, tests d'installation (`tests/distribution.py`), complétion Bash. |
+| Linux ARM64, macOS Intel, macOS ARM64 | Compilées et testées par `ci.yml` ; archives produites par `release.yml`. |
+| Windows | Pas d'archive. Des branches de code existent (chemins, `%APPDATA%`) mais ne sont ni compilées ni testées. |
+
+Le workflow de release compile l'adresse du dépôt qui publie (`SSHO_REPOSITORY`), pour qu'un binaire publié cherche ses mises à jour dans sa propre distribution.
+
+**Outils natifs.** `ssh` est indispensable. `sftp`, `ssh-keygen`, `ssh-copy-id`, `ssh-add` et `ping` ne servent chacun qu'à une fonction : s'ils manquent, seule cette fonction échoue, avec la raison. L'écran Préférences (`o`), section **Outils natifs**, indique pour chacun s'il est trouvé dans le `PATH` (sans le lancer), à quoi il sert et quoi faire s'il manque.
 
 ## Licence
 

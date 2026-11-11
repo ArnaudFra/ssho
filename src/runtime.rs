@@ -111,6 +111,39 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
     1
 }
 
+/// Where a native tool would be started from, without running it: the first
+/// executable file of that name in `PATH`.
+pub fn find_tool(name: &str) -> Option<PathBuf> {
+    find_tool_in(name, &std::env::var_os("PATH")?)
+}
+
+fn find_tool_in(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
+    let names: Vec<String> = if cfg!(windows) {
+        vec![format!("{name}.exe"), name.to_owned()]
+    } else {
+        vec![name.to_owned()]
+    };
+    std::env::split_paths(path)
+        .filter(|directory| !directory.as_os_str().is_empty())
+        .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+        .find(|candidate| is_executable(candidate))
+}
+
+fn is_executable(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
+}
+
 /// Arguments of the native SFTP client for one exact alias: the configuration
 /// in use, then the alias after `--` so that it can never be read as an option.
 pub fn sftp_arguments(config: &Path, name: &str) -> Result<Vec<String>> {
@@ -342,6 +375,34 @@ mod sftp_tests {
         }
         // An alias that looks like shell syntax is still a single argument.
         assert_eq!(sftp_arguments(config, "a;id $(x)").unwrap()[3], "a;id $(x)");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tool_is_found_in_path_order_only_when_it_is_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let (first, second) = (temp.path().join("first"), temp.path().join("second"));
+        for directory in [&first, &second] {
+            std::fs::create_dir(directory).unwrap();
+        }
+        // Present but not executable in the first directory: not a tool.
+        std::fs::write(first.join("sftp"), "").unwrap();
+        std::fs::set_permissions(first.join("sftp"), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+        std::fs::write(second.join("sftp"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(second.join("sftp"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::fs::create_dir(second.join("ping")).unwrap();
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        assert_eq!(find_tool_in("sftp", &path), Some(second.join("sftp")));
+        assert_eq!(
+            find_tool_in("ping", &path),
+            None,
+            "a directory is not a tool"
+        );
+        assert_eq!(find_tool_in("ssh-copy-id", &path), None);
+        assert_eq!(find_tool_in("sftp", std::ffi::OsStr::new("")), None);
     }
 
     #[test]

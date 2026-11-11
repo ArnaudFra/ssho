@@ -3925,3 +3925,42 @@ fn sftp_targets_the_exact_alias_and_says_it_is_the_native_client() {
     assert_eq!(m.key(key(KeyCode::Char('S'))), Action::None);
     assert!(m.hint.contains("Sélectionnez un hôte"), "{}", m.hint);
 }
+
+#[test]
+fn native_tools_are_listed_with_their_use_and_what_to_do_when_missing() {
+    let mut m = model(serde_json::json!({}));
+    m.key(key(KeyCode::Char('o')));
+    // The lookup never runs a tool; the test fixes what it found.
+    if let View::Preferences(editor) = &mut m.view {
+        assert_eq!(editor.tools.len(), 6, "one entry per native tool");
+        for (row, found) in &mut editor.tools {
+            *found =
+                (*row != prefs::Row::ToolSftp).then(|| format!("/usr/bin/{}", row.label()).into());
+        }
+    }
+    focus_row(&mut m, prefs::Row::ToolSftp);
+    let text = flat(&screen(&mut m, 110, 44));
+    for expected in [
+        "Outils natifs (lecture seule)",
+        "ssh /usr/bin/ssh",
+        "> sftp introuvable dans le PATH",
+        "ssh-keygen /usr/bin/ssh-keygen",
+        "Utilisé par « SFTP : ouvrir une session ». Absent : seule cette action échoue, avec la raison",
+    ] {
+        let squeezed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(squeezed.contains(expected), "missing {expected}: {squeezed}");
+    }
+    // A tool is information: nothing is editable or launched from its row.
+    m.key(key(KeyCode::Enter));
+    assert!(preferences_of(&m).notice.contains("Lecture seule"));
+    assert!(!preferences_of(&m).dirty());
+    focus_row(&mut m, prefs::Row::ToolSsh);
+    let text = flat(&screen(&mut m, 110, 44));
+    assert!(
+        text.contains("Indispensable : connexions, tunnels, lots"),
+        "{text}"
+    );
+    focus_row(&mut m, prefs::Row::ToolPing);
+    let text = flat(&screen(&mut m, 110, 44));
+    assert!(text.contains("la méthode SSH n'en a pas besoin"), "{text}");
+}

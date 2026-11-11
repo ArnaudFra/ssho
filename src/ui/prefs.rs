@@ -35,10 +35,16 @@ pub(super) enum Row {
     DataBackups,
     DataImportBackups,
     DataSshConfig,
+    ToolSsh,
+    ToolSftp,
+    ToolKeygen,
+    ToolCopyId,
+    ToolAdd,
+    ToolPing,
 }
 
 /// Sections in display order; the rows keep a single Up/Down order across them.
-pub(super) fn sections() -> [(&'static str, &'static [Row]); 5] {
+pub(super) fn sections() -> [(&'static str, &'static [Row]); 6] {
     [
         (
             crate::t!("Appearance", "Apparence"),
@@ -79,6 +85,17 @@ pub(super) fn sections() -> [(&'static str, &'static [Row]); 5] {
                 Row::DataBackups,
                 Row::DataImportBackups,
                 Row::DataSshConfig,
+            ],
+        ),
+        (
+            crate::t!("Native tools (read-only)", "Outils natifs (lecture seule)"),
+            &[
+                Row::ToolSsh,
+                Row::ToolSftp,
+                Row::ToolKeygen,
+                Row::ToolCopyId,
+                Row::ToolAdd,
+                Row::ToolPing,
             ],
         ),
     ]
@@ -134,6 +151,12 @@ impl Row {
             Self::DataBackups => crate::t!("Backups", "Sauvegardes"),
             Self::DataImportBackups => crate::t!("Copies before import", "Copies avant import"),
             Self::DataSshConfig => crate::t!("SSH configuration", "Configuration SSH"),
+            Self::ToolSsh => "ssh",
+            Self::ToolSftp => "sftp",
+            Self::ToolKeygen => "ssh-keygen",
+            Self::ToolCopyId => "ssh-copy-id",
+            Self::ToolAdd => "ssh-add",
+            Self::ToolPing => "ping",
         }
     }
 
@@ -152,6 +175,12 @@ impl Row {
                 | Self::DataBackups
                 | Self::DataImportBackups
                 | Self::DataSshConfig
+                | Self::ToolSsh
+                | Self::ToolSftp
+                | Self::ToolKeygen
+                | Self::ToolCopyId
+                | Self::ToolAdd
+                | Self::ToolPing
         )
     }
 
@@ -221,6 +250,15 @@ impl Row {
             Self::DataBackups => data("backups"),
             Self::DataImportBackups => data("data-backups"),
             Self::DataSshConfig => m.batch.root.display().to_string(),
+            Self::ToolSsh
+            | Self::ToolSftp
+            | Self::ToolKeygen
+            | Self::ToolCopyId
+            | Self::ToolAdd
+            | Self::ToolPing => match editor.tools.iter().find(|(row, _)| *row == self) {
+                Some((_, Some(path))) => path.display().to_string(),
+                _ => crate::t!("not found in PATH", "introuvable dans le PATH").to_owned(),
+            },
         }
     }
 
@@ -403,6 +441,48 @@ impl Row {
                 ),
                 read_only,
             ],
+            Self::ToolSsh => [
+                crate::t!(
+                    "Required: connections, tunnels, batches, effective configuration (ssh -G) and proxy checks. Missing: install the OpenSSH client.",
+                    "Indispensable : connexions, tunnels, lots, configuration effective (ssh -G) et contrôles via proxy. Absent : installez le client OpenSSH."
+                ),
+                read_only,
+            ],
+            Self::ToolSftp => [
+                crate::t!(
+                    "Used by \"SFTP: open a session\". Missing: only that action fails, with the reason; it comes with the OpenSSH client.",
+                    "Utilisé par « SFTP : ouvrir une session ». Absent : seule cette action échoue, avec la raison ; il est fourni avec le client OpenSSH."
+                ),
+                read_only,
+            ],
+            Self::ToolKeygen => [
+                crate::t!(
+                    "Used by the key screen: fingerprints and key generation. Missing: keys are listed without fingerprint and cannot be created here.",
+                    "Utilisé par l'écran des clés : empreintes et génération. Absent : les clés sont listées sans empreinte et ne peuvent pas être créées ici."
+                ),
+                read_only,
+            ],
+            Self::ToolCopyId => [
+                crate::t!(
+                    "Used by \"Deploy public key\". Missing: only that action fails; it is a separate package on some systems.",
+                    "Utilisé par « Déployer la clé publique ». Absent : seule cette action échoue ; c'est un paquet séparé sur certains systèmes."
+                ),
+                read_only,
+            ],
+            Self::ToolAdd => [
+                crate::t!(
+                    "Used by \"Add to agent\". Missing, or no agent running: only that action fails, with the message of the tool.",
+                    "Utilisé par « Ajouter à l'agent ». Absent, ou sans agent lancé : seule cette action échoue, avec le message de l'outil."
+                ),
+                read_only,
+            ],
+            Self::ToolPing => [
+                crate::t!(
+                    "Used by the \"ICMP local\" availability method only. Missing or not permitted: the state is \"unknown\"; the SSH method does not need it.",
+                    "Utilisé par la méthode de disponibilité « ICMP local » seulement. Absent ou non autorisé : l'état est « inconnu » ; la méthode SSH n'en a pas besoin."
+                ),
+                read_only,
+            ],
             Self::DataSshConfig => [
                 crate::t!(
                     "The OpenSSH configuration read by this session (option -c to choose another one).",
@@ -429,6 +509,8 @@ pub(super) struct Editor {
     pub(super) notice: String,
     /// Prefix to give back when the quick actions key is switched on again.
     prefix: String,
+    /// Native tools as found in PATH when the screen was opened; none is run.
+    pub(super) tools: Vec<(Row, Option<std::path::PathBuf>)>,
 }
 
 impl Editor {
@@ -469,6 +551,17 @@ pub(super) fn open(m: &mut Model) {
         scroll: 0,
         notice: String::new(),
         prefix,
+        tools: [
+            Row::ToolSsh,
+            Row::ToolSftp,
+            Row::ToolKeygen,
+            Row::ToolCopyId,
+            Row::ToolAdd,
+            Row::ToolPing,
+        ]
+        .into_iter()
+        .map(|row| (row, crate::runtime::find_tool(row.label())))
+        .collect(),
     })));
     m.error.clear();
 }
