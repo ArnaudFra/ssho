@@ -1,6 +1,6 @@
 [package]
 name = "ssho"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "SSH Organizer: a terminal SSH manager based on SSHM, implemented in Rust"
 license = "MIT"
