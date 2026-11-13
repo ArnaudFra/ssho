@@ -157,6 +157,7 @@ pub fn prepare_restore(backup: &Backup) -> Result<PreparedChange> {
         Some(&record.destination) == backup.destination.as_ref(),
         "backup destination changed; reload backups and retry"
     );
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut snapshot = Snapshot::read(&record.access)?;
     anyhow::ensure!(
         snapshot.path == record.destination,

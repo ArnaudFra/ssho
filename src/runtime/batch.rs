@@ -2,11 +2,13 @@
 use crate::types::Host;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+#[cfg(unix)]
+use std::process::{Command, Stdio};
 use std::{
     collections::BTreeSet,
     io::Read,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::Child,
     time::{Duration, Instant},
 };
 
@@ -334,6 +336,7 @@ struct OwnedChild {
     group_owned: bool,
 }
 impl OwnedChild {
+    #[cfg_attr(not(unix), allow(unused_variables))]
     fn spawn(program: &Path, args: &[String]) -> Result<Self> {
         #[cfg(not(unix))]
         anyhow::bail!("bounded batch process ownership requires Unix");

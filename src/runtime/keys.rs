@@ -80,8 +80,8 @@ pub fn review_public(path: &Path, keygen: &Path) -> Result<PublicKey> {
         unsafe {
             command.pre_exec(|| {
                 let limit = libc::rlimit {
-                    rlim_cur: PUBLIC_LIMIT,
-                    rlim_max: PUBLIC_LIMIT,
+                    rlim_cur: PUBLIC_LIMIT as libc::rlim_t,
+                    rlim_max: PUBLIC_LIMIT as libc::rlim_t,
                 };
                 if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
                     return Err(std::io::Error::last_os_error());

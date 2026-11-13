@@ -1,6 +1,7 @@
+#[cfg(unix)]
+use std::path::Path;
 use std::{
     fs,
-    path::Path,
     process::{Command, Output},
 };
 

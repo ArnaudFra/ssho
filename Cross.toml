@@ -1,0 +1,4 @@
+# Cross-compiled release targets (32-bit Linux): the build container must see
+# the repository the binary will look for its updates in.
+[build.env]
+passthrough = ["SSHO_REPOSITORY"]

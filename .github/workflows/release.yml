@@ -1,12 +1,14 @@
 name: Release
 
-# Pushing a version tag (v0.1.0, v0.2.0-rc.1...) builds and tests the four
-# archives, then publishes the GitHub release. Nothing else starts this workflow.
+# Pushing a version tag (v1.0.0, v1.1.0-rc.1...) builds and tests the archives,
+# then publishes the GitHub release. Started by hand from the Actions tab, the
+# workflow only builds: it is the way to try the targets without releasing.
 on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,15 +25,50 @@ jobs:
         include:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            archive: Linux_x86_64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            archive: Linux_arm64
           - runner: macos-15-intel
             target: x86_64-apple-darwin
+            archive: Darwin_x86_64
           - runner: macos-15
             target: aarch64-apple-darwin
+            archive: Darwin_arm64
+          # 32-bit Linux is cross-compiled in a container and cannot run its
+          # tests here. A failure of one of these does not block the release:
+          # its archive is simply missing.
+          - runner: ubuntu-24.04
+            target: i686-unknown-linux-gnu
+            archive: Linux_i386
+            cross: true
+          - runner: ubuntu-24.04
+            target: armv7-unknown-linux-gnueabihf
+            archive: Linux_armv7
+            cross: true
+          - runner: ubuntu-24.04
+            target: arm-unknown-linux-gnueabihf
+            archive: Linux_armv6
+            cross: true
+          # Windows is built natively, without running the tests: most of them
+          # drive Unix tools. A failure does not block the release either.
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            archive: Windows_x86_64
+            windows: true
+          - runner: windows-2025
+            target: i686-pc-windows-msvc
+            archive: Windows_i386
+            windows: true
     runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.cross || matrix.windows || false }}
+    defaults:
+      run:
+        shell: bash
     env:
       TARGET: ${{ matrix.target }}
+      WINDOWS: ${{ matrix.windows || false }}
+      ARCHIVE: ssho_${{ matrix.archive }}.${{ matrix.windows && 'zip' || 'tar.gz' }}
       # Compiled in: a released binary looks for updates in the repository that
       # released it, never in another project.
       SSHO_REPOSITORY: ${{ github.repository }}
@@ -41,56 +78,71 @@ jobs:
         with:
           persist-credentials: false
       - name: The tag must be the version of Cargo.toml
-        shell: bash
         run: |
           set -euo pipefail
           version=$(sed -n '/^\[package\]/,/^\[/s/^version = "\([^"]*\)"$/\1/p' Cargo.toml)
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
-          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
             echo "Tag $GITHUB_REF_NAME does not match version $version of Cargo.toml." >&2
             exit 1
           fi
           printf 'RELEASE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
       - name: Install the declared minimum Rust toolchain
         run: rustup toolchain install 1.88.0 --profile minimal
+      - name: Add the Windows target
+        if: ${{ matrix.windows }}
+        run: rustup target add --toolchain 1.88.0 "$TARGET"
       - name: Build native release
+        if: ${{ !matrix.cross }}
         run: cargo +1.88.0 build --release --locked --target "$TARGET"
+      - name: Build in a cross-compilation container
+        if: ${{ matrix.cross }}
+        run: |
+          cargo install cross --locked --version 0.2.5
+          cross +1.88.0 build --release --locked --target "$TARGET"
       - name: Rust tests
+        if: ${{ !matrix.cross && !matrix.windows }}
         run: cargo +1.88.0 test --locked
       # Keyboard, focus and terminal-restoration journeys in a real pseudo-terminal,
       # with fake SSH tools. Linux only: the scenarios have not been adapted to macOS.
       - name: Pseudo-terminal journeys
-        if: runner.os == 'Linux'
+        if: ${{ !matrix.cross && runner.os == 'Linux' }}
         run: sh scripts/pty-checks.sh "target/$TARGET/release/ssho"
-      - name: Check distribution scripts
-        run: |
-          sh -n install.sh
-          sh -n scripts/package-release.sh
-          python3 tests/distribution.py
-      - name: Package and smoke test in temporary HOME
-        shell: bash
+      - name: Archive
         run: |
           set -euo pipefail
-          sh scripts/package-release.sh --binary "target/$TARGET/release/ssho" \
-            --target "$TARGET" --version "$RELEASE_VERSION" --tag "v$RELEASE_VERSION" --output-dir dist
-          smoke=$(mktemp -d "$RUNNER_TEMP/sshm-release.XXXXXX")
-          trap 'rm -rf "$smoke"' EXIT
-          export HOME="$smoke/home"
-          mkdir -p "$HOME"
-          sh install.sh --archive "dist/ssho-$TARGET.tar.gz" --target "$TARGET" --version "$RELEASE_VERSION"
-          test "$("$HOME/.local/bin/ssho" --version)" = "ssho version $RELEASE_VERSION"
-          cmp "target/$TARGET/release/ssho" "$HOME/.local/bin/ssho"
-          sh install.sh --uninstall
-          test ! -e "$HOME/.local/bin/ssho"
+          mkdir -p dist stage
+          if [[ "$WINDOWS" == true ]]; then
+            cp "target/$TARGET/release/ssho.exe" LICENSE README.md stage/
+            (cd stage && 7z a -tzip "../dist/$ARCHIVE" ssho.exe LICENSE README.md)
+          else
+            cp "target/$TARGET/release/ssho" LICENSE README.md stage/
+            chmod 755 stage/ssho
+            tar -czf "dist/$ARCHIVE" -C stage ssho LICENSE README.md
+          fi
+      - name: The archived binary runs and reports the version
+        if: ${{ !matrix.cross }}
+        run: |
+          set -euo pipefail
+          smoke=$(mktemp -d)
+          if [[ "$WINDOWS" == true ]]; then
+            7z x "dist/$ARCHIVE" "-o$smoke"
+            reported=$("$smoke/ssho.exe" --version | tr -d '\r')
+          else
+            tar -xzf "dist/$ARCHIVE" -C "$smoke"
+            reported=$("$smoke/ssho" --version)
+          fi
+          test "$reported" = "ssho version $RELEASE_VERSION"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-${{ matrix.target }}
+          name: release-${{ matrix.archive }}
           path: dist/*
           if-no-files-found: error
           archive: true
 
   publish:
     needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -98,13 +150,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The notes are written from the commits since the previous tag.
+          fetch-depth: 0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: release-*
           path: dist
           merge-multiple: true
           digest-mismatch: error
-      - name: Validate all assets and publish the release of the tag
+      - name: Checksums, notes and release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -112,16 +166,15 @@ jobs:
           set -euo pipefail
           version=$(sed -n '/^\[package\]/,/^\[/s/^version = "\([^"]*\)"$/\1/p' Cargo.toml)
           test "$GITHUB_REF_NAME" = "v$version"
-          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
-            asset="ssho-$target.tar.gz"
-            (cd dist && sha256sum --check "$asset.sha256")
-            printf 'format=1\nversion=%s\ntarget=%s\n' "$version" "$target" > expected-manifest
-            tar -xzOf "dist/$asset" MANIFEST > actual-manifest
-            cmp expected-manifest actual-manifest
+          # The four natively built and tested archives are required.
+          for name in Linux_x86_64 Linux_arm64 Darwin_x86_64 Darwin_arm64; do
+            test -s "dist/ssho_$name.tar.gz"
           done
-          set -- dist/*
-          test "$#" -eq 8
+          shopt -s nullglob
+          archives=(dist/ssho_*.tar.gz dist/ssho_*.zip)
+          (cd dist && sha256sum "${archives[@]#dist/}" > checksums.txt)
+          python3 scripts/release-notes.py "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" "${archives[@]}" > notes.md
           if [[ "$version" == *-* ]]; then release_kind=--prerelease; else release_kind=--latest; fi
-          gh release create "$GITHUB_REF_NAME" "$@" install.sh LICENSE docs/INSTALLATION.md \
+          gh release create "$GITHUB_REF_NAME" "${archives[@]}" dist/checksums.txt \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "ssho $version" \
-            --generate-notes "$release_kind"
+            --notes-file notes.md "$release_kind"

@@ -2,10 +2,10 @@
 
 **English:** this guide is also available in English, see [INSTALLATION.md](INSTALLATION.md).
 
-Ce guide décrit la compilation depuis les sources, l'installateur `install.sh`,
-le format des archives, le workflow de release, les plateformes prises en charge
-et les vérifications de développement. Pour l'usage courant, voir le
-[README](../README_fr.md) et le [guide d'utilisation](GUIDE_fr.md).
+Ce guide décrit la compilation depuis les sources, les archives de release, le
+workflow de release, les plateformes prises en charge et les vérifications de
+développement. Pour l'usage courant, voir le [README](../README_fr.md) et le
+[guide d'utilisation](GUIDE_fr.md).
 
 ## Compiler depuis les sources
 
@@ -19,192 +19,90 @@ cargo install --path . --locked
 ```
 
 Cargo installe habituellement dans `$HOME/.cargo/bin`. Pour retirer cette
-installation Cargo : `cargo uninstall ssho`. Les commandes ci-dessous
-concernent l'installateur d'archives/local, dont le répertoire par défaut est
-**`$HOME/.local/bin`**.
+installation : `cargo uninstall ssho`.
 
-## Installer un binaire local ou une archive
+## Archives de release
 
-L'installateur autonome est `install.sh`. Il n'exécute jamais le binaire
-pendant l'installation.
+Chaque release contient une archive par plateforme et un fichier
+`checksums.txt` :
 
-```sh
-sh install.sh --binary ./target/release/ssho
-sh install.sh --binary ./target/release/ssho --bin-dir "$HOME/tools/bin"
-sh install.sh --archive ./ssho-x86_64-unknown-linux-gnu.tar.gz --version 0.1.0
-```
+| Archive | Plateforme |
+| --- | --- |
+| `ssho_Linux_x86_64.tar.gz` | GNU/Linux x86_64, glibc 2.39 ou plus récente |
+| `ssho_Linux_arm64.tar.gz` | GNU/Linux ARM64, glibc 2.39 ou plus récente |
+| `ssho_Linux_i386.tar.gz` | GNU/Linux x86, 32 bits |
+| `ssho_Linux_armv7.tar.gz` | GNU/Linux ARMv7, 32 bits |
+| `ssho_Linux_armv6.tar.gz` | GNU/Linux ARMv6, 32 bits |
+| `ssho_Darwin_x86_64.tar.gz` | macOS 15 ou plus récent, Intel |
+| `ssho_Darwin_arm64.tar.gz` | macOS 15 ou plus récent, Apple Silicon |
+| `ssho_Windows_x86_64.zip` | Windows 10 ou plus récent, x86_64 |
+| `ssho_Windows_i386.zip` | Windows 10 ou plus récent, x86 32 bits |
 
-Une archive locale doit garder son nom de protocole et être accompagnée de
-`ssho-TARGET.tar.gz.sha256`, ou d'un fichier choisi par `--checksum CHEMIN`.
-Le checksum, le format, les membres, la version et la cible sont vérifiés avant
-publication du binaire. `--version` est facultatif pour une archive locale ;
-s'il est fourni, il doit correspondre au manifeste. `--target` sélectionne une
-cible explicite ; sinon le couple `uname -s`/`uname -m` détermine la cible native.
-Un choix explicite ne rend pas un binaire d'une autre architecture exécutable.
-`--binary` accepte uniquement un fichier régulier exécutable non vide nommé
-`ssho`, sans lien symbolique : sa provenance et sa compatibilité restent à
-vérifier par l'utilisateur, aucun checksum de distribution n'est disponible
-pour ce mode.
-
-La destination suit cet ordre, indépendamment de l'ordre des arguments :
-
-1. `--bin-dir DIR` ;
-2. `--prefix DIR`, qui ajoute `/bin` ;
-3. variable non vide `SSHO_INSTALL_DIR` ;
-4. `$HOME/.local/bin`.
-
-Les espaces et les caractères shell sont littéraux lorsqu'ils sont entre
-quotes. Les chemins relatifs partent du répertoire courant. Les composants
-`..`, les nouvelles lignes et tout composant symbolique de la destination sont
-refusés ; choisir son chemin réel (utile si le HOME est lui-même un lien).
-L'installateur refuse un fichier existant sauf avec **`--replace`**. Même avec
-cette option, un lien symbolique, un dossier ou un fichier spécial est refusé.
-Il ne demande jamais `sudo`, ne change aucun profil et ne modifie pas le PATH.
-Une destination non accessible en écriture entraîne une erreur.
-
-Après installation, un message indique si un autre `ssho` trouvé dans le
-PATH peut masquer celui installé. Vérifier `command -v ssho`, utiliser le
-chemin complet ou ajouter manuellement le répertoire voulu au PATH. Un shell
-peut conserver une ancienne résolution en cache (`hash -r` sous bash).
-
-## Télécharger une release
-
-Les releases sont téléchargées depuis `ArnaudFra/ssho` par défaut. `--repo OWNER/REPO`
-ou `SSHO_REPOSITORY` choisit un autre dépôt, un fork par exemple :
+Une archive contient le binaire `ssho` (mode 0755 ; `ssho.exe` dans les archives
+Windows), `LICENSE` et `README.md`, sans répertoire englobant. Pour vérifier un téléchargement et l'installer sans
+aucun privilège :
 
 ```sh
-sh install.sh --version 0.1.0
-sh install.sh --version latest --replace
-sh install.sh --repo OWNER/REPO --version 0.1.0
+sha256sum --check --ignore-missing checksums.txt
+tar -xzf ssho_Linux_x86_64.tar.gz ssho
+mkdir -p ~/.local/bin && mv ssho ~/.local/bin/
 ```
 
-Sans `--version`, le téléchargement choisit `latest`. Pour une version précise,
-le tag est `vVERSION`, sans doubler le `v`. Les versions acceptées ont la forme
-`MAJOR.MINOR.PATCH`, avec éventuellement un suffixe `-prerelease` constitué de
-lettres/chiffres, points et tirets ; pas de métadonnées `+build`. La release
-contient l'installateur à télécharger/lire séparément, sans pipeline `curl | sh`.
-Les URL de données sont :
+Sous macOS, la vérification est `shasum -a 256 --check --ignore-missing checksums.txt`.
+Retirer le programme revient à supprimer ce fichier : les fichiers SSH, les clés
+et `~/.config/ssho` restent intacts.
 
-```text
-https://github.com/ArnaudFra/ssho/releases/download/vVERSION/ssho-TARGET.tar.gz
-https://github.com/ArnaudFra/ssho/releases/latest/download/ssho-TARGET.tar.gz
-```
+Les archives Linux ne sont pas des binaires musl universels, et les binaires
+macOS ne sont ni signés ni notarisés ; les binaires Windows ne sont pas signés
+non plus. Il n'y a pas d'archive pour Android/Termux, ni de paquet Homebrew ou Nix.
 
-Chaque URL possède son compagnon `.sha256`. `curl` impose HTTPS y compris
-après redirection et refuse les erreurs HTTP. Le checksum détecte une corruption
-ou un décalage entre deux téléchargements de `latest` ; il n'est pas une signature
-indépendante du dépôt. Utiliser un dépôt et un installateur de confiance. Les
-archives mal formées sont refusées, sans extraction de leurs chemins dans le
-système utilisateur. Les quatre membres doivent être des fichiers réguliers
-uniques ; seul `MANIFEST` puis `ssho` sont lus par extraction vers stdout.
+## Workflow de release
 
-## Désinstaller en conservant les données
+`.github/workflows/release.yml` fabrique les archives avec Rust 1.88.0 :
 
-```sh
-sh install.sh --uninstall
-sh install.sh --uninstall --bin-dir "$HOME/tools/bin"
-```
-
-La même priorité de destination s'applique. Seul le fichier régulier
-`DIR/ssho` est retiré ; l'installateur ne recherche ni ne supprime d'autres
-copies. Un binaire absent est un succès sans modification. Les répertoires SSH,
-clés, profils, `~/.config/ssho`, historique et sauvegardes restent intacts. Un lien symbolique ou un dossier au nom de `ssho` est refusé.
-
-## Préparer une archive
-
-Le packager prend une version explicite égale à celle de `Cargo.toml`, un binaire
-Cargo de confiance nommé `ssho` et une cible explicite ; il n'exécute pas le
-binaire, y compris en compilation croisée. `--tag`, facultatif, doit être
-exactement `vVERSION`. Il ne prouve pas l'architecture du fichier fourni : le
-workflow construit chaque cible nativement et vérifie ensuite le vrai binaire.
-
-```sh
-sh scripts/package-release.sh \
-  --binary ./target/release/ssho \
-  --target x86_64-unknown-linux-gnu --version 0.1.0 --tag v0.1.0 \
-  --output-dir ./dist/v0.1.0/x86_64-unknown-linux-gnu
-```
-
-`--output-dir` doit être nouveau ; aucune archive existante n'est écrasée. Le
-répertoire complet est préparé à côté, puis publié par renommage. Il contient
-exactement deux fichiers, dont les noms sont stables entre versions :
-
-```text
-ssho-TARGET.tar.gz
-ssho-TARGET.tar.gz.sha256
-```
-
-Le checksum est une ligne ASCII terminée par LF : **64 chiffres hexadécimaux
-minuscules**, **deux espaces**, **nom de l'archive**. L'archive contient exactement
-`ssho` (mode 0755), `LICENSE`, `INSTALLATION.md` et `MANIFEST` (mode 0644), sans
-répertoire englobant. Le manifeste est exactement, avec un LF final :
-
-```text
-format=1
-version=0.1.0
-target=x86_64-unknown-linux-gnu
-```
-
-Les scripts nécessitent un shell Unix, `tar` avec gzip et sortie `-O`, `mktemp`,
-les outils Unix usuels (`cp`, `chmod`, `ln`, `mv`, `cmp`, `sort`, `sed`, `awk`,
-`grep`, etc.) et `sha256sum` ou `shasum -a 256`. `curl` est requis uniquement pour
-le téléchargement. Python 3.11+ n'est nécessaire qu'aux tests de développement (lecture TOML via la bibliothèque standard).
-
-Installation/remplacement préparent un fichier privé sur le même système de
-fichiers puis le publient par lien dur sans écrasement, ou renommage avec
-`--replace`. Installation et désinstallation utilisent le verrou commun
-`DIR/.ssho-install-lock` ; packaging utilise `OUTPUT.lock`. Un verrou occupé
-provoque un refus. Après une interruption non récupérable, supprimer seulement
-le verrou vide devenu obsolète, après avoir vérifié qu'aucun script ne tourne.
-Les temporaires privés sont nettoyés aux sorties normales et aux signaux
-récupérables ; `SIGKILL` ou une panne peut laisser un temporaire à inspecter.
-Les scripts ne nettoient jamais un chemin publié après une erreur.
-
-Cette coordination couvre les scripts coopérants dans des répertoires contrôlés
-par l'utilisateur. Ne pas modifier ces chemins depuis un autre processus pendant
-l'opération ; elle ne protège pas contre un acteur local qui change simultanément
-les répertoires ou fichiers. Le système de fichiers doit accepter les liens durs
-pour une installation sans remplacement.
-
-## Workflow et plateformes
-
-`.github/workflows/release.yml` fabrique les archives sur les runners natifs
-suivants, avec Rust 1.88.0, sans action tierce de configuration Rust :
-
-| Cible | Runner | Limite de compatibilité visée |
+| Cible | Compilée sur | Tests |
 | --- | --- | --- |
-| `x86_64-unknown-linux-gnu` | `ubuntu-24.04` | GNU/Linux, base Ubuntu 24.04 / glibc 2.39 |
-| `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | GNU/Linux ARM64, même base |
-| `x86_64-apple-darwin` | `macos-15-intel` | macOS 15+, Intel |
-| `aarch64-apple-darwin` | `macos-15` | macOS 15+, Apple Silicon |
+| `x86_64-unknown-linux-gnu` | `ubuntu-24.04` | tests Rust, parcours en pseudo-terminal |
+| `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | tests Rust, parcours en pseudo-terminal |
+| `x86_64-apple-darwin` | `macos-15-intel` | tests Rust |
+| `aarch64-apple-darwin` | `macos-15` | tests Rust |
+| `i686-unknown-linux-gnu` | cross | aucun |
+| `armv7-unknown-linux-gnueabihf` | cross | aucun |
+| `arm-unknown-linux-gnueabihf` | cross | aucun |
+| `x86_64-pc-windows-msvc` | `windows-2025` | exécution du binaire archivé |
+| `i686-pc-windows-msvc` | `windows-2025` | exécution du binaire archivé |
 
-Les archives Linux ne sont pas des binaires musl universels. Le workflow fixe
-`MACOSX_DEPLOYMENT_TARGET=15.0` ; les binaires macOS ne sont ni signés ni
-notarisés. Un paquet local hérite de la libc de sa propre machine de
-compilation, pas de la base CI. Il n'y a pas d'archive pour Android/Termux,
-Windows ou ARMv7, ni de paquet NixOS, Homebrew ou Nix.
+Les trois cibles 32 bits sont compilées en croisé dans un conteneur avec
+[cross](https://github.com/cross-rs/cross) et ne peuvent pas exécuter leurs
+tests sur la machine de compilation. Les cibles Windows sont compilées
+nativement mais ne lancent pas la suite de tests, dont l'essentiel pilote des
+outils Unix. Si l'une de ces cinq cibles ne compile pas, la release est publiée
+sans son archive.
 
-Le workflow ne démarre que lorsqu'un tag de version est poussé, et publie
-lui-même la release :
+Le workflow démarre lorsqu'un tag de version est poussé, et publie lui-même la
+release :
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
-Le tag doit être `v` suivi de la version de `Cargo.toml` (`v0.1.0`,
-`v0.2.0-rc.1`) ; tout autre tag est ignoré, et un tag différent de `Cargo.toml`
-échoue avant toute compilation. Les quatre builds doivent réussir, avec les
-tests Rust, les parcours en pseudo-terminal sous Linux, les tests de scripts, le
-packaging et installation/version/désinstallation dans un HOME temporaire. Seul
-le job `publish` reçoit `contents: write` ; il revérifie les checksums et
-manifestes avant `gh release create --verify-tag`. Une release existante n'est
-pas écrasée. Une version avec suffixe (`-rc.1`) est publiée comme prerelease et
-n'est pas promue `latest`.
+Le tag doit être `v` suivi de la version de `Cargo.toml` (`v1.0.0`,
+`v1.1.0-rc.1`) ; tout autre tag est ignoré, et un tag différent de `Cargo.toml`
+échoue avant toute compilation. Les quatre compilations natives doivent réussir,
+avec les tests Rust, les parcours en pseudo-terminal sous Linux et une exécution
+du binaire archivé. Seul le job `publish` reçoit `contents: write`. Une release
+existante n'est pas écrasée. Une version avec suffixe (`-rc.1`) est publiée
+comme prerelease et n'est pas promue `latest`.
 
-La release comprend les huit fichiers d'archives/checksums, `install.sh`,
-`LICENSE` et ce guide. Les actions checkout/upload/download sont épinglées par
-SHA complet.
+Lancé à la main depuis l'onglet Actions, le workflow fabrique les archives sans
+rien publier : c'est le moyen d'essayer une cible.
+
+Les notes de la release sont écrites par `scripts/release-notes.py` à partir des
+commits depuis le tag précédent : fonctionnalités (`feat`), corrections (`fix`)
+et autres. Les commits qui ne changent pas le programme (`docs`, `test`, `ci`,
+`chore`, `build`) sont laissés de côté. Les actions checkout/upload/download
+sont épinglées par SHA complet.
 
 Références : [runners GitHub](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
 [permissions et déclencheurs](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax),
@@ -247,7 +145,7 @@ python3 tests/pty_ux.py target/release/ssho "$(mktemp -d)/ux"
 python3 tests/reference_parity.py /path/to/sshm target/release/ssho
 ```
 
-**Intégration continue.** `.github/workflows/ci.yml` lance ces vérifications sur les pull requests, ou à la demande depuis l'onglet Actions, sans rien publier : un contrôle rapide sous Linux (formatage, Clippy sans avertissement, tests Rust), les tests avec Rust 1.88 (version minimale déclarée), les scripts d'installation et de paquetage (`sh -n`, `tests/distribution.py`), puis la compilation et les tests sur les quatre cibles annoncées (Linux et macOS, x86_64 et ARM64, chacune sur son exécuteur natif). Les parcours en pseudo-terminal y tournent sous Linux seulement ; ils n'ont pas été adaptés à macOS. Le workflow `release.yml` reste le seul à produire des archives.
+**Intégration continue.** `.github/workflows/ci.yml` lance ces vérifications sur les pull requests, ou à la demande depuis l'onglet Actions, sans rien publier : un contrôle rapide sous Linux (formatage, Clippy sans avertissement, tests Rust), les tests avec Rust 1.88 (version minimale déclarée), la syntaxe des scripts, puis la compilation et les tests sur les quatre cibles annoncées (Linux et macOS, x86_64 et ARM64, chacune sur son exécuteur natif). Les parcours en pseudo-terminal y tournent sous Linux seulement ; ils n'ont pas été adaptés à macOS. Le workflow `release.yml` reste le seul à produire des archives.
 
 Tous les tests utilisent des dossiers temporaires. Les parcours de connexion et de tunnel utilisent un faux client SSH ; ils ne se connectent pas aux serveurs personnels de l'utilisateur.
 
@@ -271,9 +169,10 @@ La vérification des mises à jour interroge, en arrière-plan, le dépôt de re
 
 | Plateforme | Prise en charge |
 | --- | --- |
-| Linux x86_64 | Plateforme de développement : tests Rust, parcours en pseudo-terminal, tests d'installation (`tests/distribution.py`), complétion Bash. |
+| Linux x86_64 | Plateforme de développement : tests Rust, parcours en pseudo-terminal, complétion Bash. |
 | Linux ARM64, macOS Intel, macOS ARM64 | Compilées et testées par `ci.yml` ; archives produites par `release.yml`. |
-| Windows | Pas d'archive. Des branches de code existent (chemins, `%APPDATA%`) mais ne sont ni compilées ni testées. |
+| Linux 32 bits (i386, ARMv7, ARMv6) | Compilées en croisé par `release.yml` ; non couvertes par les tests. |
+| Windows (x86_64, i386) | Compilées par `release.yml` ; non couvertes par les tests. Les commandes sur plusieurs hôtes, les tunnels en arrière-plan et le déploiement de clés demandent Unix et sont refusés avec ce motif. |
 
 Le workflow de release compile l'adresse du dépôt qui publie (`SSHO_REPOSITORY`), pour qu'un binaire publié cherche ses mises à jour dans sa propre distribution.
 

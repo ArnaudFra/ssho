@@ -56,6 +56,7 @@ struct Capture {
     finished: Receiver<()>,
 }
 impl Capture {
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn start(mut stderr: ChildStderr) -> std::io::Result<Self> {
         let tail = Arc::new(Mutex::new(VecDeque::new()));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -158,6 +159,7 @@ impl Owned {
     }
 }
 pub struct Manager {
+    #[cfg_attr(not(unix), allow(dead_code))]
     program: PathBuf,
     records: Vec<Record>,
     owned: BTreeMap<u64, Owned>,
@@ -241,6 +243,7 @@ impl Manager {
             }
         }
     }
+    #[cfg_attr(not(unix), allow(unused_variables))]
     fn spawn(&self, args: &[String]) -> Result<Owned> {
         #[cfg(not(unix))]
         anyhow::bail!("owned background tunnels currently require Unix");

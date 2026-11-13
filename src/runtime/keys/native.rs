@@ -80,6 +80,7 @@ pub struct Deployment {
     args: Vec<String>,
 }
 impl Deployment {
+    #[cfg_attr(not(unix), allow(unused_variables))]
     pub fn prepare(reviewed: &PublicKey, private: &Path, root: &Path, alias: &str) -> Result<Self> {
         anyhow::ensure!(
             !alias.is_empty()

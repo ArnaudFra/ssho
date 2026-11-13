@@ -43,7 +43,7 @@ jobs:
       - name: Rust tests with Rust 1.88
         run: cargo +1.88.0 test --locked
 
-  # Installation and packaging scripts, in an owned temporary HOME.
+  # Syntax of the helper scripts.
   scripts:
     runs-on: ubuntu-24.04
     steps:
@@ -51,14 +51,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Shell syntax
-        run: |
-          sh -n install.sh
-          sh -n scripts/package-release.sh
-          sh -n scripts/pty-checks.sh
-      - name: Python syntax of the test scripts
-        run: python3 -m py_compile tests/*.py
-      - name: Distribution contract
-        run: python3 tests/distribution.py
+        run: sh -n scripts/pty-checks.sh
+      - name: Python syntax of the scripts
+        run: python3 -m py_compile tests/*.py scripts/*.py
 
   # The announced targets, each on its native runner. Slower: only after the
   # quick checks pass.
