@@ -569,7 +569,8 @@ fn atomic_json(root: &Path, name: &str, value: &Value, default_mode: u32) -> Res
             fd,
             temporary.as_ptr(),
             libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            mode as libc::mode_t,
+            // Variadic argument: mode_t is 16 bits wide on macOS and must be promoted.
+            mode as libc::c_uint,
         )
     };
     if raw < 0 {

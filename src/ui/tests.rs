@@ -2363,6 +2363,27 @@ fn manual_reload_refreshes_effective_cache_without_ping() {
     assert_eq!(m.all[0].user, "new-user");
 }
 
+/// A reload cancels the running diagnostics, whose helpers are stopped at the next
+/// check of their supervisor. Tests wait for that instead of assuming it happened
+/// within a few milliseconds: every helper appends its process id to `pids`.
+#[cfg(unix)]
+fn wait_helpers_stopped(pids: &std::path::Path, message: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let listed = std::fs::read_to_string(pids).unwrap_or_default();
+        let live = listed
+            .lines()
+            .filter_map(|line| line.trim().parse::<i32>().ok())
+            // SAFETY: signal 0 only asks whether the process still exists.
+            .any(|pid| unsafe { libc::kill(pid, 0) } == 0);
+        if !live {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "{message}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn manual_reload_old_native_generation_cannot_overwrite_new_cache() {
@@ -2375,7 +2396,7 @@ fn manual_reload_old_native_generation_cannot_overwrite_new_cache() {
     // finishes on another worker; the old diagnostic is cancelled by the reload
     // and its helper is stopped instead of running to its end.
     std::fs::write(&root, format!(
-        "Host fixture\n HostName 127.0.0.1\n User old-user\n Port 2201\nMatch exec \"touch {}; while test ! -e {}; do sleep 0.02; done; touch {}\"\n",
+        "Host fixture\n HostName 127.0.0.1\n User old-user\n Port 2201\nMatch exec \"sh -c 'echo $$ >> {}; while test ! -e {}; do sleep 0.02; done; touch {}'\"\n",
         ready.display(), release.display(), finished.display()
     )).unwrap();
     let mut m = Model::new(
@@ -2407,9 +2428,13 @@ fn manual_reload_old_native_generation_cannot_overwrite_new_cache() {
     let fresh = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
     assert_eq!(fresh.effective.as_ref().unwrap().user, "new-user");
     m.effective.insert(fresh.name, fresh.effective);
+    wait_helpers_stopped(
+        &ready,
+        "the old native resolver was cancelled with its generation",
+    );
     std::fs::write(&release, "").unwrap();
     // Released or not, the old helper was stopped: it never completes.
-    std::thread::sleep(Duration::from_millis(300));
+    std::thread::sleep(Duration::from_millis(100));
     assert!(
         !finished.exists(),
         "the old native resolver was cancelled with its generation"
@@ -3405,7 +3430,7 @@ fn advanced_search_saved_pending_reload_cancels_preference_and_excludes_old_gene
         let release = temp.path().join("release");
         let finished = temp.path().join("finished");
         fs::write(&root, format!(
-            "Host fixture\n HostName old.example\n User old-user\nMatch exec \"touch {}; while test ! -e {}; do sleep 0.02; done; touch {}\"\n",
+            "Host fixture\n HostName old.example\n User old-user\nMatch exec \"sh -c 'echo $$ >> {}; while test ! -e {}; do sleep 0.02; done; touch {}'\"\n",
             ready.display(), release.display(), finished.display()
         )).unwrap();
         let mut m = Model::new(
@@ -3457,10 +3482,11 @@ fn advanced_search_saved_pending_reload_cancels_preference_and_excludes_old_gene
         m.query.set("user:new-user");
         m.filter(true);
         m.apply_inspection(receiver.recv_timeout(Duration::from_secs(3)).unwrap());
+        wait_helpers_stopped(&ready, "old generation is stopped, not awaited");
         fs::write(&release, "").unwrap();
         // The old diagnostic was cancelled with its generation: released
         // or not, its helper was stopped and never completes.
-        std::thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(Duration::from_millis(100));
         assert!(!finished.exists(), "old generation is stopped, not awaited");
         for result in receiver {
             m.apply_inspection(result);
@@ -5582,7 +5608,9 @@ fn availability_preference_dispatch_failure_preserves_preferences_cache_and_rece
             .unwrap();
         m.apply_inspection(receiver.try_recv().unwrap());
         assert_eq!(m.statuses["alpha"].status, PingStatus::Offline);
-        assert!(screen(&mut m, 100, 24).contains("config.json"));
+        // Wide enough for the path of the file not to be cut or wrapped when the
+        // temporary directory is long (macOS).
+        assert!(screen(&mut m, 250, 24).contains("config.json"));
     }
 }
 

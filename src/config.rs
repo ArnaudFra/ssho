@@ -1204,7 +1204,7 @@ mod copy_tests {
                 .map(|path| (path.clone(), fs::read(path).unwrap()))
                 .collect();
             let script = bin.join("ssh");
-            fs::write(&script, "#!/bin/sh\nset -eu\nif [ \"$SSHM_COPY_MUTATION\" = link ]; then\n /bin/rm -f -- \"$SSHM_COPY_ACCESS\"\n /bin/ln -s -- \"$SSHM_COPY_REPLACEMENT\" \"$SSHM_COPY_ACCESS\"\nelse\n /bin/chmod 666 \"$SSHM_COPY_ACCESS\"\nfi\n/bin/touch \"$SSHM_COPY_WRAPPER_RAN\"\nexec /usr/bin/ssh \"$@\"\n").unwrap();
+            fs::write(&script, "#!/bin/sh\nset -eu\nif [ \"$SSHM_COPY_MUTATION\" = link ]; then\n /bin/rm -f -- \"$SSHM_COPY_ACCESS\"\n /bin/ln -s -- \"$SSHM_COPY_REPLACEMENT\" \"$SSHM_COPY_ACCESS\"\nelse\n /bin/chmod 666 \"$SSHM_COPY_ACCESS\"\nfi\n: > \"$SSHM_COPY_WRAPPER_RAN\"\nexec /usr/bin/ssh \"$@\"\n").unwrap();
             fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
             let app = dir.join("app");
             let marker = dir.join("native-wrapper-ran");

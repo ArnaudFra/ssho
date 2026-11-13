@@ -37,9 +37,9 @@ pub(super) fn record(snapshot: &Snapshot, app_dir: &Path) -> Result<()> {
         return Ok(());
     };
     let directory = app_dir.join("backups");
-    guard_path(&directory)?;
+    guard_path(app_dir, &directory)?;
     secure_mkdir(&directory)?;
-    guard_path(&directory)?;
+    guard_path(app_dir, &directory)?;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let record = Record {
@@ -66,7 +66,7 @@ pub(super) fn record(snapshot: &Snapshot, app_dir: &Path) -> Result<()> {
     file.flush()?;
     file.as_file().sync_all()?;
     let (_, path) = file.keep().map_err(|error| error.error)?;
-    guard_path(&path)?;
+    guard_path(app_dir, &path)?;
     Ok(())
 }
 fn read_record(path: &Path) -> Result<(Record, Snapshot)> {
@@ -75,7 +75,12 @@ fn read_record(path: &Path) -> Result<(Record, Snapshot)> {
         name.starts_with("version-") && name.ends_with(".json"),
         "legacy backup has unknown provenance"
     );
-    guard_path(path)?;
+    // A backup always lives in <application directory>/backups.
+    let app_dir = path
+        .parent()
+        .and_then(Path::parent)
+        .context("backup path has no application directory")?;
+    guard_path(app_dir, path)?;
     let snapshot = Snapshot::read(path)?;
     #[cfg(unix)]
     {
@@ -98,7 +103,7 @@ fn read_record(path: &Path) -> Result<(Record, Snapshot)> {
 }
 pub fn list(app_dir: &Path) -> Result<Vec<Backup>> {
     let directory = app_dir.join("backups");
-    guard_path(&directory)?;
+    guard_path(app_dir, &directory)?;
     if !directory.exists() {
         return Ok(vec![]);
     }
@@ -199,9 +204,12 @@ mod tests {
         mutate(&b, &app);
         let entries = list(&app).unwrap();
         assert!(entries.iter().any(|entry| entry.destination.is_none()));
+        // The recorded destination is canonical: the temporary directory may be
+        // reached through a link (/var on macOS).
+        let recorded = fs::canonicalize(&a).unwrap();
         let backup = entries
             .iter()
-            .find(|entry| entry.destination.as_ref() == Some(&a))
+            .find(|entry| entry.destination.as_ref() == Some(&recorded))
             .unwrap();
         let b_before = fs::read(&b).unwrap();
         let a_before = fs::read(&a).unwrap();

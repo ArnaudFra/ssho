@@ -770,11 +770,23 @@ mod tests {
             "-c",
             "head -c 300000 /dev/zero >&2; echo diagnostic-tail >&2; exit 37",
         ]);
-        let (status, _, stderr) = capture(&mut command, Duration::from_secs(2)).unwrap();
-        assert_eq!(status.code(), Some(37));
-        assert!(stderr.len() <= 256 * 1024);
-        // The cut is visible instead of silent, and the exit status is kept.
-        assert!(stderr.ends_with("[output truncated at 256 KiB]"), "tail");
+        // The command writes more than the limit and exits at once. Depending on
+        // whether the watchdog looks before or after the exit, the output is cut
+        // with its status kept, or the process is stopped for exceeding the limit.
+        match capture(&mut command, Duration::from_secs(2)) {
+            Ok((status, _, stderr)) => {
+                assert_eq!(status.code(), Some(37));
+                assert!(stderr.len() <= 256 * 1024);
+                // The cut is visible instead of silent, and the exit status is kept.
+                assert!(stderr.ends_with("[output truncated at 256 KiB]"), "tail");
+            }
+            Err(error) => assert!(
+                error
+                    .to_string()
+                    .contains("output limit (256 KiB per stream) reached"),
+                "{error:#}"
+            ),
+        }
         let mut command = Command::new("sh");
         command.args(["-c", "echo timeout-cause >&2; sleep 30 & wait"]);
         let started = Instant::now();

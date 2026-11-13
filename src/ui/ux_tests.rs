@@ -2164,7 +2164,10 @@ fn summary_tells_files_and_what_happens_to_personal_data() {
     // A move shows where from and where to.
     std::fs::write(&other, "").unwrap();
     changes::open(&mut m, Action::MoveTo(original, other.clone()), &root).unwrap();
-    let text = screen(&mut m, 130, 30);
+    // Wide enough for both paths, whatever the length of the temporary directory.
+    let paths = format!("{}{}", root.display(), other.display());
+    let width = (paths.chars().count() as u16 + 30).max(130);
+    let text = screen(&mut m, width, 30);
     assert!(
         text.contains("Opération : DÉPLACER l'hôte « alpha »"),
         "{text}"

@@ -162,9 +162,9 @@ impl Snapshot {
         };
         super::backups::record(self, app_dir)?;
         let backup_dir = app_dir.join("backups");
-        guard_path(&backup_dir)?;
+        guard_path(app_dir, &backup_dir)?;
         secure_mkdir(&backup_dir)?;
-        guard_path(&backup_dir)?;
+        guard_path(app_dir, &backup_dir)?;
         let name = self
             .path
             .file_name()
@@ -179,7 +179,7 @@ impl Snapshot {
             format!("{name}.{:016x}.backup", hasher.finish()),
         ] {
             let target = backup_dir.join(filename);
-            guard_path(&target)?;
+            guard_path(app_dir, &target)?;
             let mut file = NamedTempFile::new_in(&backup_dir)?;
             private_file(file.path())?;
             file.write_all(bytes)?;
@@ -522,14 +522,22 @@ impl ConfigMirror {
 }
 
 /// App-data writes must not traverse a symlink back into the legacy directory.
-pub(super) fn guard_path(path: &Path) -> Result<()> {
+/// The application directory and what it contains are checked. Links above it
+/// belong to the system layout (/var on macOS, /home on some Linux systems)
+/// and are not ours to refuse.
+pub(super) fn guard_path(app_dir: &Path, path: &Path) -> Result<()> {
+    let app_dir = absolute(app_dir)?;
     let path = absolute(path)?;
-    let mut current = PathBuf::new();
-    for component in path.components() {
-        if matches!(component, Component::CurDir) {
-            continue;
-        }
-        current.push(component.as_os_str());
+    let below = path.strip_prefix(&app_dir).with_context(|| {
+        format!(
+            "{} is outside the application directory {}",
+            path.display(),
+            app_dir.display()
+        )
+    })?;
+    let mut current = app_dir.clone();
+    let mut components = below.components();
+    loop {
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => bail!(
                 "refusing redirected application write through symbolic link {}",
@@ -539,8 +547,12 @@ pub(super) fn guard_path(path: &Path) -> Result<()> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
+        match components.next() {
+            Some(Component::CurDir) => {}
+            Some(component) => current.push(component.as_os_str()),
+            None => return Ok(()),
+        }
     }
-    Ok(())
 }
 pub(super) fn private_file(path: &Path) -> Result<()> {
     #[cfg(unix)]

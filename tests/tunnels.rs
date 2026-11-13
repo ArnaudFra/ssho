@@ -114,9 +114,17 @@ fn modes_atomic_legacy_and_unknown_siblings() {
         .unwrap();
     assert_eq!(store.modes()["test"]["legacy"], LaunchMode::Shell);
     let path = dir.path().join("tunnel_profiles.json");
-    let scope = snapshot.config.to_string_lossy().to_string();
     let mut document: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    // Profiles are stored under the canonical path of the configuration, which
+    // differs from the given one when the temporary directory is behind a link.
+    let scope = document["configs"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
     document["configs"][&scope]["hosts"]["test"]["profiles"]["legacy"]["future"] =
         serde_json::json!({"preserve":true});
     fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
