@@ -176,7 +176,7 @@ fn checked_include_paths(pattern: &Path) -> Result<Vec<PathBuf>> {
             .map(|entry| {
                 entry.map_err(|error| {
                     let path = error.path().to_path_buf();
-                    anyhow::Error::new(error.into_error())
+                    anyhow::Error::new(std::io::Error::from(error))
                         .context(format!("expanding SSH Include {}", path.display()))
                 })
             })

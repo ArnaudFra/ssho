@@ -1749,6 +1749,14 @@ fn key_name(k: KeyEvent) -> String {
 }
 
 /// Owns the terminal modes so all error and unwind paths restore the shell.
+/// Clears the screen and has the next frame drawn in full. `Terminal::clear`
+/// asks the terminal where its cursor is and waits for the answer; a terminal
+/// that does not answer must not keep the interface from starting.
+fn clear_screen(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
+    let size = terminal.size()?;
+    terminal.resize(ratatui::layout::Rect::new(0, 0, size.width, size.height))
+}
+
 struct TerminalGuard {
     active: bool,
 }
@@ -2060,7 +2068,7 @@ pub fn run(
     let mut guard = TerminalGuard::enter()?;
     let mut terminal: Terminal<CrosstermBackend<Stdout>> =
         Terminal::new(CrosstermBackend::new(io::stdout()))?;
-    terminal.clear()?;
+    clear_screen(&mut terminal)?;
     loop {
         keys::poll(&mut m);
         match m.batch.poll() {
@@ -2178,7 +2186,7 @@ pub fn run(
                 guard = TerminalGuard::enter()?;
                 #[cfg(unix)]
                 drop(signals);
-                terminal.clear()?;
+                clear_screen(&mut terminal)?;
                 result.map(|_| false)
             }
             Action::None => Ok(false),
@@ -2221,7 +2229,7 @@ pub fn run(
                 guard = TerminalGuard::enter()?;
                 #[cfg(unix)]
                 drop(signals);
-                terminal.clear()?;
+                clear_screen(&mut terminal)?;
                 m.resume_sftp(&name, result);
                 Ok(false)
             }
@@ -2234,7 +2242,7 @@ pub fn run(
                 #[cfg(unix)]
                 drop(signals);
                 // The alternate screen is new: invalidate ratatui's previous frame.
-                terminal.clear()?;
+                clear_screen(&mut terminal)?;
                 m.resume_connection(&name, result, History::load(&paths.root));
                 Ok(false)
             }
