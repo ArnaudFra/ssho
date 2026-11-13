@@ -3,7 +3,7 @@
 [![Rust](https://img.shields.io/badge/Rust-1.88+-CE412B?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![Release](https://img.shields.io/github/v/release/ArnaudFra/ssho?style=for-the-badge)](https://github.com/ArnaudFra/ssho/releases)
 [![License](https://img.shields.io/github/license/ArnaudFra/ssho?style=for-the-badge)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey?style=for-the-badge)](https://github.com/ArnaudFra/ssho/releases)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=for-the-badge)](https://github.com/ArnaudFra/ssho/releases)
 
 > **An SSH connection manager for your terminal**
 
@@ -28,44 +28,44 @@
 - **Several hosts at once.** Run a command on marked hosts and read each result; keep frequent commands with typed parameters.
 - **Keys and files.** OpenSSH key assistant (create, add to the agent, deploy) and SFTP sessions, with the native tools.
 - **Keyboard first.** Every action is in a searchable palette (F2), shortcuts can be changed, help follows the current screen.
-- **Fits your setup.** Preferences screen, custom SSH launcher (a wrapper around `ssh`), another configuration with `-c`, reload when the files change on disk, layout that adapts to the size of the terminal, update notice.
+- **Fits your setup.** Preferences screen, custom SSH launcher (a wrapper around `ssh`), another configuration with `-c`, reload when the files change on disk, layout that adapts to the size of the terminal, update notice. The data of an existing SSHM installation is picked up on first launch.
 - **Your data travels.** Export and import of favorites, notes, tunnel profiles, views, commands and preferences; never keys or passwords.
 - **English and French**, with a no-colour mode and ASCII symbols.
 - **Command line.** Direct connection, search, host information as JSON, completion for Bash, Zsh, Fish and PowerShell.
 
-ssho was heavily inspired by [SSHM](https://github.com/Gu1llaum-3/sshm) in its early days: I use that tool every day, but it lacked many features, which pushed me to write a Rust version and to keep extending it. The data of an existing SSHM installation is picked up on first launch.
-
 ## Installation
 
-Prebuilt archives are attached to each [release](https://github.com/ArnaudFra/ssho/releases). The OpenSSH client (`ssh`) and `~/.local/bin` must be in your `PATH`. For an older distribution, another platform, the checksums or the install script, see [Build and advanced installation](docs/INSTALLATION.md).
+Prebuilt archives are attached to each [release](https://github.com/ArnaudFra/ssho/releases); the list is in [Releases](#releases). The OpenSSH client (`ssh`) and `~/.local/bin` must be in your `PATH`. For an older distribution or another platform, see [Build and advanced installation](docs/INSTALLATION.md).
 
 ### Linux
 
 x86_64, glibc 2.39 or later (Ubuntu 24.04, Debian 13, Fedora 40...):
 
 ```sh
-curl -fsSLO https://github.com/ArnaudFra/ssho/releases/latest/download/ssho-x86_64-unknown-linux-gnu.tar.gz
-tar -xzf ssho-x86_64-unknown-linux-gnu.tar.gz ssho
+curl -fsSLO https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Linux_x86_64.tar.gz
+tar -xzf ssho_Linux_x86_64.tar.gz ssho
 mkdir -p ~/.local/bin && mv ssho ~/.local/bin/
 ```
 
-On ARM64, use `ssho-aarch64-unknown-linux-gnu.tar.gz`.
+On ARM64, use `ssho_Linux_arm64.tar.gz`.
 
 ### macOS
 
 macOS 15 or later. Apple Silicon:
 
 ```sh
-curl -fsSLO https://github.com/ArnaudFra/ssho/releases/latest/download/ssho-aarch64-apple-darwin.tar.gz
-tar -xzf ssho-aarch64-apple-darwin.tar.gz ssho
+curl -fsSLO https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Darwin_arm64.tar.gz
+tar -xzf ssho_Darwin_arm64.tar.gz ssho
 mkdir -p ~/.local/bin && mv ssho ~/.local/bin/
 ```
 
-On an Intel Mac, use `ssho-x86_64-apple-darwin.tar.gz`. The binary is not signed: if the archive was downloaded with a browser, remove the quarantine with `xattr -d com.apple.quarantine ~/.local/bin/ssho`.
+On an Intel Mac, use `ssho_Darwin_x86_64.tar.gz`. The binary is not signed: if the archive was downloaded with a browser, remove the quarantine with `xattr -d com.apple.quarantine ~/.local/bin/ssho`.
 
 ### Windows
 
-There is no Windows version. Use [WSL](https://learn.microsoft.com/windows/wsl/) and follow the Linux instructions.
+Windows 10 or later, with its built-in OpenSSH client. Download [ssho_Windows_x86_64.zip](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Windows_x86_64.zip), extract `ssho.exe` and put it in a folder of your `PATH`.
+
+Running a command on several hosts, background tunnels and key deployment need Unix: on Windows they are available through [WSL](https://learn.microsoft.com/windows/wsl/) with the Linux archive.
 
 ## Usage
 
@@ -138,6 +138,51 @@ Shell completion is loaded with `source <(ssho completion bash)` (also `zsh`, `f
 - [User guide](docs/GUIDE.md): configuration, every screen and shortcut, search syntax, completion.
 - [Build and advanced installation](docs/INSTALLATION.md): building from source, installer options, archives, platforms, tests.
 
+## Releases
+
+A release is built for each version tag:
+
+| Platform | Architecture | Download |
+| --- | --- | --- |
+| Linux | x86_64 | [ssho_Linux_x86_64.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Linux_x86_64.tar.gz) |
+| Linux | ARM64 | [ssho_Linux_arm64.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Linux_arm64.tar.gz) |
+| Linux | ARMv7 (32-bit) | [ssho_Linux_armv7.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Linux_armv7.tar.gz) |
+| Linux | ARMv6 (32-bit) | [ssho_Linux_armv6.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Linux_armv6.tar.gz) |
+| Linux | i386 | [ssho_Linux_i386.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Linux_i386.tar.gz) |
+| macOS | Apple Silicon | [ssho_Darwin_arm64.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Darwin_arm64.tar.gz) |
+| macOS | Intel | [ssho_Darwin_x86_64.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Darwin_x86_64.tar.gz) |
+| Windows | x86_64 | [ssho_Windows_x86_64.zip](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Windows_x86_64.zip) |
+| Windows | i386 | [ssho_Windows_i386.zip](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Windows_i386.zip) |
+
+Each archive holds the `ssho` binary, the license and this README. `checksums.txt` lists the SHA-256 of the archives.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a pull request. For major changes, please open an issue first to discuss what you would like to change.
+
+1. **Fork** the repository
+2. **Create** a feature branch (`git checkout -b feature/my-feature`)
+3. **Commit** your changes
+4. **Push** to the branch (`git push origin feature/my-feature`)
+5. **Open** a pull request
+
+Formatting, Clippy and the tests run on every pull request; [Build and advanced installation](docs/INSTALLATION.md) explains how to run them locally.
+
 ## License
 
-MIT. The first versions adapt the logic and organisation of [SSHM](https://github.com/Gu1llaum-3/sshm); Guillaume Archambault's original copyright notice is kept in [LICENSE](LICENSE).
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+
+- [SSHM](https://github.com/Gu1llaum-3/sshm) by Guillaume Archambault. ssho was heavily inspired by it in its early days: I use that tool every day, but it lacked many features, which pushed me to write a Rust version and to keep extending it. The first versions adapt its logic and organisation, and its copyright notice is kept in [LICENSE](LICENSE).
+- [Ratatui](https://ratatui.rs/) and [Crossterm](https://github.com/crossterm-rs/crossterm) for the terminal interface libraries
+- [OpenSSH](https://www.openssh.com/), which does the real work
+- The Rust community for building such good tools
+
+---
+
+<div align="center">
+
+**Made with ❤️ by [ArnaudFra](https://github.com/ArnaudFra)**
+
+</div>

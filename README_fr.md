@@ -3,7 +3,7 @@
 [![Rust](https://img.shields.io/badge/Rust-1.88+-CE412B?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![Release](https://img.shields.io/github/v/release/ArnaudFra/ssho?style=for-the-badge)](https://github.com/ArnaudFra/ssho/releases)
 [![License](https://img.shields.io/github/license/ArnaudFra/ssho?style=for-the-badge)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey?style=for-the-badge)](https://github.com/ArnaudFra/ssho/releases)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=for-the-badge)](https://github.com/ArnaudFra/ssho/releases)
 
 > **Un gestionnaire de connexions SSH pour votre terminal**
 
@@ -28,44 +28,44 @@
 - **Plusieurs hôtes à la fois.** Lancer une commande sur les hôtes marqués et lire chaque résultat ; garder les commandes fréquentes avec des paramètres typés.
 - **Clés et fichiers.** Assistant de clés OpenSSH (création, ajout à l'agent, déploiement) et sessions SFTP, avec les outils natifs.
 - **Tout au clavier.** Chaque action est dans une palette recherchable (F2), les raccourcis se modifient, l'aide suit l'écran en cours.
-- **S'adapte à votre installation.** Écran de préférences, lanceur SSH personnalisé (un wrapper autour de `ssh`), autre configuration avec `-c`, rechargement quand les fichiers changent sur le disque, mise en page qui suit la taille du terminal, avis de mise à jour.
+- **S'adapte à votre installation.** Écran de préférences, lanceur SSH personnalisé (un wrapper autour de `ssh`), autre configuration avec `-c`, rechargement quand les fichiers changent sur le disque, mise en page qui suit la taille du terminal, avis de mise à jour. Les données d'une installation SSHM existante sont reprises au premier lancement.
 - **Vos données voyagent.** Export et import des favoris, notes, profils de tunnels, vues, commandes et préférences ; jamais de clés ni de mots de passe.
 - **Anglais et français**, avec un mode sans couleurs et des symboles ASCII.
 - **Ligne de commande.** Connexion directe, recherche, informations d'un hôte en JSON, complétion pour Bash, Zsh, Fish et PowerShell.
 
-ssho s'est fortement inspiré de [SSHM](https://github.com/Gu1llaum-3/sshm) à ses débuts : j'utilise cet outil au quotidien, mais il lui manquait de nombreuses fonctionnalités, ce qui m'a poussé à en écrire une version en Rust et à la faire évoluer. Les données d'une installation SSHM existante sont reprises au premier lancement.
-
 ## Installation
 
-Des archives prêtes à l'emploi sont jointes à chaque [release](https://github.com/ArnaudFra/ssho/releases). Le client OpenSSH (`ssh`) et `~/.local/bin` doivent être dans votre `PATH`. Pour une distribution plus ancienne, une autre plateforme, les checksums ou le script d'installation, voir [Compilation et installation avancée](docs/INSTALLATION_fr.md).
+Des archives prêtes à l'emploi sont jointes à chaque [release](https://github.com/ArnaudFra/ssho/releases) ; la liste est dans [Releases](#releases). Le client OpenSSH (`ssh`) et `~/.local/bin` doivent être dans votre `PATH`. Pour une distribution plus ancienne ou une autre plateforme, voir [Compilation et installation avancée](docs/INSTALLATION_fr.md).
 
 ### Linux
 
 x86_64, glibc 2.39 ou plus récente (Ubuntu 24.04, Debian 13, Fedora 40...) :
 
 ```sh
-curl -fsSLO https://github.com/ArnaudFra/ssho/releases/latest/download/ssho-x86_64-unknown-linux-gnu.tar.gz
-tar -xzf ssho-x86_64-unknown-linux-gnu.tar.gz ssho
+curl -fsSLO https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Linux_x86_64.tar.gz
+tar -xzf ssho_Linux_x86_64.tar.gz ssho
 mkdir -p ~/.local/bin && mv ssho ~/.local/bin/
 ```
 
-Sur ARM64, prendre `ssho-aarch64-unknown-linux-gnu.tar.gz`.
+Sur ARM64, prendre `ssho_Linux_arm64.tar.gz`.
 
 ### macOS
 
 macOS 15 ou plus récent. Apple Silicon :
 
 ```sh
-curl -fsSLO https://github.com/ArnaudFra/ssho/releases/latest/download/ssho-aarch64-apple-darwin.tar.gz
-tar -xzf ssho-aarch64-apple-darwin.tar.gz ssho
+curl -fsSLO https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Darwin_arm64.tar.gz
+tar -xzf ssho_Darwin_arm64.tar.gz ssho
 mkdir -p ~/.local/bin && mv ssho ~/.local/bin/
 ```
 
-Sur un Mac Intel, prendre `ssho-x86_64-apple-darwin.tar.gz`. Le binaire n'est pas signé : si l'archive a été téléchargée avec un navigateur, retirer la quarantaine avec `xattr -d com.apple.quarantine ~/.local/bin/ssho`.
+Sur un Mac Intel, prendre `ssho_Darwin_x86_64.tar.gz`. Le binaire n'est pas signé : si l'archive a été téléchargée avec un navigateur, retirer la quarantaine avec `xattr -d com.apple.quarantine ~/.local/bin/ssho`.
 
 ### Windows
 
-Il n'y a pas de version Windows. Utiliser [WSL](https://learn.microsoft.com/windows/wsl/) et suivre les instructions Linux.
+Windows 10 ou plus récent, avec son client OpenSSH intégré. Télécharger [ssho_Windows_x86_64.zip](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Windows_x86_64.zip), en extraire `ssho.exe` et le placer dans un dossier du `PATH`.
+
+Les commandes sur plusieurs hôtes, les tunnels en arrière-plan et le déploiement de clés demandent Unix : sous Windows, ils sont disponibles par [WSL](https://learn.microsoft.com/windows/wsl/) avec l'archive Linux.
 
 ## Utilisation
 
@@ -138,6 +138,51 @@ La complétion se charge avec `source <(ssho completion bash)` (ou `zsh`, `fish`
 - [Guide d'utilisation](docs/GUIDE_fr.md) : configuration, tous les écrans et raccourcis, syntaxe de recherche, complétion.
 - [Compilation et installation avancée](docs/INSTALLATION_fr.md) : compilation depuis les sources, options de l'installateur, archives, plateformes, tests.
 
+## Releases
+
+Une release est construite pour chaque tag de version :
+
+| Plateforme | Architecture | Téléchargement |
+| --- | --- | --- |
+| Linux | x86_64 | [ssho_Linux_x86_64.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Linux_x86_64.tar.gz) |
+| Linux | ARM64 | [ssho_Linux_arm64.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Linux_arm64.tar.gz) |
+| Linux | ARMv7 (32 bits) | [ssho_Linux_armv7.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Linux_armv7.tar.gz) |
+| Linux | ARMv6 (32 bits) | [ssho_Linux_armv6.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Linux_armv6.tar.gz) |
+| Linux | i386 | [ssho_Linux_i386.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Linux_i386.tar.gz) |
+| macOS | Apple Silicon | [ssho_Darwin_arm64.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Darwin_arm64.tar.gz) |
+| macOS | Intel | [ssho_Darwin_x86_64.tar.gz](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Darwin_x86_64.tar.gz) |
+| Windows | x86_64 | [ssho_Windows_x86_64.zip](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Windows_x86_64.zip) |
+| Windows | i386 | [ssho_Windows_i386.zip](https://github.com/ArnaudFra/ssho/releases/latest/download/ssho_Windows_i386.zip) |
+
+Chaque archive contient le binaire `ssho`, la licence et le README. `checksums.txt` donne le SHA-256 des archives.
+
+## Contribuer
+
+Les contributions sont les bienvenues ! N'hésitez pas à proposer une pull request. Pour un changement important, ouvrez d'abord une issue pour en discuter.
+
+1. **Forker** le dépôt
+2. **Créer** une branche (`git checkout -b feature/ma-fonction`)
+3. **Commiter** vos changements
+4. **Pousser** la branche (`git push origin feature/ma-fonction`)
+5. **Ouvrir** une pull request
+
+Le formatage, Clippy et les tests tournent sur chaque pull request ; [Compilation et installation avancée](docs/INSTALLATION_fr.md) explique comment les lancer en local.
+
 ## Licence
 
-MIT. Les premières versions adaptent la logique et l'organisation de [SSHM](https://github.com/Gu1llaum-3/sshm) ; la mention de copyright d'origine de Guillaume Archambault est conservée dans [LICENSE](LICENSE).
+Ce projet est sous licence MIT - voir le fichier [LICENSE](LICENSE).
+
+## Remerciements
+
+- [SSHM](https://github.com/Gu1llaum-3/sshm) de Guillaume Archambault. ssho s'en est fortement inspiré à ses débuts : j'utilise cet outil au quotidien, mais il lui manquait de nombreuses fonctionnalités, ce qui m'a poussé à en écrire une version en Rust et à la faire évoluer. Les premières versions adaptent sa logique et son organisation, et sa mention de copyright est conservée dans [LICENSE](LICENSE).
+- [Ratatui](https://ratatui.rs/) et [Crossterm](https://github.com/crossterm-rs/crossterm) pour les bibliothèques d'interface terminal
+- [OpenSSH](https://www.openssh.com/), qui fait le vrai travail
+- La communauté Rust pour ses outils
+
+---
+
+<div align="center">
+
+**Fait avec ❤️ par [ArnaudFra](https://github.com/ArnaudFra)**
+
+</div>
