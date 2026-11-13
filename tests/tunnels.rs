@@ -221,7 +221,7 @@ fn descendants_stopped_on_stop_drop_and_normal_failure() {
             _ => {}
         }
         drop(m);
-        for _ in 0..100 {
+        for _ in 0..600 {
             if !alive(pid) {
                 break;
             }

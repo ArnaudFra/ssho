@@ -187,7 +187,7 @@ fn batch_timeout_cancel_never_launch_pending_and_cleans_descendants() {
 fn assert_stopped(pid: &str) {
     #[cfg(target_os = "linux")]
     {
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             let live = fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| {
                 !matches!(

@@ -691,7 +691,7 @@ mod tests {
         }
         fn assert_stopped(&self) {
             let pid = self.pid();
-            let deadline = Instant::now() + Duration::from_millis(500);
+            let deadline = Instant::now() + Duration::from_secs(3);
             loop {
                 let status = std::fs::read_to_string(format!("/proc/{pid}/stat"));
                 let live = status.is_ok_and(|stat| {
@@ -963,14 +963,26 @@ mod bounded_diagnostic_tests {
             .trim()
             .parse()
             .unwrap();
-        let stat = std::fs::read_to_string(format!("/proc/{helper}/stat"));
-        let live = stat.is_ok_and(|stat| {
-            !matches!(
-                stat.rsplit_once(") ").unwrap().1.chars().next(),
-                Some('Z' | 'X')
-            )
-        });
-        assert!(!live, "the helper of the cancelled diagnostic was stopped");
+        // The whole group was killed, but a grandchild may take an instant to
+        // die after its leader was reaped: wait for it instead of assuming it.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let stat = std::fs::read_to_string(format!("/proc/{helper}/stat"));
+            let live = stat.is_ok_and(|stat| {
+                !matches!(
+                    stat.rsplit_once(") ").unwrap().1.chars().next(),
+                    Some('Z' | 'X')
+                )
+            });
+            if !live {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the helper of the cancelled diagnostic was stopped"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 
