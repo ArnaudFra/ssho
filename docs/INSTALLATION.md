@@ -182,15 +182,22 @@ notarised. A local package inherits the libc of its own build machine, not the
 CI base. There is no archive for Android/Termux, Windows or ARMv7, and no
 NixOS, Homebrew or Nix package.
 
-Pushing a `v*` tag builds and keeps the CI artifacts, **without publishing**.
-`workflow_dispatch` builds the artifacts too; `publish` is `false` by default.
-To publish, a maintainer must choose an existing `vVERSION` tag and explicitly
-set `publish=true`. A branch with `publish=true`, or a tag that differs from
-`Cargo.toml`, is refused. The four builds must succeed, with the script tests,
-packaging and installation/version/uninstallation in a temporary HOME. Only the
-`publish` job receives `contents: write`; it checks the checksums and manifests
-again before `gh release create --verify-tag`. An existing release is not
-overwritten; a remote failure may leave a draft to inspect. A prerelease is not
+The workflow starts only when a version tag is pushed, and publishes the
+release by itself:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The tag must be `v` followed by the version of `Cargo.toml` (`v0.1.0`,
+`v0.2.0-rc.1`); any other tag is ignored, and a tag that differs from
+`Cargo.toml` fails before anything is built. The four builds must succeed, with
+the Rust tests, the pseudo-terminal flows on Linux, the script tests, packaging
+and installation/version/uninstallation in a temporary HOME. Only the `publish`
+job receives `contents: write`; it checks the checksums and manifests again
+before `gh release create --verify-tag`. An existing release is not overwritten.
+A version with a suffix (`-rc.1`) is published as a prerelease and is not
 promoted to `latest`.
 
 The release holds the eight archive/checksum files, `install.sh`, `LICENSE` and
@@ -237,7 +244,7 @@ python3 tests/pty_ux.py target/release/ssho "$(mktemp -d)/ux"
 python3 tests/reference_parity.py /path/to/sshm target/release/ssho
 ```
 
-**Continuous integration.** `.github/workflows/ci.yml` runs these checks on every push and pull request, without publishing anything: a quick check on Linux (formatting, Clippy with no warnings, Rust tests), the tests with Rust 1.88 (the declared minimum version), the installation and packaging scripts (`sh -n`, `tests/distribution.py`), then the build and the tests on the four announced targets (Linux and macOS, x86_64 and ARM64, each on its native runner). The pseudo-terminal flows run there on Linux only; they have not been adapted to macOS. The `release.yml` workflow remains the only one that produces archives.
+**Continuous integration.** `.github/workflows/ci.yml` runs these checks on pull requests, or when started by hand from the Actions tab, without publishing anything: a quick check on Linux (formatting, Clippy with no warnings, Rust tests), the tests with Rust 1.88 (the declared minimum version), the installation and packaging scripts (`sh -n`, `tests/distribution.py`), then the build and the tests on the four announced targets (Linux and macOS, x86_64 and ARM64, each on its native runner). The pseudo-terminal flows run there on Linux only; they have not been adapted to macOS. The `release.yml` workflow remains the only one that produces archives.
 
 All tests use temporary folders. The connection and tunnel flows use a fake SSH client; they do not connect to the user's personal servers.
 

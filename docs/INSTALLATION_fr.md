@@ -184,16 +184,23 @@ notarisés. Un paquet local hérite de la libc de sa propre machine de
 compilation, pas de la base CI. Il n'y a pas d'archive pour Android/Termux,
 Windows ou ARMv7, ni de paquet NixOS, Homebrew ou Nix.
 
-Un push de tag `v*` fabrique et conserve les artifacts CI, **sans publier**.
-`workflow_dispatch` fabrique également les artifacts ; `publish` vaut `false`
-par défaut. Pour publier, un mainteneur doit choisir un tag existant `vVERSION`
-et mettre explicitement `publish=true`. Une branche avec `publish=true`, ou un
-tag différent de `Cargo.toml`, est refusé. Les quatre builds doivent réussir,
-avec tests de scripts, packaging et installation/version/désinstallation dans
-un HOME temporaire. Seul le job `publish` reçoit `contents: write` ; il revérifie
-les checksums et manifestes avant `gh release create --verify-tag`. Une release
-existante n'est pas écrasée ; un échec distant peut laisser un brouillon à
-inspecter. Une prerelease n'est pas promue `latest`.
+Le workflow ne démarre que lorsqu'un tag de version est poussé, et publie
+lui-même la release :
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Le tag doit être `v` suivi de la version de `Cargo.toml` (`v0.1.0`,
+`v0.2.0-rc.1`) ; tout autre tag est ignoré, et un tag différent de `Cargo.toml`
+échoue avant toute compilation. Les quatre builds doivent réussir, avec les
+tests Rust, les parcours en pseudo-terminal sous Linux, les tests de scripts, le
+packaging et installation/version/désinstallation dans un HOME temporaire. Seul
+le job `publish` reçoit `contents: write` ; il revérifie les checksums et
+manifestes avant `gh release create --verify-tag`. Une release existante n'est
+pas écrasée. Une version avec suffixe (`-rc.1`) est publiée comme prerelease et
+n'est pas promue `latest`.
 
 La release comprend les huit fichiers d'archives/checksums, `install.sh`,
 `LICENSE` et ce guide. Les actions checkout/upload/download sont épinglées par
@@ -240,7 +247,7 @@ python3 tests/pty_ux.py target/release/ssho "$(mktemp -d)/ux"
 python3 tests/reference_parity.py /path/to/sshm target/release/ssho
 ```
 
-**Intégration continue.** `.github/workflows/ci.yml` lance ces vérifications à chaque push et pull request, sans rien publier : un contrôle rapide sous Linux (formatage, Clippy sans avertissement, tests Rust), les tests avec Rust 1.88 (version minimale déclarée), les scripts d'installation et de paquetage (`sh -n`, `tests/distribution.py`), puis la compilation et les tests sur les quatre cibles annoncées (Linux et macOS, x86_64 et ARM64, chacune sur son exécuteur natif). Les parcours en pseudo-terminal y tournent sous Linux seulement ; ils n'ont pas été adaptés à macOS. Le workflow `release.yml` reste le seul à produire des archives.
+**Intégration continue.** `.github/workflows/ci.yml` lance ces vérifications sur les pull requests, ou à la demande depuis l'onglet Actions, sans rien publier : un contrôle rapide sous Linux (formatage, Clippy sans avertissement, tests Rust), les tests avec Rust 1.88 (version minimale déclarée), les scripts d'installation et de paquetage (`sh -n`, `tests/distribution.py`), puis la compilation et les tests sur les quatre cibles annoncées (Linux et macOS, x86_64 et ARM64, chacune sur son exécuteur natif). Les parcours en pseudo-terminal y tournent sous Linux seulement ; ils n'ont pas été adaptés à macOS. Le workflow `release.yml` reste le seul à produire des archives.
 
 Tous les tests utilisent des dossiers temporaires. Les parcours de connexion et de tunnel utilisent un faux client SSH ; ils ne se connectent pas aux serveurs personnels de l'utilisateur.
 

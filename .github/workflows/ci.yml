@@ -1,11 +1,11 @@
 name: Rust checks
 
-# Development checks on every push and pull request. Release archives are
-# built by release.yml; this workflow never publishes anything.
+# Development checks on pull requests, or started by hand from the Actions tab.
+# A plain push starts nothing; release archives are built by release.yml when a
+# version tag is pushed. This workflow never publishes anything.
 on:
-  push:
-    branches: ['**']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

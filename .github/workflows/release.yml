@@ -1,15 +1,12 @@
-name: Rust release archives
+name: Release
 
+# Pushing a version tag (v0.1.0, v0.2.0-rc.1...) builds and tests the four
+# archives, then publishes the GitHub release. Nothing else starts this workflow.
 on:
   push:
-    tags: ['v*']
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: 'Publish a release from the selected existing vVERSION tag'
-        type: boolean
-        required: true
-        default: false
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
 
 permissions:
   contents: read
@@ -35,7 +32,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       TARGET: ${{ matrix.target }}
-      PUBLISH_REQUESTED: ${{ inputs.publish || false }}
       # Compiled in: a released binary looks for updates in the repository that
       # released it, never in another project.
       SSHO_REPOSITORY: ${{ github.repository }}
@@ -44,16 +40,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Validate release version and ref
+      - name: The tag must be the version of Cargo.toml
         shell: bash
         run: |
           set -euo pipefail
           version=$(sed -n '/^\[package\]/,/^\[/s/^version = "\([^"]*\)"$/\1/p' Cargo.toml)
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            test "$GITHUB_REF_NAME" = "v$version"
-          elif [[ "$PUBLISH_REQUESTED" == true ]]; then
-            echo 'Publication requires an existing vVERSION tag.' >&2
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match version $version of Cargo.toml." >&2
             exit 1
           fi
           printf 'RELEASE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
@@ -61,6 +55,13 @@ jobs:
         run: rustup toolchain install 1.88.0 --profile minimal
       - name: Build native release
         run: cargo +1.88.0 build --release --locked --target "$TARGET"
+      - name: Rust tests
+        run: cargo +1.88.0 test --locked
+      # Keyboard, focus and terminal-restoration journeys in a real pseudo-terminal,
+      # with fake SSH tools. Linux only: the scenarios have not been adapted to macOS.
+      - name: Pseudo-terminal journeys
+        if: runner.os == 'Linux'
+        run: sh scripts/pty-checks.sh "target/$TARGET/release/ssho"
       - name: Check distribution scripts
         run: |
           sh -n install.sh
@@ -90,7 +91,6 @@ jobs:
 
   publish:
     needs: build
-    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -104,7 +104,7 @@ jobs:
           path: dist
           merge-multiple: true
           digest-mismatch: error
-      - name: Validate all assets and publish the explicitly requested tag
+      - name: Validate all assets and publish the release of the tag
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -124,4 +124,4 @@ jobs:
           if [[ "$version" == *-* ]]; then release_kind=--prerelease; else release_kind=--latest; fi
           gh release create "$GITHUB_REF_NAME" "$@" install.sh LICENSE docs/INSTALLATION.md \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "ssho $version" \
-            --notes-file docs/INSTALLATION.md "$release_kind"
+            --generate-notes "$release_kind"
