@@ -1,0 +1,16 @@
+# Weekly pull requests for outdated dependencies. The checks of ci.yml run on
+# each of them; nothing is merged automatically.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # One pull request for the compatible updates; major versions come alone.
+      compatible:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
